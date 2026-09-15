@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jbookout/software-factory/schemas/factory-job.schema.json",
+  "title": "Software factory job",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["outcome", "sourceRevision"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "outcome": { "type": "string", "minLength": 1 },
+    "sourceRevision": { "type": "string", "minLength": 1 },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "changedPaths": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "signals": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "verificationRounds": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "reviewRounds": { "type": "integer", "minimum": 1, "maximum": 10 }
+      }
+    },
+    "performance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "baseline": { "type": "object", "additionalProperties": { "type": "number" } },
+        "budgets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "direction": { "enum": ["lower", "higher"] },
+              "max": { "type": "number" },
+              "maxRegression": { "type": "number", "minimum": 0 }
+            }
+          }
+        },
+        "knownFingerprints": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+      }
+    }
+  }
+}

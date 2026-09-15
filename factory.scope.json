@@ -1,0 +1,25 @@
+{
+  "contractVersion": 1,
+  "decisionRef": "1ceee300-7627-426f-b729-ab339d6984fc",
+  "interface": "createFactory().run(job, adapter)",
+  "authority": {
+    "factory": ["development-orchestration", "verification", "review-routing", "evidence"],
+    "product": ["runtime", "production-data", "domain-rules", "credentials", "deploy", "rollback"]
+  },
+  "capabilities": [
+    { "id": "context", "steps": ["context:collect"] },
+    { "id": "before-after-evidence", "steps": ["evidence:before", "evidence:after"] },
+    { "id": "build", "steps": ["build"] },
+    { "id": "deterministic-verification", "steps": ["verify", "repair:verification"] },
+    { "id": "specialist-review", "steps": ["review:<role>", "repair:review"] },
+    { "id": "risk-routing", "steps": ["risk:inspect"], "module": "src/risk-router.mjs" },
+    { "id": "delivery-shepherd", "steps": ["release:observe"] },
+    { "id": "production-feedback", "steps": ["production:observe"] },
+    { "id": "performance-factory", "steps": ["performance:measure", "performance:analyze"] },
+    { "id": "incident-assistance", "steps": ["incident:investigate"], "authority": "read-only" },
+    { "id": "codebase-gardening", "steps": ["garden:inspect"] },
+    { "id": "learning", "steps": ["learn:record"] },
+    { "id": "loop-budgets", "module": "src/operating-loop.mjs" },
+    { "id": "tamper-evident-receipt", "module": "src/operating-loop.mjs" }
+  ]
+}
