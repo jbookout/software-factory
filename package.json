@@ -2,11 +2,15 @@
   "name": "software-factory",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/index.mjs"
+  },
   "engines": {
     "node": ">=20.19"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "factory": "node ./bin/factory.mjs"
   },
   "devDependencies": {
     "@shadcn/lint": "0.1.0",
