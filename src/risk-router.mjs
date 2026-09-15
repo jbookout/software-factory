@@ -66,4 +66,3 @@ export function reviewsFor(risk) {
   if (risk.signals.includes("interface")) roles.add("UI and Accessibility Engineer")
   return REVIEW_ORDER.filter((role) => roles.has(role))
 }
-
