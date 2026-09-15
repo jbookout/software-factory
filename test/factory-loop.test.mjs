@@ -18,6 +18,8 @@ const fixedClock = () => "2026-09-15T00:00:00.000Z"
 const fixedId = () => "job-1"
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const required = {
+  "environment:prepare": { status: "pass", data: { isolated: true, environmentId: "test-tree" } },
+  "environment:dispose": pass,
   "context:collect": pass,
   build: pass,
   verify: pass,
@@ -57,10 +59,10 @@ test("the complete operating loop covers delivery, production, performance, gard
   assert.equal(result.receiptDigest.length, 64)
   const steps = adapter.calls.map(({ step }) => step)
   for (const required of [
-    "context:collect", "evidence:before", "build", "verify", "risk:inspect",
+    "environment:prepare", "context:collect", "evidence:before", "build", "verify", "risk:inspect",
     "review:Architecture Engineer", "review:Test Engineer", "evidence:after",
     "release:observe", "production:observe", "performance:measure",
-    "garden:inspect", "learn:record"
+    "garden:inspect", "environment:dispose", "learn:record"
   ]) assert.ok(steps.includes(required), `missing ${required}`)
 })
 
@@ -114,7 +116,12 @@ test("an outage triggers read-only incident investigation", async () => {
 })
 
 test("missing verification or specialist review can never produce a green receipt", async () => {
-  const missingVerification = createFixtureAdapter({ "context:collect": pass, build: pass })
+  const missingVerification = createFixtureAdapter({
+    "environment:prepare": required["environment:prepare"],
+    "environment:dispose": pass,
+    "context:collect": pass,
+    build: pass
+  })
   const first = await createFactory({ now: fixedClock, makeId: fixedId }).run({
     outcome: "verify the change",
     sourceRevision: "abc123"
@@ -127,6 +134,54 @@ test("missing verification or specialist review can never produce a green receip
     sourceRevision: "abc123"
   }, missingReview)
   assert.equal(second.stopped, "review:missing")
+})
+
+test("bug and interface work requires before-and-after evidence", async () => {
+  const missingBefore = createFixtureAdapter({ ...required })
+  const first = await createFactory({ now: fixedClock, makeId: fixedId }).run({
+    outcome: "fix a bug",
+    kind: "bug",
+    sourceRevision: "abc123"
+  }, missingBefore)
+  assert.equal(first.stopped, "evidence:before:missing")
+
+  const missingAfter = createFixtureAdapter({
+    ...required,
+    "evidence:before": pass,
+    "risk:inspect": { status: "pass", data: { changedPaths: ["src/view.css"] } },
+    "review:Architecture Engineer": pass,
+    "review:UI and Accessibility Engineer": pass
+  })
+  const second = await createFactory({ now: fixedClock, makeId: fixedId }).run({
+    outcome: "change the interface",
+    sourceRevision: "abc123"
+  }, missingAfter)
+  assert.equal(second.stopped, "evidence:after:missing")
+})
+
+test("an unproven task environment fails before product work starts", async () => {
+  const adapter = createFixtureAdapter({ "environment:prepare": pass })
+  const result = await createFactory({ now: fixedClock, makeId: fixedId }).run({
+    outcome: "work in isolation",
+    sourceRevision: "abc123"
+  }, adapter)
+  assert.equal(result.stopped, "environment:prepare")
+  assert.equal(adapter.calls.some(({ step }) => step === "build"), false)
+})
+
+test("adapter failures become evidence and still dispose the isolated environment", async () => {
+  const adapter = createFixtureAdapter({
+    ...required,
+    "context:collect": () => { throw new TypeError("private failure detail") }
+  })
+  const result = await createFactory({ now: fixedClock, makeId: fixedId }).run({
+    outcome: "contain adapter failure",
+    sourceRevision: "abc123"
+  }, adapter)
+  assert.equal(result.stopped, "context:collect")
+  assert.ok(result.findings.some(({ errorType, errorDigest }) => errorType === "TypeError" && errorDigest.length === 64))
+  assert.ok(adapter.calls.some(({ step }) => step === "environment:dispose"))
+  assert.equal(JSON.stringify(result).includes("private failure detail"), false)
 })
 
 test("risk inspection adds facts that the job author omitted", async () => {
@@ -169,7 +224,7 @@ test("machine-readable scope keeps every approved capability in the first contra
   ]))
   const ids = new Set(scope.capabilities.map(({ id }) => id))
   for (const id of [
-    "context", "before-after-evidence", "build", "deterministic-verification",
+    "isolated-task-environment", "context", "before-after-evidence", "build", "deterministic-verification",
     "specialist-review", "risk-routing", "delivery-shepherd", "production-feedback",
     "performance-factory", "incident-assistance", "codebase-gardening", "learning",
     "loop-budgets", "tamper-evident-receipt"

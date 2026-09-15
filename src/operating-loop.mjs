@@ -34,14 +34,28 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
       const evidence = []
       const proposals = []
       let stopped = null
+      let prepared = false
+      let environmentId = null
 
       async function execute(step, input = {}) {
-        const result = await adapter.execute(step, {
-          jobId,
-          outcome: job.outcome,
-          sourceRevision: job.sourceRevision,
-          ...input
-        })
+        let result
+        try {
+          result = await adapter.execute(step, {
+            jobId,
+            outcome: job.outcome,
+            sourceRevision: job.sourceRevision,
+            ...input
+          })
+        } catch (error) {
+          result = {
+            status: "fail",
+            evidence: [],
+            findings: [{ reason: "adapter execution failed", errorType: error.name, errorDigest: hash(error.message) }],
+            measurements: {},
+            proposals: [],
+            data: {}
+          }
+        }
         events.push({ step, status: result.status })
         evidence.push(...result.evidence.map((item) => ({ step, ...item })))
         findings.push(...result.findings.map((item) => ({ step, ...item })))
@@ -70,9 +84,21 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
         return false
       }
 
-      const context = await execute("context:collect")
-      if (context.status !== "pass") stopped = context.status === "skip" ? "context:missing" : "context:collect"
-      if (!stopped) await execute("evidence:before")
+      const environment = await execute("environment:prepare")
+      environmentId = environment.data.environmentId ?? null
+      prepared = Boolean(environmentId)
+      if (environment.status !== "pass" || environment.data.isolated !== true || !environment.data.environmentId) {
+        stopped = environment.status === "skip" ? "environment:missing" : "environment:prepare"
+      }
+
+      const context = !stopped ? await execute("context:collect", { environmentId }) : { status: "skip" }
+      if (!stopped && context.status !== "pass") {
+        stopped = context.status === "skip" ? "context:missing" : "context:collect"
+      }
+      const declaredRisk = classifyRisk(job.risk)
+      const evidenceRequired = job.kind === "bug" || declaredRisk.signals.includes("interface")
+      const before = !stopped ? await execute("evidence:before", { required: evidenceRequired }) : { status: "skip" }
+      if (!stopped && evidenceRequired && before.status !== "pass") stopped = "evidence:before:missing"
       if (!stopped) {
         const build = await execute("build")
         if (build.status !== "pass") stopped = build.status === "skip" ? "build:missing" : "build"
@@ -88,6 +114,9 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
         signals: [...new Set([...(job.risk?.signals ?? []), ...(inspected.data.signals ?? [])])]
       })
       const reviewRoles = reviewsFor(risk)
+      if (!stopped && (job.kind === "bug" || risk.signals.includes("interface")) && before.status !== "pass") {
+        stopped = "evidence:before:missing-after-inspection"
+      }
       if (!stopped) {
         let previous = null
         for (let round = 1; round <= budgets.reviewRounds; round += 1) {
@@ -116,7 +145,15 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
         }
       }
 
-      if (!stopped) await execute("evidence:after", { risk })
+      if (!stopped) {
+        const after = await execute("evidence:after", {
+          risk,
+          required: job.kind === "bug" || risk.signals.includes("interface")
+        })
+        if ((job.kind === "bug" || risk.signals.includes("interface")) && after.status !== "pass") {
+          stopped = "evidence:after:missing"
+        }
+      }
 
       let release = { status: "skip", findings: [] }
       let production = { status: "skip", findings: [] }
@@ -129,7 +166,9 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
         if (production.status === "fail") stopped = "production:observe"
       }
 
-      const measurement = await execute("performance:measure", { risk })
+      const measurement = !stopped
+        ? await execute("performance:measure", { risk })
+        : { status: "skip", measurements: {} }
       let performance = evaluatePerformance({
         baseline: job.performance?.baseline,
         current: measurement.measurements,
@@ -154,7 +193,11 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
         await execute("incident:investigate", { signals: incidentSignals, authority: "read-only" })
       }
 
-      await execute("garden:inspect", { risk })
+      if (prepared) await execute("garden:inspect", { risk })
+      if (prepared) {
+        const disposed = await execute("environment:dispose", { environmentId })
+        if (disposed.status !== "pass" && !stopped) stopped = "environment:dispose"
+      }
       const outcome = stopped || performance.status === "fail" ? "needs-attention" : "complete"
       await execute("learn:record", { outcome, stopped, risk, findings })
       const completedAt = now()
@@ -163,6 +206,7 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
         jobId,
         outcome,
         stopped,
+        environmentId,
         sourceRevision: job.sourceRevision,
         risk,
         riskRecommendation: ["critical", "high"].includes(risk.level)
