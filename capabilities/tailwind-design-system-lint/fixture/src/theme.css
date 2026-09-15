@@ -1,0 +1,6 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-primary: oklch(0.55 0.18 250);
+  --color-primary-foreground: oklch(0.98 0.01 250);
+}
