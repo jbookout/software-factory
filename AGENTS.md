@@ -42,6 +42,28 @@ placement contract is CARR doctrine section
   store. Do not use Markdown as a substitute for job, eval, evidence, or
   provenance records.
 
+## Enforcement model
+
+- Agent instructions explain intent and repair paths; they are not enforcement.
+- Put every mechanically decidable product rule behind a deterministic,
+  repository-local check that runs in hosted CI. Examples include dependency
+  direction, module visibility, forbidden imports, schema compatibility,
+  migration safety, and design-system usage.
+- Product repositories own their architecture policy, tool configuration,
+  dependency pins, exceptions, and merge gates. The factory may qualify tools
+  and emit starting configurations, but products must keep enforcing their
+  rules when the factory is absent.
+- Prefer the ecosystem's smallest mature checker. Do not build a universal
+  architecture engine when ArchUnit, Spring Modulith, dependency-cruiser,
+  import-linter, a compiler, or a focused test can enforce the rule directly.
+- A passing structural check proves only the encoded invariant. It does not
+  approve the product design, user experience, new theme tokens, or an
+  architecture rule that was never encoded.
+- New enforcement adapters begin as non-blocking pilots. Promote one to a
+  required template only after a representative fixture proves detection,
+  actionable failure output, clean-code acceptance, version compatibility,
+  acceptable runtime, and a documented escape/removal path.
+
 ## First capability
 
 Deepen the existing DoctorCRE v5 R3 pilot rather than create another indexing
