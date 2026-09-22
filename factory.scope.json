@@ -21,6 +21,9 @@
     { "id": "codebase-gardening", "steps": ["garden:inspect"] },
     { "id": "learning", "steps": ["learn:record"] },
     { "id": "loop-budgets", "module": "src/operating-loop.mjs" },
-    { "id": "tamper-evident-receipt", "module": "src/operating-loop.mjs" }
+    { "id": "tamper-evident-receipt", "module": "src/operating-loop.mjs" },
+    { "id": "qualified-model-routing", "module": "src/model-room.mjs", "authority": "advisory-with-deterministic-eligibility" },
+    { "id": "authenticated-evaluation-bundle", "module": "src/model-room.mjs", "authority": "evidence-authentication" },
+    { "id": "attended-codex-build", "steps": ["build"], "module": "src/codex-build.mjs", "authority": "source-work-only" }
   ]
 }

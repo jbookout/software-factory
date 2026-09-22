@@ -5,7 +5,9 @@ import { fileURLToPath } from "node:url"
 import test from "node:test"
 
 import { createPinnedBuildContext, readPinnedContract, routeDoctorCreBuild,
-  selectOptionalBuildContext, verifyPinnedBuildContext } from "../src/model-room.mjs"
+  selectOptionalBuildContext, verifyPinnedBuildContext, signEvaluationBundle,
+  authenticateEvaluationBundle } from "../src/model-room.mjs"
+import { createCodexBuildPrompt } from "../src/codex-build.mjs"
 
 const root = fileURLToPath(new URL("..", import.meta.url))
 
@@ -39,7 +41,8 @@ test("Jev sees exact pinned contract but cannot promote insufficient replay case
   const result = await routeDoctorCreBuild({ ...common, observations: [observation("pr44"), observation("pr45")],
     controlEnabled: true, apiKey: "test", fetchImpl: jev() })
   assert.deepEqual(result.selected_route, baseline)
-  assert.equal(result.jev.shadow_choice, routeKey)
+  assert.equal(result.jev.status, "skipped")
+  assert.equal(result.jev.reason, "single_qualified_route")
   assert.deepEqual(result.eligible_routes, [])
   assert.equal(result.qualifications[0].checked_cases, 2)
 })
@@ -64,7 +67,27 @@ test("three distinct authenticated passes permit explicit control", async () => 
   const unapproved = await routeDoctorCreBuild({ ...common, observations,
     controlEnabled: true, apiKey: "test", fetchImpl: jev() })
   assert.deepEqual(unapproved.selected_route, baseline)
-  assert.equal(unapproved.selection_reason, "shadow_mode")
+  assert.equal(unapproved.selection_reason, "qualified_control_ready")
+})
+
+test("signed evaluation evidence enables qualified-only production control", async () => {
+  const key = "evaluator-secret-key-material-32-bytes-minimum"
+  const observations = [observation("pr44"), observation("pr45"), observation("pr46")]
+  const bundle = signEvaluationBundle({ control: { task_class: "doctorcre-build",
+    mode: "qualified_only", minimum_cases: 3 }, observations }, key)
+  const authenticated = authenticateEvaluationBundle(JSON.parse(JSON.stringify(bundle)), key)
+  const result = await routeDoctorCreBuild({ ...common,
+    observations: authenticated.observations,
+    minimumCases: authenticated.minimumCases,
+    verifyObservation: authenticated.verifyObservation,
+    verifyControl: authenticated.verifyControl,
+    controlEnabled: true, apiKey: "test", fetchImpl: jev() })
+  assert.deepEqual(result.selected_route, candidate)
+  assert.equal(result.selection_reason, "qualified_jev_choice")
+  assert.match(authenticated.bundleDigest, /^sha256:[0-9a-f]{64}$/)
+  const tampered = JSON.parse(JSON.stringify(bundle))
+  tampered.observations[0].oracle_status = "fail"
+  assert.throws(() => authenticateEvaluationBundle(tampered, key), /signature mismatch/)
 })
 
 test("Jev failure or invalid answer keeps baseline route explicit", async () => {
@@ -90,6 +113,17 @@ test("build context retains exact source text and rejects a changed excerpt", ()
   assert.equal(verifyPinnedBuildContext(context), true)
   assert.equal(context.contracts[0].excerpt, excerpt)
   assert.equal(verifyPinnedBuildContext({ ...context, contracts: [{ ...contract, excerpt: "changed" }] }), false)
+})
+
+test("production Codex caller binds route, task, revision and pinned context", () => {
+  const prompt = createCodexBuildPrompt({ route: baseline, outcome: common.task,
+    sourceRevision: "e".repeat(40), pinnedBuildContext: createPinnedBuildContext([contract]) })
+  assert.match(prompt, /Implement the attended DoctorCRE build task/)
+  assert.match(prompt, new RegExp(contract.content_digest))
+  assert.match(prompt, new RegExp(contract.excerpt.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
+  assert.throws(() => createCodexBuildPrompt({ route: candidate, outcome: common.task,
+    sourceRevision: "e".repeat(40), pinnedBuildContext: createPinnedBuildContext([contract]) }),
+  /invalid Codex build request/)
 })
 
 test("Jev selects optional context depth while the required pinned contract stays full", async () => {
