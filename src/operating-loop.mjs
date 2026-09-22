@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 
 import { evaluatePerformance } from "./performance-factory.mjs"
 import { classifyRisk, reviewsFor } from "./risk-router.mjs"
+import { verifyPinnedBuildContext } from "./model-room.mjs"
 
 const DEFAULT_BUDGETS = { verificationRounds: 3, reviewRounds: 2 }
 
@@ -106,6 +107,8 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
           modelRoom = await modelRoomAdvisor({ job, context: context.data })
           if (!modelRoom || modelRoom.schema !== "doctorcre-build-route.v1" || !modelRoom.selected_route)
             throw new Error("invalid model room advice")
+          if (modelRoom.build_context && !verifyPinnedBuildContext(modelRoom.build_context))
+            throw new Error("invalid pinned build context")
           events.push({ step: "model-room:advise", status: "pass" })
         } catch (error) {
           stopped = "model-room:advise"
@@ -116,7 +119,8 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
       }
       if (!stopped) {
         const build = await execute("build", modelRoom ? { route: modelRoom.selected_route,
-          modelRoomStateDigest: modelRoom.state_digest } : {})
+          modelRoomStateDigest: modelRoom.state_digest,
+          ...(modelRoom.build_context ? { pinnedBuildContext: modelRoom.build_context } : {}) } : {})
         if (build.status !== "pass") stopped = build.status === "skip" ? "build:missing" : "build"
       }
       if (!stopped) await repairLoop("verify", "repair:verification", budgets.verificationRounds)
@@ -234,7 +238,7 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
         evidence,
         findings,
         proposals,
-        modelRoom,
+        modelRoom: modelRoom ? (({ build_context, ...receipt }) => receipt)(modelRoom) : null,
         startedAt,
         completedAt
       }

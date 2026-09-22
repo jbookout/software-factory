@@ -4,7 +4,8 @@ import { execFileSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import test from "node:test"
 
-import { readPinnedContract, routeDoctorCreBuild } from "../src/model-room.mjs"
+import { createPinnedBuildContext, readPinnedContract, routeDoctorCreBuild,
+  verifyPinnedBuildContext } from "../src/model-room.mjs"
 
 const root = fileURLToPath(new URL("..", import.meta.url))
 
@@ -82,4 +83,11 @@ test("pinned contract loader reads only an exact committed source excerpt", asyn
   assert.equal(result.excerpt, "# Software Factory")
   assert.equal(result.source_revision, sourceRevision)
   await assert.rejects(readPinnedContract({ root, sourceRevision, path: "../secret", startLine: 1, endLine: 1 }))
+})
+
+test("build context retains exact source text and rejects a changed excerpt", () => {
+  const context = createPinnedBuildContext([contract])
+  assert.equal(verifyPinnedBuildContext(context), true)
+  assert.equal(context.contracts[0].excerpt, excerpt)
+  assert.equal(verifyPinnedBuildContext({ ...context, contracts: [{ ...contract, excerpt: "changed" }] }), false)
 })
