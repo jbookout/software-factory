@@ -61,3 +61,11 @@ advisory in its receipt, and passes the selected baseline route to the build
 adapter. Jev outages are visible as `unavailable`; a missing contract stops
 the job before build. The CLI does not enable route control or accept caller
 supplied replay qualifications.
+
+Profiles may also list up to four exact Git excerpts in `modelRoom.optionalContext`.
+Jev chooses `hide`, `short`, `long`, or `full` for each optional excerpt for the
+current task. The build request always includes every required contract in full;
+optional excerpts are omitted when Jev is unavailable or returns an invalid
+answer. Receipts record each choice and source digest, while the excerpt text
+stays only in the build request. This trims build context without treating Jev
+as an authority over required contracts or model qualification.

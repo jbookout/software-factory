@@ -9,6 +9,8 @@ const JEV_MODEL = "jev-1.13.0"
 const MAX_TASK_CHARS = 4000
 const MAX_CONTRACT_CHARS = 12000
 const MAX_BUILD_CONTRACTS = 8
+const MAX_OPTIONAL_CONTEXT = 4
+const VISIBILITY = ["hide", "short", "long", "full"]
 
 function digest(value) {
   return `sha256:${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`
@@ -64,6 +66,52 @@ export function verifyPinnedBuildContext(context) {
     return createPinnedBuildContext(context.contracts).digest === context.digest
   } catch {
     return false
+  }
+}
+
+/** Jev may trim optional pinned context, never the required contract. */
+export async function selectOptionalBuildContext({ task, chunks = [], apiKey, fetchImpl = fetch }) {
+  const taskText = bounded(task, MAX_TASK_CHARS)
+  if (!Array.isArray(chunks) || chunks.length > MAX_OPTIONAL_CONTEXT)
+    throw new Error("invalid optional build context")
+  const pinned = chunks.length ? createPinnedBuildContext(chunks).contracts : []
+  const hidden = { schema: "optional-context-selection.v1", status: "unavailable",
+    reason: apiKey ? "service_error" : "no_api_key", model: JEV_MODEL,
+    choices: pinned.map(chunk => ({ path: chunk.path, source_digest: chunk.content_digest,
+      visibility: "hide" })), contracts: [] }
+  if (!pinned.length) return { ...hidden, status: "skipped", reason: "no_optional_context" }
+  if (!apiKey) return hidden
+  const state = { task_class: "doctorcre-build", task: taskText, chunks: pinned }
+  const questions = Object.fromEntries(pinned.map((chunk, index) => [`context_${index}`, {
+    type: "choice",
+    instructions: `How much of this optional pinned source should the build model see for the task? The required contract is already supplied separately. Choose the least detail that preserves useful task evidence.`,
+    criteria: { hide: "Irrelevant to the current task.", short: "The first 600 characters suffice.",
+      long: "The first 3000 characters are useful.", full: "The entire excerpt is needed." }
+  }]))
+  try {
+    const response = await fetchImpl(JEV_ENDPOINT, { method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: JEV_MODEL, state, questions }), signal: AbortSignal.timeout(1500) })
+    if (!response.ok) return hidden
+    const body = await response.json()
+    if (body?.model !== JEV_MODEL) return { ...hidden, reason: "invalid_answer" }
+    const parsed = pinned.map((_, index) => parseChoice(body.answers?.[`context_${index}`], VISIBILITY))
+    if (parsed.some(choice => !choice)) return { ...hidden, reason: "invalid_answer" }
+    const choices = pinned.map((chunk, index) => ({ path: chunk.path,
+      source_digest: chunk.content_digest, visibility: parsed[index].choice,
+      confidence: parsed[index].confidence }))
+    const contracts = pinned.flatMap((chunk, index) => {
+      const visibility = parsed[index].choice
+      if (visibility === "hide") return []
+      const excerpt = visibility === "full" ? chunk.excerpt : chunk.excerpt.slice(0,
+        visibility === "short" ? 600 : 3000)
+      return [{ ...chunk, excerpt, content_digest:
+        `sha256:${createHash("sha256").update(excerpt).digest("hex")}` }]
+    })
+    return { schema: "optional-context-selection.v1", status: "available", reason: null,
+      model: JEV_MODEL, choices, contracts }
+  } catch {
+    return hidden
   }
 }
 
