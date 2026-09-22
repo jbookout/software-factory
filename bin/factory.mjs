@@ -3,7 +3,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 
 import { createFactory, createScriptAdapter, createPinnedBuildContext,
-  readPinnedContract, routeDoctorCreBuild } from "../src/index.mjs"
+  readPinnedContract, routeDoctorCreBuild, selectOptionalBuildContext } from "../src/index.mjs"
 
 const [jobPath, profilePath] = process.argv.slice(2)
 if (!jobPath || !profilePath) {
@@ -20,16 +20,21 @@ if (!jobPath || !profilePath) {
     maxOutputBytes: profile.maxOutputBytes
   })
   const modelRoomAdvisor = profile.modelRoom?.enabled === true ? async () => {
-    const contracts = await Promise.all(profile.modelRoom.contracts.map(reference =>
+    const load = reference =>
       readPinnedContract({ root: path.resolve(path.dirname(profilePath), reference.root),
         sourceRevision: reference.sourceRevision, path: reference.path,
-        startLine: reference.startLine, endLine: reference.endLine })))
-    const buildContext = createPinnedBuildContext(contracts)
+        startLine: reference.startLine, endLine: reference.endLine })
+    const contracts = await Promise.all(profile.modelRoom.contracts.map(load))
+    const optional = await Promise.all((profile.modelRoom.optionalContext ?? []).map(load))
+    const selection = await selectOptionalBuildContext({ task: job.outcome, chunks: optional,
+      apiKey: process.env.TYPESAFE_API_KEY })
+    const buildContext = createPinnedBuildContext([...contracts, ...selection.contracts])
     const route = await routeDoctorCreBuild({ task: job.outcome, contracts,
       baseline: profile.modelRoom.baseline, candidates: profile.modelRoom.candidates,
       observations: [], verifyObservation: () => false, controlEnabled: false,
       apiKey: process.env.TYPESAFE_API_KEY })
-    return { ...route, build_context: buildContext }
+    const { contracts: selectedText, ...contextSelection } = selection
+    return { ...route, context_selection: contextSelection, build_context: buildContext }
   } : null
   const result = await createFactory({ modelRoomAdvisor }).run(job, adapter)
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url"
 import test from "node:test"
 
 import { createPinnedBuildContext, readPinnedContract, routeDoctorCreBuild,
-  verifyPinnedBuildContext } from "../src/model-room.mjs"
+  selectOptionalBuildContext, verifyPinnedBuildContext } from "../src/model-room.mjs"
 
 const root = fileURLToPath(new URL("..", import.meta.url))
 
@@ -90,4 +90,38 @@ test("build context retains exact source text and rejects a changed excerpt", ()
   assert.equal(verifyPinnedBuildContext(context), true)
   assert.equal(context.contracts[0].excerpt, excerpt)
   assert.equal(verifyPinnedBuildContext({ ...context, contracts: [{ ...contract, excerpt: "changed" }] }), false)
+})
+
+test("Jev selects optional context depth while the required pinned contract stays full", async () => {
+  const optional = { ...contract, path: "notes/implementation.md",
+    excerpt: "a".repeat(4000), content_digest:
+      `sha256:${createHash("sha256").update("a".repeat(4000)).digest("hex")}` }
+  const chosen = await selectOptionalBuildContext({ task: common.task, chunks: [optional], apiKey: "test",
+    fetchImpl: async (_, request) => {
+      const sent = JSON.parse(request.body)
+      assert.equal(sent.state.chunks[0].excerpt, optional.excerpt)
+      return { ok: true, async json() { return { model: "jev-1.13.0", answers: {
+        context_0: { type: "choice", choice: "short", confidence: 0.8,
+          probabilities: { hide: 0.05, short: 0.8, long: 0.1, full: 0.05 } }
+      } } } }
+    } })
+  const context = createPinnedBuildContext([contract, ...chosen.contracts])
+  assert.equal(chosen.choices[0].visibility, "short")
+  assert.equal(chosen.contracts[0].excerpt.length, 600)
+  assert.equal(context.contracts[0].excerpt, contract.excerpt)
+  assert.equal(verifyPinnedBuildContext(context), true)
+})
+
+test("unavailable or malformed Jev hides optional context without hiding required contracts", async () => {
+  const unavailable = await selectOptionalBuildContext({ task: common.task, chunks: [contract] })
+  assert.equal(unavailable.reason, "no_api_key")
+  assert.deepEqual(unavailable.contracts, [])
+  const malformed = await selectOptionalBuildContext({ task: common.task, chunks: [contract],
+    apiKey: "test", fetchImpl: async () => ({ ok: true, async json() {
+      return { model: "jev-1.13.0", answers: { context_0: { type: "choice", choice: "full" } } }
+    } }) })
+  assert.equal(malformed.reason, "invalid_answer")
+  assert.deepEqual(malformed.contracts, [])
+  assert.equal(createPinnedBuildContext([contract, ...malformed.contracts]).contracts[0].excerpt,
+    contract.excerpt)
 })
