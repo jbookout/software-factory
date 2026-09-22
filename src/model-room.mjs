@@ -8,6 +8,7 @@ const JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 const JEV_MODEL = "jev-1.13.0"
 const MAX_TASK_CHARS = 4000
 const MAX_CONTRACT_CHARS = 12000
+const MAX_BUILD_CONTRACTS = 8
 
 function digest(value) {
   return `sha256:${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`
@@ -35,6 +36,35 @@ export async function readPinnedContract({ root, sourceRevision, path, startLine
   const excerpt = bounded(lines.slice(startLine - 1, endLine).join("\n"), MAX_CONTRACT_CHARS)
   return { source_revision: sourceRevision, path, content_digest:
     `sha256:${createHash("sha256").update(excerpt).digest("hex")}`, excerpt }
+}
+
+/** Keep source text in the build request, while receipts retain only its digest. */
+export function createPinnedBuildContext(contracts) {
+  if (!Array.isArray(contracts) || !contracts.length || contracts.length > MAX_BUILD_CONTRACTS)
+    throw new Error("invalid pinned build context")
+  const bound = contracts.map(contract => {
+    if (!contract || !/^[0-9a-f]{40}$/.test(contract.source_revision) ||
+        typeof contract.path !== "string" || !/^[A-Za-z0-9_./-]+$/.test(contract.path) ||
+        contract.path.startsWith("/") || contract.path.split("/").includes("..") ||
+        !/^sha256:[0-9a-f]{64}$/.test(contract.content_digest))
+      throw new Error("invalid pinned build context")
+    const excerpt = bounded(contract.excerpt, MAX_CONTRACT_CHARS)
+    const contentDigest = `sha256:${createHash("sha256").update(excerpt).digest("hex")}`
+    if (contract.content_digest !== contentDigest) throw new Error("pinned build context digest mismatch")
+    return { source_revision: contract.source_revision, path: contract.path,
+      content_digest: contract.content_digest, excerpt }
+  })
+  return { schema: "pinned-build-context.v1", digest: digest(bound), contracts: bound }
+}
+
+export function verifyPinnedBuildContext(context) {
+  if (!context || context.schema !== "pinned-build-context.v1" ||
+      typeof context.digest !== "string") return false
+  try {
+    return createPinnedBuildContext(context.contracts).digest === context.digest
+  } catch {
+    return false
+  }
 }
 
 function routeKey(route) {

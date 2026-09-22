@@ -1,11 +1,13 @@
 import assert from "node:assert/strict"
 import fs from "node:fs/promises"
 import path from "node:path"
+import { createHash } from "node:crypto"
 import test from "node:test"
 import { fileURLToPath } from "node:url"
 
 import {
   classifyRisk,
+  createPinnedBuildContext,
   createFactory,
   createFixtureAdapter,
   createScriptAdapter,
@@ -68,15 +70,23 @@ test("the complete operating loop covers delivery, production, performance, gard
 
 test("DoctorCRE build passes the measured room route to the build adapter", async () => {
   const route = { provider: "codex", model: "gpt-5.6-sol", effort: "high" }
+  const excerpt = "Use per-item calibration_status for the Needs Joe advisory."
+  const pinnedBuildContext = createPinnedBuildContext([{ source_revision: "a".repeat(40),
+    path: "contract.js", excerpt,
+    content_digest: `sha256:${createHash("sha256").update(excerpt).digest("hex")}` }])
   const adapter = createFixtureAdapter(required)
   const result = await createFactory({ modelRoomAdvisor: async () => ({
     schema: "doctorcre-build-route.v1", state_digest: "sha256:test", selected_route: route,
-    selection_reason: "baseline_unqualified_pilot", jev: { status: "unavailable" }
+    selection_reason: "baseline_unqualified_pilot", jev: { status: "unavailable" },
+    build_context: pinnedBuildContext
   }) }).run({ product: "DoctorCRE", kind: "feature", outcome: "build a user feature",
     sourceRevision: "abc123" }, adapter)
   assert.equal(result.outcome, "complete")
   assert.deepEqual(adapter.calls.find(call => call.step === "build").request.route, route)
+  assert.equal(adapter.calls.find(call => call.step === "build").request.pinnedBuildContext.contracts[0].excerpt, excerpt)
   assert.equal(result.modelRoom.selection_reason, "baseline_unqualified_pilot")
+  assert.equal(JSON.stringify(result).includes(excerpt), false)
+  assert.equal(result.modelRoom.build_context, undefined)
 })
 
 test("verification stops when a repair produces no new evidence", async () => {

@@ -2,7 +2,8 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 
-import { createFactory, createScriptAdapter, readPinnedContract, routeDoctorCreBuild } from "../src/index.mjs"
+import { createFactory, createScriptAdapter, createPinnedBuildContext,
+  readPinnedContract, routeDoctorCreBuild } from "../src/index.mjs"
 
 const [jobPath, profilePath] = process.argv.slice(2)
 if (!jobPath || !profilePath) {
@@ -23,10 +24,12 @@ if (!jobPath || !profilePath) {
       readPinnedContract({ root: path.resolve(path.dirname(profilePath), reference.root),
         sourceRevision: reference.sourceRevision, path: reference.path,
         startLine: reference.startLine, endLine: reference.endLine })))
-    return routeDoctorCreBuild({ task: job.outcome, contracts,
+    const buildContext = createPinnedBuildContext(contracts)
+    const route = await routeDoctorCreBuild({ task: job.outcome, contracts,
       baseline: profile.modelRoom.baseline, candidates: profile.modelRoom.candidates,
       observations: [], verifyObservation: () => false, controlEnabled: false,
       apiKey: process.env.TYPESAFE_API_KEY })
+    return { ...route, build_context: buildContext }
   } : null
   const result = await createFactory({ modelRoomAdvisor }).run(job, adapter)
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
