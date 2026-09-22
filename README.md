@@ -50,3 +50,14 @@ The initial DoctorCRE PR #44 and #45 replays did not qualify either desk.
 Both failed an independent held-out check without the exact CARR contract;
 both passed the PR #45 check after that contract excerpt was supplied. This
 pilot therefore remains in shadow mode until checked outcomes support control.
+
+For an attended DoctorCRE build job, set `product` to `DoctorCRE` in the job
+and add `modelRoom` to its product profile with `enabled`, `baseline`,
+`candidates`, and `contracts` entries. Each contract names a local Git root,
+40-character commit, path, and inclusive line range. `commands.build` may map
+exact `provider/model/effort` keys to argv arrays. The factory CLI reads those
+contracts, calls Jev with `TYPESAFE_API_KEY` when available, records the
+advisory in its receipt, and passes the selected baseline route to the build
+adapter. Jev outages are visible as `unavailable`; a missing contract stops
+the job before build. The CLI does not enable route control or accept caller
+supplied replay qualifications.

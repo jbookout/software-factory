@@ -20,7 +20,8 @@ function assertJob(job) {
   }
 }
 
-export function createFactory({ now = () => new Date().toISOString(), makeId = randomUUID } = {}) {
+export function createFactory({ now = () => new Date().toISOString(), makeId = randomUUID,
+  modelRoomAdvisor = null } = {}) {
   return {
     async run(job, adapter) {
       assertJob(job)
@@ -99,8 +100,23 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
       const evidenceRequired = job.kind === "bug" || declaredRisk.signals.includes("interface")
       const before = !stopped ? await execute("evidence:before", { required: evidenceRequired }) : { status: "skip" }
       if (!stopped && evidenceRequired && before.status !== "pass") stopped = "evidence:before:missing"
+      let modelRoom = null
+      if (!stopped && job.product === "DoctorCRE" && modelRoomAdvisor) {
+        try {
+          modelRoom = await modelRoomAdvisor({ job, context: context.data })
+          if (!modelRoom || modelRoom.schema !== "doctorcre-build-route.v1" || !modelRoom.selected_route)
+            throw new Error("invalid model room advice")
+          events.push({ step: "model-room:advise", status: "pass" })
+        } catch (error) {
+          stopped = "model-room:advise"
+          findings.push({ step: "model-room:advise", reason: "model room advice failed",
+            errorType: error.name, errorDigest: hash(error.message) })
+          events.push({ step: "model-room:advise", status: "fail" })
+        }
+      }
       if (!stopped) {
-        const build = await execute("build")
+        const build = await execute("build", modelRoom ? { route: modelRoom.selected_route,
+          modelRoomStateDigest: modelRoom.state_digest } : {})
         if (build.status !== "pass") stopped = build.status === "skip" ? "build:missing" : "build"
       }
       if (!stopped) await repairLoop("verify", "repair:verification", budgets.verificationRounds)
@@ -218,6 +234,7 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
         evidence,
         findings,
         proposals,
+        modelRoom,
         startedAt,
         completedAt
       }

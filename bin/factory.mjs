@@ -2,7 +2,7 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 
-import { createFactory, createScriptAdapter } from "../src/index.mjs"
+import { createFactory, createScriptAdapter, readPinnedContract, routeDoctorCreBuild } from "../src/index.mjs"
 
 const [jobPath, profilePath] = process.argv.slice(2)
 if (!jobPath || !profilePath) {
@@ -18,7 +18,17 @@ if (!jobPath || !profilePath) {
     timeoutMs: profile.timeoutMs,
     maxOutputBytes: profile.maxOutputBytes
   })
-  const result = await createFactory().run(job, adapter)
+  const modelRoomAdvisor = profile.modelRoom?.enabled === true ? async () => {
+    const contracts = await Promise.all(profile.modelRoom.contracts.map(reference =>
+      readPinnedContract({ root: path.resolve(path.dirname(profilePath), reference.root),
+        sourceRevision: reference.sourceRevision, path: reference.path,
+        startLine: reference.startLine, endLine: reference.endLine })))
+    return routeDoctorCreBuild({ task: job.outcome, contracts,
+      baseline: profile.modelRoom.baseline, candidates: profile.modelRoom.candidates,
+      observations: [], verifyObservation: () => false, controlEnabled: false,
+      apiKey: process.env.TYPESAFE_API_KEY })
+  } : null
+  const result = await createFactory({ modelRoomAdvisor }).run(job, adapter)
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
   if (result.outcome !== "complete") process.exitCode = 1
 }

@@ -36,7 +36,12 @@ export function createScriptAdapter({ root, commands, timeoutMs = 120_000, maxOu
 
   return {
     async execute(step, request) {
-      const argv = commands[step]
+      let argv = commands[step]
+      if (step === "build" && argv && !Array.isArray(argv) && request.route) {
+        const route = request.route
+        const key = `${route.provider}/${route.model}/${route.effort}`
+        argv = argv[key]
+      }
       if (!argv) return normalizeResult({ status: "skip" }, step)
       if (!Array.isArray(argv) || argv.length === 0 || argv.some((part) => typeof part !== "string")) {
         throw new Error(`${step} must be an argv array`)
