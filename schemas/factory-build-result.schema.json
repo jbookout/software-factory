@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "evidence", "findings", "measurements", "proposals", "data"],
+  "properties": {
+    "status": { "enum": ["pass", "fail"] },
+    "evidence": { "type": "array", "items": { "type": "object" } },
+    "findings": { "type": "array", "items": { "type": "object" } },
+    "measurements": { "type": "object" },
+    "proposals": { "type": "array", "items": { "type": "object" } },
+    "data": { "type": "object" }
+  }
+}

@@ -12,11 +12,14 @@
     "modelRoom": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabled", "baseline", "candidates", "contracts"],
+      "required": ["enabled", "controlMode", "baseline", "candidates", "contracts"],
       "properties": {
         "enabled": { "const": true },
+        "controlMode": { "const": "qualified_only" },
+        "minimumCases": { "type": "integer", "minimum": 3 },
+        "evaluationBundle": { "type": "string", "minLength": 1 },
         "baseline": { "$ref": "#/$defs/route" },
-        "candidates": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/route" } },
+        "candidates": { "type": "array", "items": { "$ref": "#/$defs/route" } },
         "optionalContext": { "type": "array", "maxItems": 4, "items": { "$ref": "#/$defs/pinnedReference" } },
         "contracts": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "$ref": "#/$defs/pinnedReference" } }
       }

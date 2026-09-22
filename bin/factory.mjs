@@ -3,7 +3,8 @@ import fs from "node:fs/promises"
 import path from "node:path"
 
 import { createFactory, createScriptAdapter, createPinnedBuildContext,
-  readPinnedContract, routeDoctorCreBuild, selectOptionalBuildContext } from "../src/index.mjs"
+  readPinnedContract, routeDoctorCreBuild, selectOptionalBuildContext,
+  authenticateEvaluationBundle } from "../src/index.mjs"
 
 const [jobPath, profilePath] = process.argv.slice(2)
 if (!jobPath || !profilePath) {
@@ -29,12 +30,32 @@ if (!jobPath || !profilePath) {
     const selection = await selectOptionalBuildContext({ task: job.outcome, chunks: optional,
       apiKey: process.env.TYPESAFE_API_KEY })
     const buildContext = createPinnedBuildContext([...contracts, ...selection.contracts])
+    let evidence = { status: "unavailable", reason: "not_configured", bundle_digest: null }
+    let authenticated = { observations: [], minimumCases: profile.modelRoom.minimumCases ?? 3,
+      verifyObservation: () => false, verifyControl: () => false }
+    if (profile.modelRoom.evaluationBundle) {
+      try {
+        const bundlePath = path.resolve(path.dirname(profilePath), profile.modelRoom.evaluationBundle)
+        const bundle = JSON.parse(await fs.readFile(bundlePath, "utf8"))
+        authenticated = authenticateEvaluationBundle(bundle, process.env.MODEL_ROOM_EVALUATION_KEY)
+        evidence = { status: "authenticated", reason: null,
+          bundle_digest: authenticated.bundleDigest }
+      } catch (error) {
+        evidence = { status: "unavailable", reason: error.message.includes("signature")
+          ? "signature_mismatch" : "invalid_or_missing_bundle", bundle_digest: null }
+      }
+    }
     const route = await routeDoctorCreBuild({ task: job.outcome, contracts,
       baseline: profile.modelRoom.baseline, candidates: profile.modelRoom.candidates,
-      observations: [], verifyObservation: () => false, controlEnabled: false,
+      observations: authenticated.observations,
+      verifyObservation: authenticated.verifyObservation,
+      verifyControl: authenticated.verifyControl,
+      minimumCases: authenticated.minimumCases,
+      controlEnabled: profile.modelRoom.controlMode === "qualified_only",
       apiKey: process.env.TYPESAFE_API_KEY })
     const { contracts: selectedText, ...contextSelection } = selection
-    return { ...route, context_selection: contextSelection, build_context: buildContext }
+    return { ...route, qualification_evidence: evidence,
+      context_selection: contextSelection, build_context: buildContext }
   } : null
   const result = await createFactory({ modelRoomAdvisor }).run(job, adapter)
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)

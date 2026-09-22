@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto"
+import { createHash, createHmac, timingSafeEqual } from "node:crypto"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 
@@ -11,6 +11,61 @@ const MAX_CONTRACT_CHARS = 12000
 const MAX_BUILD_CONTRACTS = 8
 const MAX_OPTIONAL_CONTEXT = 4
 const VISIBILITY = ["hide", "short", "long", "full"]
+export const MODEL_ROOM_EVIDENCE_SCHEMA = "doctorcre-build-evaluation-bundle.v1"
+const EVIDENCE_SIGNATURE = /^hmac-sha256:[0-9a-f]{64}$/
+
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`
+  if (value && typeof value === "object") return `{${Object.keys(value).sort()
+    .map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`
+  return JSON.stringify(value)
+}
+
+function evidencePayload(bundle) {
+  return { schema: MODEL_ROOM_EVIDENCE_SCHEMA, control: bundle.control,
+    observations: bundle.observations }
+}
+
+function evidenceSignature(payload, key) {
+  return `hmac-sha256:${createHmac("sha256", key).update(canonical(payload)).digest("hex")}`
+}
+
+function assertEvidenceKey(key) {
+  if (typeof key !== "string" || Buffer.byteLength(key) < 32)
+    throw new Error("model room evaluation key must be at least 32 bytes")
+}
+
+/** Sign independently checked observations with the evaluator's runtime key. */
+export function signEvaluationBundle({ control, observations }, key) {
+  assertEvidenceKey(key)
+  if (!control || control.task_class !== "doctorcre-build" ||
+      control.mode !== "qualified_only" || !Number.isInteger(control.minimum_cases) ||
+      control.minimum_cases < 3 || !Array.isArray(observations))
+    throw new Error("invalid model room evaluation bundle")
+  const payload = { schema: MODEL_ROOM_EVIDENCE_SCHEMA, control, observations }
+  return { ...payload, signature: evidenceSignature(payload, key) }
+}
+
+/** Authenticate one bundle and return identity-bound verifier callbacks. */
+export function authenticateEvaluationBundle(bundle, key) {
+  assertEvidenceKey(key)
+  if (!bundle || typeof bundle !== "object" || Array.isArray(bundle) ||
+      Object.keys(bundle).sort().join(",") !== "control,observations,schema,signature" ||
+      bundle.schema !== MODEL_ROOM_EVIDENCE_SCHEMA ||
+      !EVIDENCE_SIGNATURE.test(bundle.signature ?? ""))
+    throw new Error("invalid model room evaluation bundle")
+  const signed = signEvaluationBundle(evidencePayload(bundle), key)
+  const actual = Buffer.from(bundle.signature.slice("hmac-sha256:".length), "hex")
+  const expected = Buffer.from(signed.signature.slice("hmac-sha256:".length), "hex")
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected))
+    throw new Error("model room evaluation signature mismatch")
+  const authenticated = new WeakSet(bundle.observations.filter(value => value && typeof value === "object"))
+  const bundleDigest = digest(evidencePayload(bundle))
+  return { observations: bundle.observations, minimumCases: bundle.control.minimum_cases,
+    bundleDigest, verifyObservation: observation => authenticated.has(observation),
+    verifyControl: decision => decision?.task_class === bundle.control.task_class &&
+      bundle.control.mode === "qualified_only" && decision.checked_cases >= bundle.control.minimum_cases }
+}
 
 function digest(value) {
   return `sha256:${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`
@@ -163,7 +218,7 @@ export async function routeDoctorCreBuild({ task, contracts, baseline, candidate
   verifyObservation, verifyControl, minimumCases = 3, controlEnabled = false, apiKey, fetchImpl = fetch }) {
   const taskText = bounded(task, MAX_TASK_CHARS)
   const baselineRoute = validateRoute(baseline)
-  if (!Array.isArray(contracts) || !contracts.length || !Array.isArray(candidates) || !candidates.length ||
+  if (!Array.isArray(contracts) || !contracts.length || !Array.isArray(candidates) ||
       !Array.isArray(observations) || typeof verifyObservation !== "function" ||
       !Number.isInteger(minimumCases) || minimumCases < 3) throw new Error("invalid model room inputs")
   const boundContracts = contracts.map(contract => {
@@ -186,12 +241,17 @@ export async function routeDoctorCreBuild({ task, contracts, baseline, candidate
     contracts: boundContracts, baseline: baselineRoute,
     candidates: qualifying.map(({ key, checked_cases }) => ({ key, checked_cases })) }
   const result = { schema: "doctorcre-build-route.v1", state_digest: digest(state),
-    selected_route: baselineRoute, selection_reason: eligible.length ? "shadow_mode" : "baseline_unqualified_pilot",
+    selected_route: baselineRoute, selection_reason: controlEnabled
+      ? (eligible.length ? "qualified_control_ready" : "baseline_only_qualified_route")
+      : (eligible.length ? "shadow_mode" : "baseline_unqualified_pilot"),
     eligible_routes: eligible.map(route => route.key),
     qualifications: qualifying.map(({ key, checked_cases }) => ({ key, checked_cases, minimum_cases: minimumCases })),
     jev: { status: "unavailable", reason: "no_api_key", model: JEV_MODEL, shadow_choice: null } }
   if (!apiKey) return result
-  const choiceKeys = ["baseline", ...keys]
+  const choiceRoutes = controlEnabled ? eligible : routes
+  const choiceKeys = ["baseline", ...choiceRoutes.map(route => route.key)]
+  if (choiceKeys.length === 1) return { ...result, jev: { status: "skipped",
+    reason: "single_qualified_route", model: JEV_MODEL, shadow_choice: "baseline" } }
   const questions = { preferred_route: { type: "choice",
     instructions: "For this DoctorCRE build task and the exact contract excerpts, which listed route is most likely to produce a correct, efficient implementation? This is advisory; verified outcomes decide eligibility.",
     criteria: Object.fromEntries(choiceKeys.map(key => [key, key === "baseline"
@@ -204,7 +264,8 @@ export async function routeDoctorCreBuild({ task, contracts, baseline, candidate
     const body = await response.json()
     const choice = body?.model === JEV_MODEL ? parseChoice(body.answers?.preferred_route, choiceKeys) : null
     if (!choice) return { ...result, jev: { status: "unavailable", reason: "invalid_answer", model: JEV_MODEL, shadow_choice: null } }
-    const selected = choice.choice === "baseline" ? baselineRoute : routes[keys.indexOf(choice.choice)]
+    const chosenRoute = choiceRoutes.find(route => route.key === choice.choice)
+    const selected = choice.choice === "baseline" ? baselineRoute : validateRoute(chosenRoute)
     const jev = { status: "available", reason: null, model: JEV_MODEL,
       shadow_choice: choice.choice, confidence: choice.confidence, probabilities: choice.probabilities }
     if (controlEnabled && typeof verifyControl === "function" &&
