@@ -66,6 +66,19 @@ test("the complete operating loop covers delivery, production, performance, gard
   ]) assert.ok(steps.includes(required), `missing ${required}`)
 })
 
+test("DoctorCRE build passes the measured room route to the build adapter", async () => {
+  const route = { provider: "codex", model: "gpt-5.6-sol", effort: "high" }
+  const adapter = createFixtureAdapter(required)
+  const result = await createFactory({ modelRoomAdvisor: async () => ({
+    schema: "doctorcre-build-route.v1", state_digest: "sha256:test", selected_route: route,
+    selection_reason: "baseline_unqualified_pilot", jev: { status: "unavailable" }
+  }) }).run({ product: "DoctorCRE", kind: "feature", outcome: "build a user feature",
+    sourceRevision: "abc123" }, adapter)
+  assert.equal(result.outcome, "complete")
+  assert.deepEqual(adapter.calls.find(call => call.step === "build").request.route, route)
+  assert.equal(result.modelRoom.selection_reason, "baseline_unqualified_pilot")
+})
+
 test("verification stops when a repair produces no new evidence", async () => {
   const adapter = createFixtureAdapter({
     ...required,
@@ -215,6 +228,19 @@ test("script adapter executes an argv command without a shell", async () => {
   const result = await adapter.execute("verify", {})
   assert.equal(result.status, "pass")
   assert.deepEqual(result.evidence, [{ kind: "executed" }])
+})
+
+test("script adapter dispatches only the selected exact build route", async () => {
+  const route = { provider: "codex", model: "gpt-5.6-sol", effort: "high" }
+  const adapter = createScriptAdapter({ root, commands: { build: {
+    "codex/gpt-5.6-sol/high": [process.execPath, "-e", "process.stdout.write(JSON.stringify({status:'pass',data:{desk:'codex'}}))"],
+    "claude/claude-opus-5/high": [process.execPath, "-e", "process.exit(8)"]
+  } } })
+  const result = await adapter.execute("build", { route })
+  assert.equal(result.status, "pass")
+  assert.equal(result.data.desk, "codex")
+  const missing = await adapter.execute("build", { route: { provider: "other", model: "unknown", effort: "high" } })
+  assert.equal(missing.status, "skip")
 })
 
 test("machine-readable scope keeps every approved capability in the first contract", async () => {
