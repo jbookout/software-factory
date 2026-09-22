@@ -28,3 +28,25 @@ systems. It is a pilot, not a default: the package is new, current DoctorCRE
 does not use Tailwind, and the upstream issue tracker already contains young-
 project compatibility defects. Run `npm test` to reproduce the bounded local
 qualification.
+
+## DoctorCRE Model Room routing pilot
+
+`readPinnedContract` loads an excerpt from an exact Git commit. A build-task
+orchestrator can pass those excerpts and independently verified replay outcomes
+to `routeDoctorCreBuild`. The function asks Jev for a typed preference among
+the current route and candidate desks, and returns the preference with its
+probabilities and a digest of the state sent to Jev. The current route remains
+selected during shadow evaluation.
+
+Control requires three separate conditions: at least three distinct successful
+cases authenticated by the caller's evaluator, an explicit control setting,
+and a separate trusted control-policy verifier. Failing cases for a route
+invalidate its counted passes. Without those conditions, or when Jev is
+unavailable or returns an invalid answer, the function returns the existing
+route. The factory owns no product credential; callers supply a TypeSafe key
+at runtime and never put it in a job or repository file.
+
+The initial DoctorCRE PR #44 and #45 replays did not qualify either desk.
+Both failed an independent held-out check without the exact CARR contract;
+both passed the PR #45 check after that contract excerpt was supplied. This
+pilot therefore remains in shadow mode until checked outcomes support control.
