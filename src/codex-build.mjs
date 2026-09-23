@@ -29,15 +29,19 @@ export function createCodexBuildPrompt(request) {
   ].join("\n\n")
 }
 
+export function createCodexBuildArgs(request, output) {
+  return ["exec", "--ephemeral", "-m", request.route.model,
+    "-c", `model_reasoning_effort=${JSON.stringify(request.route.effort)}`,
+    "--approve-for-me", "--output-schema", SCHEMA,
+    "--output-last-message", output, "-"]
+}
+
 export async function runCodexBuild(request, { cwd = process.cwd(), codex = "codex",
   timeoutMs = 3_600_000 } = {}) {
   const prompt = createCodexBuildPrompt(request)
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), "factory-codex-build-"))
   const output = path.join(temp, "result.json")
-  const args = ["exec", "--ephemeral", "-m", request.route.model,
-    "-c", `model_reasoning_effort=${JSON.stringify(request.route.effort)}`,
-    "-s", "workspace-write", "--approve-for-me", "--output-schema", SCHEMA,
-    "--output-last-message", output, "-"]
+  const args = createCodexBuildArgs(request, output)
   try {
     await new Promise((resolve, reject) => {
       const child = spawn(codex, args, { cwd, env: process.env, shell: false,
