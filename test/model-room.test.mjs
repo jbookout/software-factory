@@ -7,7 +7,7 @@ import test from "node:test"
 import { createPinnedBuildContext, readPinnedContract, routeDoctorCreBuild,
   selectOptionalBuildContext, verifyPinnedBuildContext, signEvaluationBundle,
   authenticateEvaluationBundle } from "../src/model-room.mjs"
-import { createCodexBuildPrompt } from "../src/codex-build.mjs"
+import { createCodexBuildArgs, createCodexBuildPrompt } from "../src/codex-build.mjs"
 
 const root = fileURLToPath(new URL("..", import.meta.url))
 
@@ -30,6 +30,13 @@ function jev(choice = routeKey) {
     } } } } }
   }
 }
+
+test("Codex attended build uses the approval preset without a conflicting sandbox flag", () => {
+  const args = createCodexBuildArgs({ route: baseline }, "/tmp/result.json")
+  assert.ok(args.includes("--approve-for-me"))
+  assert.ok(!args.includes("-s"))
+  assert.ok(!args.includes("--sandbox"))
+})
 
 function observation(id, overrides = {}) {
   return { case_id: id, route_key: routeKey, oracle_status: "pass", repository_status: "pass",
