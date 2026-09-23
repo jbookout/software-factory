@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { execFileSync } from "node:child_process"
+import fs from "node:fs"
 import { fileURLToPath } from "node:url"
 import test from "node:test"
 
@@ -36,6 +37,21 @@ test("Codex attended build uses the approval preset without a conflicting sandbo
   assert.ok(args.includes("--approve-for-me"))
   assert.ok(!args.includes("-s"))
   assert.ok(!args.includes("--sandbox"))
+})
+
+test("Codex build response schema closes every object shape", () => {
+  const schema = JSON.parse(fs.readFileSync(new URL("../schemas/factory-build-result.schema.json", import.meta.url)))
+  const seen = new Set()
+  function inspect(node) {
+    if (!node || typeof node !== "object" || seen.has(node)) return
+    seen.add(node)
+    if (node.type === "object") {
+      assert.equal(node.additionalProperties, false)
+      assert.deepEqual(new Set(node.required ?? []), new Set(Object.keys(node.properties ?? {})))
+    }
+    for (const value of Object.values(node)) inspect(value)
+  }
+  inspect(schema)
 })
 
 function observation(id, overrides = {}) {
