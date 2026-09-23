@@ -5,10 +5,57 @@
   "required": ["status", "evidence", "findings", "measurements", "proposals", "data"],
   "properties": {
     "status": { "enum": ["pass", "fail"] },
-    "evidence": { "type": "array", "items": { "type": "object" } },
-    "findings": { "type": "array", "items": { "type": "object" } },
-    "measurements": { "type": "object" },
-    "proposals": { "type": "array", "items": { "type": "object" } },
-    "data": { "type": "object" }
+    "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
+    "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+    "measurements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["testsRun", "testsPassed", "durationMs"],
+      "properties": {
+        "testsRun": { "type": ["integer", "null"], "minimum": 0 },
+        "testsPassed": { "type": ["integer", "null"], "minimum": 0 },
+        "durationMs": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "proposals": { "type": "array", "items": { "$ref": "#/$defs/proposal" } },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceChanged", "checksComplete"],
+      "properties": {
+        "sourceChanged": { "type": ["boolean", "null"] },
+        "checksComplete": { "type": ["boolean", "null"] }
+      }
+    }
+  },
+  "$defs": {
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "summary", "reference"],
+      "properties": {
+        "kind": { "type": "string" },
+        "summary": { "type": "string" },
+        "reference": { "type": ["string", "null"] }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "code"],
+      "properties": {
+        "reason": { "type": "string" },
+        "code": { "type": ["string", "null"] }
+      }
+    },
+    "proposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "reference"],
+      "properties": {
+        "summary": { "type": "string" },
+        "reference": { "type": ["string", "null"] }
+      }
+    }
   }
 }
