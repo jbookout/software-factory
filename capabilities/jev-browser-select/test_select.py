@@ -2,6 +2,7 @@ import importlib.util
 import io
 import json
 import pathlib
+import tempfile
 import unittest
 
 HERE = pathlib.Path(__file__).parent
@@ -59,6 +60,34 @@ class BrowserSelectTest(unittest.TestCase):
     def test_missing_key_abstains(self):
         answer = MODULE.select(self.snapshot, api_key="", opener=lambda *_: self.fail("egress"))
         self.assertFalse(answer["selected"])
+
+    def test_billable_browser_selection_has_one_usage_receipt_and_cached_repeat(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as root:
+            log = pathlib.Path(root) / "jev-calls.jsonl"
+            cache = pathlib.Path(root) / "cache.sqlite3"
+
+            def send(_request, timeout):
+                calls.append(timeout)
+                return Response(json.dumps({"model": "jev-1.13.0", "usage": {
+                    "input_tokens": 90, "output_tokens": 2}, "answers": {
+                    "operation": {"choice": "click", "confidence": 0.9},
+                    "target": {"choice": "control_7", "confidence": 0.95},
+                }}).encode())
+
+            first = MODULE.select(self.snapshot, api_key="synthetic", opener=send,
+                                  usage_log=log, cache_path=cache)
+            second = MODULE.select(self.snapshot, api_key="synthetic", opener=send,
+                                   usage_log=log, cache_path=cache)
+            self.assertTrue(first["selected"])
+            self.assertTrue(second["selected"])
+            self.assertEqual(len(calls), 1)
+            rows = [json.loads(line) for line in log.read_text().splitlines()]
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0]["usage"]["input_tokens"], 90)
+            self.assertTrue(rows[1]["cache_hit"])
+            self.assertFalse(rows[1]["ok"])
+            self.assertNotIn("synthetic", log.read_text())
 
 
 if __name__ == "__main__":
