@@ -73,8 +73,7 @@ def ask(payload, key, *, opener=None, usage_log=None, cache_path=None):
         usage = result.get("usage") if isinstance(result.get("usage"), dict) else None
         _append(log, {**base, "model": result.get("model"), "usage": usage,
                       "ok": True, "cache_hit": False})
-        if cache_file is not None and result.get("model") and isinstance(usage, dict) and \
-                isinstance(usage.get("input_tokens"), int) and usage["input_tokens"] >= 0:
+        if cache_file is not None and result.get("model"):
             try:
                 with _cache(cache_file) as db:
                     db.execute("insert or replace into answers values (?,?,?)",

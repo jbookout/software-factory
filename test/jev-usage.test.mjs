@@ -51,3 +51,23 @@ test("a malformed HTTP 200 answer still records its measured token charge", asyn
   assert.equal(rows[0].ok, false)
   assert.equal(rows[0].http_status, 200)
 })
+
+test("a valid answer without usage is cached and logged as unknown spend", async () => {
+  const root = await mkdtemp(join(tmpdir(), "jev-usage-unknown-"))
+  const usageLog = join(root, "jev-calls.jsonl")
+  let calls = 0
+  const input = { caller: "model-room-route", apiKey: "synthetic-secret",
+    state: "x", model: "jev-1.13.0", questions: { q: { type: "noul", instructions: "x" } },
+    usageLog, cacheDir: join(root, "cache"), fetchImpl: async () => {
+      calls++
+      return { ok: true, json: async () => ({ model: "jev-1.13.0",
+        answers: { q: { noul: 0.8 } } }) }
+    } }
+  await askJev(input)
+  assert.equal((await askJev(input)).cache_hit, true)
+  assert.equal(calls, 1)
+  const rows = (await readFile(usageLog, "utf8")).trim().split("\n").map(JSON.parse)
+  assert.equal(rows[0].ok, true)
+  assert.equal(rows[0].usage, null)
+  assert.equal(rows[1].cache_hit, true)
+})

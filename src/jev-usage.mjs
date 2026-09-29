@@ -76,7 +76,7 @@ export async function askJev({ state, model, questions, apiKey, caller,
       http_status: response.status ?? 200 })
     logged = true
     if (!valid) throw new Error("TypeSafe answer shape invalid")
-    if (cachePath && Number.isInteger(usage?.input_tokens) && usage.input_tokens >= 0)
+    if (cachePath)
       await store(cachePath, result)
     return { model: result.model, answers: result.answers, usage }
   } catch (error) {

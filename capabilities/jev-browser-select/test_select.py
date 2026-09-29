@@ -89,6 +89,27 @@ class BrowserSelectTest(unittest.TestCase):
             self.assertFalse(rows[1]["ok"])
             self.assertNotIn("synthetic", log.read_text())
 
+    def test_missing_usage_is_logged_unknown_and_still_cached(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as root:
+            log = pathlib.Path(root) / "jev-calls.jsonl"
+            cache = pathlib.Path(root) / "cache.sqlite3"
+            def send(_request, timeout):
+                calls.append(timeout)
+                return Response(json.dumps({"model": "jev-1.13.0", "answers": {
+                    "operation": {"choice": "click", "confidence": 0.9},
+                    "target": {"choice": "control_7", "confidence": 0.95},
+                }}).encode())
+            MODULE.select(self.snapshot, api_key="synthetic", opener=send,
+                          usage_log=log, cache_path=cache)
+            MODULE.select(self.snapshot, api_key="synthetic", opener=send,
+                          usage_log=log, cache_path=cache)
+            self.assertEqual(len(calls), 1)
+            rows = [json.loads(line) for line in log.read_text().splitlines()]
+            self.assertTrue(rows[0]["ok"])
+            self.assertIsNone(rows[0]["usage"])
+            self.assertTrue(rows[1]["cache_hit"])
+
 
 if __name__ == "__main__":
     unittest.main()
