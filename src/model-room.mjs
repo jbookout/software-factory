@@ -1,10 +1,10 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
+import { askJev } from "./jev-usage.mjs"
 
 const execFileAsync = promisify(execFile)
 
-const JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 const JEV_MODEL = "jev-1.13.0"
 const MAX_TASK_CHARS = 4000
 const MAX_CONTRACT_CHARS = 12000
@@ -125,7 +125,8 @@ export function verifyPinnedBuildContext(context) {
 }
 
 /** Jev may trim optional pinned context, never the required contract. */
-export async function selectOptionalBuildContext({ task, chunks = [], apiKey, fetchImpl = fetch }) {
+export async function selectOptionalBuildContext({ task, chunks = [], apiKey, fetchImpl = fetch,
+  usageLog, cacheDir }) {
   const taskText = bounded(task, MAX_TASK_CHARS)
   if (!Array.isArray(chunks) || chunks.length > MAX_OPTIONAL_CONTEXT)
     throw new Error("invalid optional build context")
@@ -144,11 +145,8 @@ export async function selectOptionalBuildContext({ task, chunks = [], apiKey, fe
       long: "The first 3000 characters are useful.", full: "The entire excerpt is needed." }
   }]))
   try {
-    const response = await fetchImpl(JEV_ENDPOINT, { method: "POST",
-      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-      body: JSON.stringify({ model: JEV_MODEL, state, questions }), signal: AbortSignal.timeout(1500) })
-    if (!response.ok) return hidden
-    const body = await response.json()
+    const body = await askJev({ model: JEV_MODEL, state, questions, apiKey,
+      caller: "model-room-optional-context", fetchImpl, usageLog, cacheDir })
     if (body?.model !== JEV_MODEL) return { ...hidden, reason: "invalid_answer" }
     const parsed = pinned.map((_, index) => parseChoice(body.answers?.[`context_${index}`], VISIBILITY))
     if (parsed.some(choice => !choice)) return { ...hidden, reason: "invalid_answer" }
@@ -215,7 +213,8 @@ function parseChoice(answer, keys) {
  * enough distinct, independently checked cases.
  */
 export async function routeDoctorCreBuild({ task, contracts, baseline, candidates, observations = [],
-  verifyObservation, verifyControl, minimumCases = 3, controlEnabled = false, apiKey, fetchImpl = fetch }) {
+  verifyObservation, verifyControl, minimumCases = 3, controlEnabled = false, apiKey, fetchImpl = fetch,
+  usageLog, cacheDir }) {
   const taskText = bounded(task, MAX_TASK_CHARS)
   const baselineRoute = validateRoute(baseline)
   if (!Array.isArray(contracts) || !contracts.length || !Array.isArray(candidates) ||
@@ -257,11 +256,8 @@ export async function routeDoctorCreBuild({ task, contracts, baseline, candidate
     criteria: Object.fromEntries(choiceKeys.map(key => [key, key === "baseline"
       ? `Use the existing baseline ${routeKey(baselineRoute)}.` : `Use ${key}.`])) } }
   try {
-    const response = await fetchImpl(JEV_ENDPOINT, { method: "POST",
-      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-      body: JSON.stringify({ model: JEV_MODEL, state, questions }), signal: AbortSignal.timeout(1500) })
-    if (!response.ok) return { ...result, jev: { status: "unavailable", reason: "service_error", model: JEV_MODEL, shadow_choice: null } }
-    const body = await response.json()
+    const body = await askJev({ model: JEV_MODEL, state, questions, apiKey,
+      caller: "model-room-build-route", fetchImpl, usageLog, cacheDir })
     const choice = body?.model === JEV_MODEL ? parseChoice(body.answers?.preferred_route, choiceKeys) : null
     if (!choice) return { ...result, jev: { status: "unavailable", reason: "invalid_answer", model: JEV_MODEL, shadow_choice: null } }
     const chosenRoute = choiceRoutes.find(route => route.key === choice.choice)

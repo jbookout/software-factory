@@ -1,14 +1,16 @@
 """One Jev request chooses an operation and visible control; never acts on a page."""
 
 import hashlib
+import importlib.util
 import json
 import os
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
+from pathlib import Path
 
-ENDPOINT = "https://api.typesafe.ai/v1/systemone"
+_usage_spec = importlib.util.spec_from_file_location("jev_browser_usage", Path(__file__).with_name("usage.py"))
+_usage = importlib.util.module_from_spec(_usage_spec)
+_usage_spec.loader.exec_module(_usage)
 OPERATIONS = {
     "click": "Click a visible control to advance the user's goal.",
     "type_text": "Type caller-authored text into a visible editable control.",
@@ -57,7 +59,7 @@ def _state(raw):
     return state
 
 
-def select(raw, *, api_key=None, opener=None):
+def select(raw, *, api_key=None, opener=None, usage_log=None, cache_path=None):
     """Return a typed recommendation bound to a fresh snapshot digest."""
     state = _state(raw)
     digest = hashlib.sha256(json.dumps(state, sort_keys=True).encode()).hexdigest()
@@ -66,20 +68,17 @@ def select(raw, *, api_key=None, opener=None):
         return {**_refuse("jev_unavailable"), "snapshot_sha256": digest}
     options = {f"control_{c['index']}": f"Visible {c['role']}: {c['name']}" for c in state["controls"]}
     options["none"] = "No visible control is a reliable target for this step."
-    body = json.dumps({
+    payload = {
         "model": "jev-latest", "state": state,
         "questions": {
             "operation": {"type": "choice", "instructions": "Which single operation best advances the goal from this visible page? Prefer abstain if unsure.", "criteria": OPERATIONS},
             "target": {"type": "choice", "instructions": "Which visible control is the target for that operation? Choose none for finish or abstain.", "criteria": options},
         },
-    }).encode()
-    request = urllib.request.Request(ENDPOINT, data=body, method="POST", headers={
-        "authorization": f"Bearer {key}", "content-type": "application/json",
-    })
+    }
     try:
-        with (opener or urllib.request.urlopen)(request, timeout=12) as response:
-            answer = json.load(response).get("answers", {})
-    except (OSError, ValueError, urllib.error.HTTPError):
+        answer = _usage.ask(payload, key, opener=opener, usage_log=usage_log,
+                            cache_path=cache_path).get("answers", {})
+    except (OSError, ValueError, TypeError):
         return {**_refuse("jev_unavailable"), "snapshot_sha256": digest}
     operation = answer.get("operation", {}).get("choice")
     target = answer.get("target", {}).get("choice")
