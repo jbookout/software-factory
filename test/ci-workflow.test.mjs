@@ -27,9 +27,11 @@ test("required test keeps running the complete baseline suite on PRs and main", 
 test("hung required test has a whole-job ceiling with room for ordinary successful work", () => {
   const minutes = workflow.jobs.test["timeout-minutes"]
   assert.ok(Number.isInteger(minutes), "missing finite job timeout; step-only limits leave setup unbounded")
-  // The hosted baseline's slowest successful job is 15 seconds. Retain cold-install
-  // headroom while refusing a ceiling longer than the accepted two minutes.
-  assert.ok(minutes >= 1 && minutes <= 2, "job ceiling must be 60–120 seconds")
+  // Successful hosted jobs take at most 15 seconds. A hung-run experiment added
+  // 15 seconds of runner termination after the execution timeout. Reserve 30
+  // seconds for termination within the accepted two-minute completion ceiling.
+  assert.ok(minutes >= 1, "allow cold-install headroom above the 15-second baseline")
+  assert.ok(minutes * 60 + 30 <= 120, "execution and termination budgets must fit the two-minute ceiling")
 })
 
 function evaluate(expression, github) {
