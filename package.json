@@ -3,7 +3,11 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.mjs"
+    ".": "./src/index.mjs",
+    "./design-manager": {
+      "types": "./src/design-manager.d.mts",
+      "import": "./src/design-manager.mjs"
+    }
   },
   "engines": {
     "node": ">=20.19"
@@ -16,6 +20,7 @@
   "devDependencies": {
     "@shadcn/lint": "0.1.0",
     "@typescript-eslint/parser": "8.70.0",
+    "ajv": "8.20.0",
     "eslint": "10.10.0",
     "tailwindcss": "4.3.3"
   }
