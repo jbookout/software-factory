@@ -9,6 +9,7 @@
     "schema",
     "projectId",
     "sourceRevision",
+    "platforms",
     "entry",
     "tier",
     "stage",
@@ -92,6 +93,20 @@
       "items": {
         "$ref": "#/$defs/gate"
       }
+    },
+    "platforms": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "web",
+          "ios",
+          "android",
+          "desktop"
+        ]
+      }
     }
   },
   "$defs": {
@@ -136,6 +151,23 @@
     "evidence": {
       "type": "object",
       "additionalProperties": false,
+      "if": {
+        "required": ["verification"],
+        "properties": {
+          "verification": {
+            "type": "object",
+            "required": ["method"],
+            "properties": {
+              "method": { "const": "e2e" }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "strength": { "const": "simulated-critique" }
+        }
+      },
       "required": [
         "ref",
         "digest",
@@ -162,6 +194,9 @@
             "competitor-pattern-research",
             "simulated-critique"
           ]
+        },
+        "verification": {
+          "$ref": "#/$defs/verificationProof"
         }
       }
     },
@@ -250,7 +285,8 @@
           "enum": [
             "pending",
             "pass",
-            "fail"
+            "fail",
+            "blocked"
           ]
         },
         "artifact": {
@@ -345,6 +381,98 @@
           "type": "string",
           "minLength": 1,
           "pattern": "\\S"
+        }
+      }
+    },
+    "persistenceProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "writtenValue",
+        "independentReadback",
+        "readbackMethod"
+      ],
+      "properties": {
+        "writtenValue": {
+          "$ref": "#/$defs/artifact"
+        },
+        "independentReadback": {
+          "$ref": "#/$defs/artifact"
+        },
+        "readbackMethod": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        }
+      }
+    },
+    "verificationProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceRevision",
+        "platform",
+        "method",
+        "entryPoint",
+        "entryPointStatus",
+        "outcome",
+        "actionAndResult",
+        "persistence"
+      ],
+      "properties": {
+        "sourceRevision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "platform": {
+          "type": "string",
+          "enum": [
+            "web",
+            "ios",
+            "android",
+            "desktop"
+          ]
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "verify-skill",
+            "e2e"
+          ]
+        },
+        "entryPoint": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "entryPointStatus": {
+          "type": "string",
+          "enum": [
+            "exercised",
+            "skipped",
+            "blocked"
+          ]
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "passed",
+            "failed",
+            "blocked"
+          ]
+        },
+        "actionAndResult": {
+          "$ref": "#/$defs/artifact"
+        },
+        "persistence": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/persistenceProof"
+            }
+          ]
         }
       }
     }

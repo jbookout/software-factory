@@ -1,4 +1,11 @@
 // Pure development-time contracts. No dispatch, persistence or acceptance authority.
+import { readFileSync } from 'node:fs'
+import Ajv2020 from 'ajv/dist/2020.js'
+
+const projectSchema = JSON.parse(readFileSync(new URL('../schemas/design-project.schema.json', import.meta.url)))
+const validateEvidence = new Ajv2020({ strict: true }).addSchema(projectSchema)
+  .compile({ $ref: `${projectSchema.$id}#/$defs/evidence` })
+
 export const DESIGN_STAGES = Object.freeze([
   "grill",
   "intake",
@@ -18,6 +25,17 @@ export const DESIGN_TIERS = Object.freeze([
   "lean",
   "standard",
   "high-assurance"
+])
+
+export const DESIGN_STATIONS = Object.freeze(['research', 'define', 'design', 'prove', 'ship'])
+export const PROJECT_PLATFORMS = Object.freeze(['web', 'ios', 'android', 'desktop'])
+
+const stageStations = Object.freeze([
+  'define', 'define', 'research', 'define', 'design', 'design', 'prove', 'design',
+  'ship', 'prove', 'prove', 'define'
+])
+const gateStations = Object.freeze([
+  'define', 'define', 'design', 'prove', 'design', 'ship', 'prove', 'prove', 'ship'
 ])
 
 export const DESIGN_GATES = Object.freeze([
@@ -321,4 +339,60 @@ export function advanceDesignStage(stage, target) {
   const next = nextDesignStage(stage)
   if (next === null || next !== target) throw new Error("invalid design transition")
   return target
+}
+
+export function stationForDesignStage(stage) {
+  const index = DESIGN_STAGES.indexOf(stage)
+  if (index < 0) throw new Error('unknown design stage')
+  return stageStations[index]
+}
+
+export function stationForDesignGate(gate) {
+  const index = DESIGN_GATES.indexOf(gate)
+  if (index < 0) throw new Error('unknown design gate')
+  return gateStations[index]
+}
+
+/** Supplied repository signals only; invalid app.json platforms throw instead of clearing ambiguity. */
+export function inspectProjectPlatforms(platforms, { dependencies, paths, appJsonPlatforms }) {
+  if (appJsonPlatforms !== undefined && (!Array.isArray(appJsonPlatforms)
+    || appJsonPlatforms.length === 0
+    || !appJsonPlatforms.every(platform => PROJECT_PLATFORMS.includes(platform))))
+    throw new TypeError('appJsonPlatforms must be a non-empty array of known project platforms')
+  const mobileDependency = dependencies.some(name => name === 'react-native' || name === 'expo')
+  const native = platform => paths.some(path => path === `${platform}/` || path.startsWith(`${platform}/`))
+  const appJson = paths.includes('app.json')
+  const detected = PROJECT_PLATFORMS.filter(platform =>
+    ((platform === 'ios' || platform === 'android') && (mobileDependency || native(platform)
+      || (appJson && appJsonPlatforms === undefined)))
+    || (appJson && appJsonPlatforms?.includes(platform)))
+  const missing = detected.filter(platform => !platforms.includes(platform))
+  return { detected, missing, mismatch: missing.length > 0 }
+}
+
+/** Schema-valid reported proof eligibility; artifact byte authentication belongs to Prove. */
+export function isVerifiedUserPath(evidence, sourceRevision) {
+  if (!validateEvidence(evidence) || !evidence.verification) return false
+  const proof = evidence.verification
+  const persistence = proof.persistence
+  return proof.sourceRevision === sourceRevision
+    && proof.entryPointStatus === 'exercised' && proof.outcome === 'passed'
+    && (persistence === null || persistence.writtenValue.ref !== persistence.independentReadback.ref)
+}
+
+export const MOBILE_CAPABILITY_REQUIRED = 'mobile verification capability not installed: add capabilities/mobile-verification (e2e mobile engine / agent-device, stim, argent; see docs/design-manager/parked.md)'
+
+/** Pure Prove precondition; pass never certifies a full design gate or grants authority. */
+export function evaluateMobileVerification(project, availableCapabilities, evidence = []) {
+  const mobile = project.platforms.filter(platform => platform === 'ios' || platform === 'android')
+  if (mobile.length === 0) return { status: 'pass', message: 'mobile verification not required' }
+  if (!availableCapabilities.includes('capabilities/mobile-verification'))
+    return { status: 'fail', message: MOBILE_CAPABILITY_REQUIRED }
+  const missing = mobile.flatMap(platform => ['verify-skill', 'e2e'].filter(method =>
+    !evidence.some(item => isVerifiedUserPath(item, project.sourceRevision)
+      && item.verification.platform === platform
+      && item.verification.method === method)).map(method => `${platform}/${method}`))
+  return missing.length
+    ? { status: 'pending', message: `mobile evidence required: ${missing.join(', ')}` }
+    : { status: 'pass', message: 'reported mobile evidence covers each declared mobile platform' }
 }
