@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "brand": {
+    "name": "Northstar",
+    "descriptor": "Practice Real Estate",
+    "navy": "#002F6C",
+    "orange": "#F57F29"
+  },
+  "presentation": {
+    "title": "A place to grow with purpose.",
+    "preparedFor": "Northstar Family Health",
+    "scenarioDate": "October 2026",
+    "fictional": true
+  },
+  "sections": [
+    { "id": "home", "label": "Overview", "title": "A place to grow with purpose.", "visible": true },
+    { "id": "leases", "label": "Leases", "title": "Keep flexibility in the plan.", "visible": true },
+    { "id": "purchases", "label": "Purchases", "title": "Ownership gives the practice a stake in the future.", "visible": true },
+    { "id": "strategy", "label": "Strategy", "title": "Make the space work harder.", "visible": true },
+    { "id": "demographics", "label": "Demographics", "title": "Demand signals, with room for nuance.", "visible": true },
+    { "id": "sources", "label": "Sources", "title": "A decision gets stronger with better evidence.", "visible": true }
+  ],
+  "metrics": [
+    { "value": 4.8, "suffix": "%", "label": "Sample household growth", "note": "5-year illustrative trend", "trend": [1.2, 1.8, 1.7, 3.1, 2.8, 4.8] },
+    { "value": 3.2, "suffix": "%", "label": "Sample employment growth", "note": "5-year illustrative trend", "trend": [1.4, 2.0, 1.8, 2.3, 2.9, 3.2] },
+    { "value": 2.4, "suffix": "%", "label": "Sample insured household growth", "note": "Fictional planning metric", "trend": [0.9, 1.2, 1.4, 1.7, 2.0, 2.4] },
+    { "value": 1.5, "suffix": "%", "label": "Sample population index growth", "note": "Fictional planning metric", "trend": [0.5, 0.6, 0.8, 1.0, 1.2, 1.5] }
+  ],
+  "locator": {
+    "label": "Fictional Locator Schematic",
+    "image": null,
+    "disclaimer": "Fictional Locator Schematic. This example shows fictional civic development projects, not real roads, places, or distances."
+  },
+  "developments": [
+    { "id": "civic-north-commons", "name": "North District Commons", "location": "Fictional district", "description": "Illustrative mixed-use community plan with housing, local services, and green space.", "status": "Illustrative community plan", "locator": { "x": 24, "y": 31 }, "artKey": "harbor", "image": null, "sourceId": null },
+    { "id": "civic-health-campus", "name": "Rivermark Health Campus", "location": "Fictional district", "description": "Illustrative hospital and outpatient campus concept for a fictional region.", "status": "Illustrative health campus", "locator": { "x": 69, "y": 40 }, "artKey": "grove", "image": null, "sourceId": null },
+    { "id": "civic-mobility-hub", "name": "North Loop Mobility Hub", "location": "Fictional district", "description": "Illustrative transit and active-mobility project concept for a fictional region.", "status": "Illustrative mobility concept", "locator": { "x": 44, "y": 73 }, "artKey": "summit", "image": null, "sourceId": null }
+  ],
+  "properties": [
+    { "id": "harbor-point", "name": "Harbor Point", "type": "purchase", "price": 2460000, "totalSf": 8400, "description": "Balanced office layout with room for a future specialty service.", "planningNote": "Compare the space plan with anticipated provider growth.", "locator": { "x": 35, "y": 29 }, "parkingSpaces": 42, "parkingRatio": "5.0 / 1,000 SF", "artKey": "harbor", "image": null },
+    { "id": "grove-commons", "name": "Grove Commons", "type": "purchase", "price": 1980000, "totalSf": 6900, "description": "An existing clinic suite with an efficient patient arrival sequence.", "planningNote": "Review building systems and any deferred maintenance.", "locator": { "x": 66, "y": 49 }, "parkingSpaces": 35, "parkingRatio": "5.1 / 1,000 SF", "artKey": "grove", "image": null },
+    { "id": "summit-house", "name": "Summit House", "type": "purchase", "price": 2940000, "totalSf": 10200, "description": "A larger sample footprint that leaves room for additional services.", "planningNote": "Test the carrying plan against a phased occupancy ramp.", "locator": { "x": 45, "y": 76 }, "parkingSpaces": 54, "parkingRatio": "5.3 / 1,000 SF", "artKey": "summit", "image": null }
+  ],
+  "leases": [
+    { "id": "lease-cedar-suite", "name": "Cedar Suite", "subtitle": "Sample outpatient suite", "areaSf": 6800, "annualRentPerSf": 28, "structure": "Modified gross", "planningNote": "Ask about renewal options and annual increases.", "locator": { "x": 30, "y": 46 }, "parkingSpaces": 38, "parkingRatio": "5.6 / 1,000 SF", "image": null },
+    { "id": "lease-parkside-center", "name": "Parkside Center", "subtitle": "Sample medical office", "areaSf": 7600, "annualRentPerSf": 30, "structure": "NNN estimate", "planningNote": "Confirm pass-throughs and operating expenses.", "locator": { "x": 72, "y": 66 }, "parkingSpaces": 41, "parkingRatio": "5.4 / 1,000 SF", "image": null }
+  ],
+  "assumptions": {
+    "occupancyFraction": 0.30,
+    "downPaymentFraction": 0,
+    "annualInterest": 0.0625,
+    "amortizationYears": 25,
+    "holdYears": 10,
+    "annualAppreciation": 0.015,
+    "annualRentPerSf": 28,
+    "collectionLoss": 0.05,
+    "fillMonths": 24,
+    "practiceBuildoutPerSf": 180,
+    "assumptionNotes": [
+      "Financing input represents 100% financing for demonstration only.",
+      "Occupancy is calculated as a share of total square feet and rounds up to the next whole square foot.",
+      "Buildout cost per square foot is a fictional planning input."
+    ]
+  },
+  "demographics": {
+    "title": "Fictional sample population index",
+    "baseYear": 2021,
+    "years": [2021, 2022, 2023, 2024, 2025, 2026],
+    "index": [100, 103, 106, 111, 116, 121],
+    "questions": [
+      { "id": "question-population", "title": "Who is moving into the trade area?", "body": "Validate household growth, age mix, and insurance coverage across the actual service area." },
+      { "id": "question-employment", "title": "Where is employment expanding?", "body": "Look for durable job growth, new employers, and commute patterns that support access." },
+      { "id": "question-care", "title": "How much care is already nearby?", "body": "Map comparable services, capacity, and referral patterns before reading growth as unmet demand." }
+    ]
+  },
+  "sources": [
+    { "id": "source-population", "title": "Local population", "url": null, "date": null, "geography": null, "notes": "Add a current, verifiable source and the exact geography before using demographic claims." },
+    { "id": "source-employment", "title": "Employment and access", "url": null, "date": null, "geography": null, "notes": "Add a current source, methodology, and retrieval date." },
+    { "id": "source-property", "title": "Property and lease terms", "url": null, "date": null, "geography": null, "notes": "Verify availability, asking terms, expenses, and property condition directly." }
+  ]
+}
