@@ -7,6 +7,9 @@ JSON. Copy [the example](../config/pr-delivery.example.json) to a private local
 config. It is the only repo registry: set each `checkout`, `worktreeRoot`, the
 shared `stateDir`, model, effort, limits, and holds (`repo`, `titlePattern`,
 `reason`). Paths are absolute or relative to the config, without shell expansion.
+The checkout's origin must identify its configured GitHub repository. A private
+`originUrl` can pin an exact alternate remote URL. Repairs support same-repository
+PRs targeting `main`; forks and other base branches stop before work starts.
 Keep config, worktrees, review output, and job/usage/queue records outside Git.
 Every invocation must use the same config/state directory for one serial queue.
 
@@ -22,8 +25,13 @@ All cutover steps are required:
 
 The importer reads the old queue/done prefix and budget files without changing
 them. It copies pending FIFO entries and recent usage, deduplicates repeat
-imports, and refuses unknown/ambiguous repos or inconsistent records. Move old
-hold patterns into the JSON before starting producers. Do not run both queues.
+imports, and refuses unknown/ambiguous repos or inconsistent records.
+The source directory, `merge-queue.txt`, `merge-queue.done`, and `budget/` must
+exist and be readable. Empty files and an empty budget directory represent an
+empty source; missing inputs fail before destination queue or usage writes.
+Imported review comments never authorize delivery. Run a fresh factory review
+for imported pending work so the private review evidence exists before merging.
+Move old hold patterns into the JSON before starting producers. Do not run both queues.
 The factory does not install a scheduler or take product deployment authority.
 
 Use `R=owner/repository`, `N=<pr>`, `W=<worktree-or-dash>`, `H=<approved-full-sha>`,
@@ -49,15 +57,35 @@ disables that for a caller already controlling rounds. Queue/auto-enqueue accept
 `--once` for supervised checks. Never use GitHub auto-merge. Direct merge-core
 calls acquire the same global merge lease as the queue. Review uses a fresh,
 detached worktree and process; builders never post approvals. Queue approval
-attestations cannot substitute for independent review comments.
+attestations cannot substitute for independent review comments. Each review uses
+a unique attempt directory; live, dirty, or interrupted attempts are preserved.
+Accepted approvals carry a `Factory-Review` reference to private execution,
+source tree, prompt, and exact reviewer output records. Keep these records in
+the shared state directory. A matching GitHub author name alone proves nothing.
+Queue comments say `DELIVERY VERIFIED` and are outside the review protocol.
 
 Stops are observable in CLI output; process and adapter outcomes also enter
 private `delivery.jsonl`. An unchanged
 repair head exits 2 (`NO-PROGRESS`), exhausted usage/slots exits 75, timeout exits
 142, unknown repo exits 9. Failed merge outcomes remain in `queue.json`;
-transient API errors retry three times after the initial attempt. `usage.json`
-shares the rolling 24-hour cap across review, fix, CI-fix, and guard invocations.
-Hard timeouts kill the process group. Dirty/diverged branch worktrees are
+transient API errors retry three times after the initial attempt.
+Automatic scanning can enqueue a recovered failed head again, preserving prior
+outcomes and linking attempts. `queueRunsPer24h` bounds automatic queue entries
+for a head in a rolling day; active and successful entries stay deduplicated.
+Scans expand the GitHub CLI result limit until the full result is observed,
+with a visible stop at the repository bound instead of silent tail truncation.
+The shared CI policy accepts successful StatusContext checks and CheckRun
+SUCCESS, SKIPPED, or NEUTRAL conclusions. Pending or empty checks wait for the
+configured deadline; terminal failures trigger repair, and unknown provider
+responses stop as service errors. Closed PRs do no agent work; merged PRs must
+prove the squash commit, target ancestry, and delivered source tree again.
+`usage.json` shares the rolling 24-hour cap across review, fix, CI-fix, and guard invocations.
+An independent process supervisor owns each job's deadline and child group.
+Slot and PR ownership records bind that supervisor, group, and deadline; caller
+termination stops the group before another job can use its ownership. Unique
+ticket records replace directory reapers, so dead owners recover without a
+permanent reaper lock. Run one factory version against a state directory.
+Hard timeouts kill the process group. Dirty/diverged/ahead branch worktrees are
 reported and retained. Prompt restrictions on model actions remain guidance,
 with product-repository checks and permissions providing enforcement.
 

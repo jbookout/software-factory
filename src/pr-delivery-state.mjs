@@ -21,32 +21,52 @@ export async function writeJson(file, value) {
 }
 const alive = pid => { try { process.kill(pid, 0); return true } catch (e) { return e.code !== "ESRCH" } }
 
-// Atomic directory leases. Reapers serialize and re-read the current owner;
-// this avoids deleting a new owner's lease while recovering a dead process.
+// Each contender owns a unique record: dead-owner recovery never unlinks a
+// successor's lock. Ticket publication and election implement a nonblocking
+// bakery mutex; callers that encounter a choosing/live earlier peer retry.
 export async function acquireLease(root, name) {
-  await fs.mkdir(root, { recursive: true, mode: 0o700 })
-  const dir = path.join(root, name), reaper = `${dir}.reaper`
-  try { await fs.access(reaper); return null } catch (e) { if (e.code !== "ENOENT") throw e }
+  const dir = path.join(root, `${name}.claims`)
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 })
+  const token = randomUUID(), file = path.join(dir, `${token}.json`)
+  let owner = { pid: process.pid, token, ticket: 0 }
+  const release = () => fs.rm(file, { force: true })
+  const peers = async () => {
+    const result = []
+    for (const entry of await fs.readdir(dir)) {
+      if (!entry.endsWith(".json") || entry === `${token}.json`) continue
+      const peer = await readJson(path.join(dir, entry), null)
+      if (!peer) continue
+      // A supervised job keeps its slot even after its controller dies.
+      const group = peer.job?.groupPid
+      const groupAlive = group && alive(process.platform === "win32" ? group : -group)
+      if (groupAlive && (Date.now() >= peer.job.deadline || (!alive(peer.pid) && !alive(peer.job.pid)))) {
+        try { process.kill(process.platform === "win32" ? group : -group, "SIGKILL") }
+        catch (error) { if (error.code !== "ESRCH") throw error }
+      }
+      if (alive(peer.pid) || (peer.job && alive(peer.job.pid)) || groupAlive) result.push(peer)
+      else await fs.rm(path.join(dir, entry), { force: true })
+    }
+    return result
+  }
   try {
-    await fs.mkdir(dir, { mode: 0o700 })
-    await writeJson(path.join(dir, "owner.json"), { pid: process.pid })
-    return () => fs.rm(dir, { recursive: true, force: true })
-  } catch (e) { if (e.code !== "EEXIST") throw e }
-  try { await fs.mkdir(reaper) } catch (e) { if (e.code === "EEXIST") return null; throw e }
-  try {
-    const owner = await readJson(path.join(dir, "owner.json"), null)
-    const stat = await fs.stat(dir).catch(e => { if (e.code !== "ENOENT") throw e })
-    // Allow time for the winning mkdir to publish its owner.
-    if (stat && ((owner && !alive(owner.pid)) || (!owner && Date.now() - stat.mtimeMs > 5000)))
-      await fs.rm(dir, { recursive: true, force: true })
-  } finally { await fs.rm(reaper, { recursive: true, force: true }) }
-  return null
+    await writeJson(file, owner)
+    owner.ticket = Math.max(0, ...(await peers()).map(p => p.ticket)) + 1
+    await writeJson(file, owner)
+    const blocked = (await peers()).some(p => p.ticket === 0 || p.ticket < owner.ticket ||
+      (p.ticket === owner.ticket && p.token < token))
+    if (blocked) { await release(); return null }
+    release.bindJob = async job => {
+      owner = { ...owner, job }; await writeJson(file, owner)
+      return { file, token }
+    }
+    return release
+  } catch (error) { await release(); throw error }
 }
 export async function withLease(root, name, fn, { waitMs = 0, pollMs = 30 } = {}) {
   const until = Date.now() + waitMs
   do {
     const release = await acquireLease(root, name)
-    if (release) { try { return await fn() } finally { await release() } }
+    if (release) { try { return await fn(release) } finally { await release() } }
     if (Date.now() >= until) throw new DeliveryError(`BUSY: ${name} already owned`, 75)
     await pause(pollMs)
   } while (true)

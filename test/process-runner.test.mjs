@@ -8,6 +8,16 @@ import { runProcess } from "../src/process-runner.mjs"
 import { runCodexBuild } from "../src/codex-build.mjs"
 import { createPinnedBuildContext } from "../src/model-room.mjs"
 
+test("buffered streams preserve UTF-8 split across byte chunks", async () => {
+  const result = await runProcess([process.execPath, "-e", `
+    for (const s of [process.stdout, process.stderr]) s.write(Buffer.from([0xe2]));
+    setTimeout(() => { for (const s of [process.stdout, process.stderr]) s.write(Buffer.from([0x82,0xac])); }, 50);
+  `])
+  assert.equal(result.code, 0)
+  assert.equal(result.stdout, "€")
+  assert.equal(result.stderr, "€")
+})
+
 test("process seam treats arguments literally without a shell", async () => {
   const literal = "$(not-a-command); `not-a-command`"
   const result = await runProcess([process.execPath, "-e", "process.stdout.write(process.argv[1])", literal])

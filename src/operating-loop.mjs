@@ -262,6 +262,7 @@ export async function runPrDelivery(job, adapter) {
   for (let round = 0; round < rounds; round++) {
     const inspect = await execute("pr:inspect")
     if (inspect.status !== "pass") return stopped(inspect)
+    if (inspect.data.merged) return { code: 0, message: inspect.data.message, events }
     if (inspect.data.ready) return { code: 0, message: "APPROVED", events }
     if (inspect.data.approved || inspect.data.blocked) {
       const repair = await execute(inspect.data.approved ? "ci-fix" : "fix")
@@ -273,5 +274,6 @@ export async function runPrDelivery(job, adapter) {
   }
   const final = await execute("pr:inspect")
   if (final.status !== "pass") return stopped(final)
+  if (final.data.merged) return { code: 0, message: final.data.message, events }
   return { code: final.data.ready ? 0 : 1, message: final.data.ready ? "APPROVED" : `UNRESOLVED after ${rounds} rounds`, events }
 }

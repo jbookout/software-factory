@@ -13,5 +13,6 @@
   "pollMs": 30000,
   "autoPollMs": 300000,
   "retryMs": 120000,
+  "queueRunsPer24h": 4,
   "holds": []
 }
