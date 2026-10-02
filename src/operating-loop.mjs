@@ -246,3 +246,32 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
     }
   }
 }
+
+// The PR lifecycle crosses the same execute(step, request) seam as build jobs.
+// Progress is the remote head, not the agent's claimed completion or findings.
+export async function runPrDelivery(job, adapter) {
+  const { rounds = 3, ...request } = job
+  if (!Number.isSafeInteger(rounds) || rounds <= 0) throw new Error("rounds must be a positive integer")
+  const events = []
+  const execute = async step => {
+    const result = await adapter.execute(step, request)
+    events.push({ step, status: result.status, ...result.data })
+    return result
+  }
+  const stopped = result => ({ code: result.data.code ?? 1, message: result.data.message, events })
+  for (let round = 0; round < rounds; round++) {
+    const inspect = await execute("pr:inspect")
+    if (inspect.status !== "pass") return stopped(inspect)
+    if (inspect.data.ready) return { code: 0, message: "APPROVED", events }
+    if (inspect.data.approved || inspect.data.blocked) {
+      const repair = await execute(inspect.data.approved ? "ci-fix" : "fix")
+      if (repair.status !== "pass") return stopped(repair)
+      if (repair.data.head === inspect.data.head) return { code: 2, message: "NO-PROGRESS: fix pushed nothing", events }
+    }
+    const review = await execute("review")
+    if (review.status !== "pass") return stopped(review)
+  }
+  const final = await execute("pr:inspect")
+  if (final.status !== "pass") return stopped(final)
+  return { code: final.data.ready ? 0 : 1, message: final.data.ready ? "APPROVED" : `UNRESOLVED after ${rounds} rounds`, events }
+}

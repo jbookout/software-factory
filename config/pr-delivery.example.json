@@ -1,0 +1,17 @@
+{
+  "repos": {
+    "owner/repository": {
+      "checkout": "/absolute/path/to/repository",
+      "worktreeRoot": "/absolute/path/to/delivery-worktrees"
+    }
+  },
+  "stateDir": "/absolute/path/to/private/factory-delivery-state",
+  "codex": { "model": "gpt-6.1-sol", "effort": "high" },
+  "limits": { "runsPer24h": 8, "slots": 4, "timeoutMs": 4500000 },
+  "commandTimeoutMs": 120000,
+  "checksTimeoutMs": 3600000,
+  "pollMs": 30000,
+  "autoPollMs": 300000,
+  "retryMs": 120000,
+  "holds": []
+}

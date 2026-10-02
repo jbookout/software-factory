@@ -10,3 +10,5 @@ coverage/
 __pycache__/
 *.pyc
 
+
+config/pr-delivery.local.json
