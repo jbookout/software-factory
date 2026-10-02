@@ -440,12 +440,17 @@ escape/removal path pass; product-local deterministic checks remain authoritativ
 
 At intake `DesignProject.platforms` is required, nonempty and unique, with values
 `web`, `ios`, `android`, `desktop`. The product-owned detector reads package
-dependencies (`react-native`, `expo`), `ios/` / `android/` folders and `app.json`.
+dependencies (`react-native`, `expo`), `ios/` / `android/` folders, `app.json`,
+SwiftUI imports/usage and `.swift` source paths.
 It supplies normalized signals to `inspectProjectPlatforms`; the factory itself
 does not read a product repository. React Native/Expo or unqualified `app.json`
 conservatively suggests both mobile platforms; explicit app.json platforms and
-native folders add detected platforms. Detected platforms absent from intake
-produce a mismatch and stop advancement until the declaration is reconciled.
+native folders add detected platforms. `RepositoryPlatformSignals.usesSwiftUI`
+or a path ending in `.swift` conservatively suggests `ios`, including sources
+outside `ios/`. Swift can also target desktop or other platforms: this signal
+requests intake reconciliation, not proof of an iOS deployment target. Detected
+platforms absent from intake produce a mismatch and stop advancement until the
+declaration is reconciled.
 Declared desktop/web platforms are not removed merely because native detection
 cannot establish them. Ambiguous platform signals require an explicit resolution.
 
@@ -469,6 +474,47 @@ exact failure message now; skipped/stale proofs and missing methods also cannot
 pass. The trigger and each parked tool are in [parked.md](parked.md). Upstream
 mobile uses agent-device with iOS simulators/Android emulators; iOS requires
 appropriate simulator hosting. Source: [e2e mobile docs](https://github.com/tester-army/e2e/blob/8d38206f460415b70706b45acb820bb0e24832ae/docs/mobile.mdx).
+
+### iOS platform pack: SwiftUI Pro
+
+The same reconciled `DesignProject.platforms` trigger selects the iOS pack when
+it includes `ios`; SwiftUI/`.swift` detection above resurfaces it through intake.
+In the existing station model, **Build means Ship's `build-orchestration` stage**.
+Build and Prove's `implementation-verification` apply `swiftui-pro` alongside
+`codebase-design` and `zero-tech-debt`. This is a checklist in the existing
+platform capability, with product-owned skill configuration and supplied review
+receipts; it adds no station, dispatcher or product repository access.
+
+Use Paul Hudson's [SwiftUI Pro](https://github.com/twostraws/swiftui-agent-skill),
+skill name `swiftui-pro`, pinned at
+`be297ff80dddec529af1f9b1f1f114aab6c9d11c` (`be297ff`),
+[MIT license](https://github.com/twostraws/swiftui-agent-skill/blob/be297ff80dddec529af1f9b1f1f114aab6c9d11c/LICENSE).
+Install with `npx skills add https://github.com/twostraws/swiftui-agent-skill --skill swiftui-pro`,
+or link the existing local `~/.agents/skills/swiftui-pro` installation into the
+product's supported skill directory. The install command follows upstream;
+verify the installed `SKILL.md` and `references/` against the pinned revision
+before use. A floating/latest install is not evidence of the pin.
+
+Load `SKILL.md` and the applicable references for deprecated APIs, views,
+data flow, navigation, HIG design, accessibility (Dynamic Type, VoiceOver,
+Reduce Motion), performance, Swift correctness and hygiene. **Review only
+SwiftUI code**: an iOS declaration or `.swift` extension activates the pack,
+but does not make UIKit-only, server Swift, web or Android code eligible for
+this skill. Respect the product's deployment target and conventions; the
+skill's defaults do not authorize target upgrades or new dependencies.
+
+Report genuine findings by file and line with the violated rule and a proposed
+before/after fix, bound to the exact candidate revision and diff. **Findings on
+changed lines are blocking**: Build cannot complete and Prove's implementation
+fidelity gate cannot pass until they are repaired and re-reviewed (or an
+authorized exception is recorded under the existing authority rules). Findings
+outside changed lines remain visible for scoped follow-up. Missing or unverified
+pinned skill/review receipts block completion, never count as a clean review.
+Skill review is heuristic evidence; simulator, VERIFY/e2e and assistive testing
+requirements above still apply. This PR defines the pack contract; execution
+and receipt enforcement belong to the planned station slices, not slice 1.
+Sibling candidates and their automatic return condition are in
+[parked.md](parked.md#ios-platform-pack-candidates).
 
 ## Ship independent verdict
 

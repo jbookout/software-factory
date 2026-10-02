@@ -66,6 +66,8 @@ export const PROJECT_PLATFORMS: readonly ProjectPlatform[];
 export const MOBILE_CAPABILITY_REQUIRED: string;
 export interface RepositoryPlatformSignals {
   dependencies: readonly string[]; paths: readonly string[];
+  // Product runner reports SwiftUI imports/usage; SwiftUI or .swift paths conservatively suggest ios.
+  usesSwiftUI?: boolean;
   // If supplied, must be non-empty and contain only known platforms; invalid lists throw.
   appJsonPlatforms?: readonly ProjectPlatform[];
 }

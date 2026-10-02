@@ -176,6 +176,27 @@ test('platform intake is explicit and repository mobile signals flag mismatches'
   }
 })
 
+test('SwiftUI and Swift sources activate the existing ios reconciliation and mobile requirement', () => {
+  for (const signals of [
+    { dependencies: [], paths: [], usesSwiftUI: true },
+    { dependencies: [], paths: ['Sources/Feature/ContentView.swift'] },
+    { dependencies: [], paths: ['App.swift'] }
+  ]) {
+    assert.deepEqual(inspectProjectPlatforms(['web'], signals),
+      { detected: ['ios'], missing: ['ios'], mismatch: true })
+    assert.deepEqual(inspectProjectPlatforms(['ios'], signals),
+      { detected: ['ios'], missing: [], mismatch: false })
+    const value = project(); value.platforms = ['ios']
+    assert.equal(evaluateMobileVerification(value, []).status, 'fail')
+  }
+  assert.deepEqual(inspectProjectPlatforms(['web'], {
+    dependencies: [], paths: ['notes.swift.md', 'swift/README.md'], usesSwiftUI: false
+  }), { detected: [], missing: [], mismatch: false })
+  assert.deepEqual(inspectProjectPlatforms(['desktop'], {
+    dependencies: [], paths: ['MacApp.swift']
+  }), { detected: ['ios'], missing: ['ios'], mismatch: true })
+})
+
 test('verification proof requires exercised user path, fresh revision and independent persistence readback', () => {
   const value = project(); value.handoffs[0].evidence = [proof()]
   assert.equal(validate(value), true, JSON.stringify(validate.errors))

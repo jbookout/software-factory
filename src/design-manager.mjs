@@ -354,7 +354,7 @@ export function stationForDesignGate(gate) {
 }
 
 /** Supplied repository signals only; invalid app.json platforms throw instead of clearing ambiguity. */
-export function inspectProjectPlatforms(platforms, { dependencies, paths, appJsonPlatforms }) {
+export function inspectProjectPlatforms(platforms, { dependencies, paths, appJsonPlatforms, usesSwiftUI }) {
   if (appJsonPlatforms !== undefined && (!Array.isArray(appJsonPlatforms)
     || appJsonPlatforms.length === 0
     || !appJsonPlatforms.every(platform => PROJECT_PLATFORMS.includes(platform))))
@@ -362,8 +362,10 @@ export function inspectProjectPlatforms(platforms, { dependencies, paths, appJso
   const mobileDependency = dependencies.some(name => name === 'react-native' || name === 'expo')
   const native = platform => paths.some(path => path === `${platform}/` || path.startsWith(`${platform}/`))
   const appJson = paths.includes('app.json')
+  const swift = usesSwiftUI === true || paths.some(path => path.endsWith('.swift'))
   const detected = PROJECT_PLATFORMS.filter(platform =>
-    ((platform === 'ios' || platform === 'android') && (mobileDependency || native(platform)
+    (platform === 'ios' && swift)
+    || ((platform === 'ios' || platform === 'android') && (mobileDependency || native(platform)
       || (appJson && appJsonPlatforms === undefined)))
     || (appJson && appJsonPlatforms?.includes(platform)))
   const missing = detected.filter(platform => !platforms.includes(platform))
