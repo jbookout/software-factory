@@ -1,0 +1,6 @@
+interface:
+  display_name: "Client Presentation"
+  short_description: "Interactive real estate client presentations"
+  default_prompt: "Use $client-presentation to build a client property review from these listings and market sources."
+policy:
+  allow_implicit_invocation: true
