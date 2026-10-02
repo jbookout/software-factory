@@ -2,8 +2,9 @@
 
 Joe's 2026-10-01 direction parks these tools until a concrete trigger applies.
 This is a capability-placement plan, not a journal or eval record. No listed
-tool is installed or qualified by TASK AE. Sources describe upstream behavior;
-fitness, versions, licensing and account access need live qualification before use.
+tool is installed or qualified by this plan amendment. Sources describe upstream
+behavior; fitness, versions, licensing and account access need live qualification
+before use.
 
 ## Mobile trigger: automatic requirement, not a reminder
 
@@ -32,8 +33,8 @@ Skipped entry points never pass. The [plan](plan.md) describes proof and authori
 | stim | Mobile environment/build/isolation tooling adds no proof to the current web fixtures | [appandflow/stim](https://github.com/appandflow/stim); MIT per upstream README | ios/android intake activates mobile qualification; evaluate for owned simulator/emulator resources, Doctor, parallel isolation and Cleanup; install only if needed by the qualified mobile runner |
 | argent | Mobile control/debug/profile tooling waits for a mobile consumer; overlapping desktop ability does not require another driver now | [software-mansion/argent](https://github.com/software-mansion/argent); Apache-2.0 source with restricted proprietary binaries; telemetry opt-out must be qualified | ios/android intake activates mobile qualification; evaluate control/profiling and license suitability, disable telemetry, prove defect detection and safe cleanup before choosing it |
 | agent-device standalone | e2e mobile already uses agent-device; a separate direct driver is unproved duplication until mobile needs one | [callstack/agent-device](https://github.com/callstack/agent-device); license/pin qualification required before adoption | ios/android intake activates mobile qualification; compare standalone driver with the e2e mobile route on the same fixture; add only for a measured unmet driving/recovery requirement |
-| Maestro | Another mobile harness is unnecessary before a mobile app and a comparison fixture exist | [mobile-dev-inc/maestro](https://github.com/mobile-dev-inc/maestro); Apache-2.0 per upstream repository | ios/android intake activates mobile qualification; compare deterministic flows/repros with e2e mobile and retain only a measured coverage/reliability advantage |
-| MiniSim | A macOS GUI menu-bar launcher does not satisfy the headless background runtime contract | [okwasniewski/MiniSim](https://github.com/okwasniewski/MiniSim); MIT per upstream repository | A mobile project exists AND an explicit attended simulator-launch task cannot be completed by the qualified CLI runner; evaluate as optional human tooling, never an unattended gate dependency |
+| Maestro | Another mobile harness is unnecessary before a mobile app and a comparison fixture exist; the post reports impractical hand-built flows that “took long time” | [mobile-dev-inc/maestro](https://github.com/mobile-dev-inc/maestro); Apache-2.0 per upstream repository; practitioner cost report: [stringsaeed post](https://x.com/stringsaeed/status/2105734077085303106), retrieved 2026-10-02 | ios/android intake activates mobile qualification; compare deterministic flows/repros with e2e mobile, including authoring time and maintenance cost below; retain only a measured coverage/reliability advantage that justifies that cost |
+| MiniSim | A macOS GUI menu-bar launcher does not satisfy the headless background runtime contract; the existing unattended decline stands | Recommended by the [stringsaeed post](https://x.com/stringsaeed/status/2105734077085303106), retrieved 2026-10-02; GUI behavior confirmed in [okwasniewski/MiniSim README](https://github.com/okwasniewski/MiniSim/blob/bb9deb199adf9d88350f4dbc6349c4ff39fdd1a4/README.md); MIT per upstream repository | A mobile project exists AND an explicit attended simulator-launch task cannot be completed by the qualified CLI runner; evaluate as optional human tooling, never an unattended gate dependency |
 | pstack full router | Cursor-specific model settings and scheduled automations conflict with per-user vendor-neutral stations and the Codex primary runtime | [pstack at the studied revision](https://github.com/cursor/plugins/tree/c47b12849e43f18d5c374c7069c744cc55b0ea00/pstack); MIT | An accepted project explicitly selects Cursor AND a sample fixture proves a routing need unmet by the MCP core without scheduled-automation dependency; otherwise it remains declined. VERIFY/map/maintenance patterns are already adopted in slices 4/9/10 |
 
 Mobile intake deterministically resurfaces all mobile candidates; it does not
@@ -42,6 +43,39 @@ The capability owner records selection, exact versions, licenses, model route,
 runtime, all planted-defect/trap results and an escape/removal path in the factory
 store. Prove keeps failing until required capability and evidence are qualified.
 No mobile implementation is part of this plan-revision PR.
+
+### First mobile configuration to qualify
+
+When the existing mobile trigger fires, start with the composition the
+[stringsaeed post](https://x.com/stringsaeed/status/2105734077085303106) reports
+testing, read with its quoted post from the saved verbatim copy retrieved
+2026-10-02 (see [plan provenance](plan.md#scope-provenance-and-open-questions)).
+This is the starting hypothesis, not an installation order or passing receipt:
+
+| Role in the reported stack | First qualification configuration |
+| --- | --- |
+| Workflow core | pstack for most work, paired with the product-owned VERIFY skill/map; the full-router return trigger and vendor-neutral/Codex runtime constraints above still apply |
+| Resource orchestration and warm-up | stim for owned simulators/emulators and pre-warmed pools, or a qualified equivalent if stim does not fit the platform/framework |
+| Development queries | agent-device mainly for querying the simulator/emulator in Build's inner loop |
+| Development queries and mutations | argent for querying and mutating in Build; the reported slight speed advantage is a comparison hypothesis |
+| Acceptance | e2e mobile engine for each user-facing criterion on the exact built revision; independent Prove verdict under the [proof rules](plan.md#build-inner-loop-and-prove-acceptance) |
+
+Qualify the composition and each tool against **all existing checks above**;
+composition does not waive versions, licenses, telemetry controls, model route,
+defect/trap detection, clean-code acceptance, compatibility, runtime, safe cleanup
+or the escape/removal path. If literal pstack routing fails its property test,
+record that failure and qualify its already-adopted workflow/VERIFY patterns
+through the manager's existing stations; do not silently install the Cursor router.
+The e2e mobile engine can use agent-device internally; a direct driver receipt
+still cannot replace acceptance assertions.
+
+All comparisons use the same sample app build, task/acceptance fixture, platform,
+device/runtime, host and isolated/reset data. Record exact tool pins, repetitions,
+failures and result distributions in the factory store. Additional required checks:
+
+1. **Query/mutate latency:** compare agent-device with argent separately for matched state queries and UI mutations, timing command invocation through returned query data or independently observed settled mutation. Repeat in balanced order; report correctness and failure rates alongside latency. Retain a standalone driver only for the measured unmet requirement in its row; no speed claim from different tasks or devices.
+2. **Cold/warm start:** qualify pre-warmed simulator/emulator pools via stim or equivalent. Time acquisition request through Doctor-ready device and exact-build app readiness for cold and warm starts separately, including pool preparation time and resource cost. Verify lease ownership, per-run data reset, concurrent isolation, failure recovery and cleanup without discarding proof. Keep warm-up only if it improves readiness time without stale state or cross-run interference; a failed comparison disqualifies that pool configuration.
+3. **Maestro effort:** compare Maestro and e2e mobile on identical acceptance coverage/repros. Record authoring minutes and retries from the fixture brief to the first passing flow, then maintenance minutes, edits, reruns and breakages after the same controlled UI/behavior change. Judge the retained coverage/reliability advantage against those costs. The post's report motivates the comparison; it does not prove Maestro impractical for every app.
 
 ## iOS platform pack candidates
 
