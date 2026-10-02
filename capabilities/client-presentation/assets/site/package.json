@@ -1,0 +1,7 @@
+{
+  "name": "client-presentation-site",
+  "private": true,
+  "scripts": {
+    "build": "node ../../scripts/build.mjs presentation.json ./dist"
+  }
+}

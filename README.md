@@ -14,6 +14,15 @@ language-symbol tooling and removed if it does not provide enough value.
 The repository is publicly visible. No open-source license has been selected;
 public visibility alone does not grant reuse rights.
 
+## Client presentation skill
+
+The portable [Client Presentation skill](capabilities/client-presentation/SKILL.md)
+guides agents through source-backed market and property reviews. It includes a
+configurable browser starter, ownership-scenario arithmetic and delivery checks.
+Its worked example is fictional; client data and hosting authority remain in
+the generated client workspace. Read the entrypoint to build a review or install
+the complete folder in a supported agent skill directory.
+
 ## Finish line
 
 The [finish line](docs/finish-line.md) gives each declared capability a reproducible
