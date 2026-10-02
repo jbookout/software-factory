@@ -22,8 +22,8 @@ export async function writeJson(file, value) {
 const alive = pid => { try { process.kill(pid, 0); return true } catch (e) { return e.code !== "ESRCH" } }
 
 // Each contender owns a unique record: dead-owner recovery never unlinks a
-// successor's lock. Ticket publication and election implement a nonblocking
-// bakery mutex; callers that encounter a choosing/live earlier peer retry.
+// successor's lock. A bounded bakery election retains its claim while peers
+// choose tickets, so simultaneous callers cannot both withdraw before election.
 export async function acquireLease(root, name) {
   const dir = path.join(root, `${name}.claims`)
   await fs.mkdir(dir, { recursive: true, mode: 0o700 })
@@ -52,7 +52,14 @@ export async function acquireLease(root, name) {
     await writeJson(file, owner)
     owner.ticket = Math.max(0, ...(await peers()).map(p => p.ticket)) + 1
     await writeJson(file, owner)
-    const blocked = (await peers()).some(p => p.ticket === 0 || p.ticket < owner.ticket ||
+    const choosingUntil = Date.now() + 1000
+    let contenders = await peers()
+    while (contenders.some(p => p.ticket === 0)) {
+      if (Date.now() >= choosingUntil) { await release(); return null }
+      await pause(10)
+      contenders = await peers()
+    }
+    const blocked = contenders.some(p => p.ticket < owner.ticket ||
       (p.ticket === owner.ticket && p.token < token))
     if (blocked) { await release(); return null }
     release.bindJob = async job => {
