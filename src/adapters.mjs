@@ -4,7 +4,7 @@ import path from "node:path"
 
 const VALID_STATUS = new Set(["pass", "fail", "finding", "skip"])
 
-function normalizeResult(result, step) {
+export function normalizeResult(result, step) {
   const value = result ?? { status: "skip" }
   if (!VALID_STATUS.has(value.status)) throw new Error(`${step} returned invalid status`)
   return {
