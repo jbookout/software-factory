@@ -24,6 +24,7 @@
     { "id": "tamper-evident-receipt", "module": "src/operating-loop.mjs" },
     { "id": "qualified-model-routing", "module": "src/model-room.mjs", "authority": "advisory-with-deterministic-eligibility" },
     { "id": "authenticated-evaluation-bundle", "module": "src/model-room.mjs", "authority": "evidence-authentication" },
-    { "id": "attended-codex-build", "steps": ["build"], "module": "src/codex-build.mjs", "authority": "source-work-only" }
+    { "id": "attended-codex-build", "steps": ["build"], "module": "src/codex-build.mjs", "authority": "source-work-only" },
+    { "id": "design-contracts", "module": "src/design-manager.mjs", "schema": "schemas/design-project.schema.json", "authority": "contract-only" }
   ]
 }

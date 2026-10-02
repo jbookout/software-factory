@@ -14,6 +14,16 @@ language-symbol tooling and removed if it does not provide enough value.
 The repository is publicly visible. No open-source license has been selected;
 public visibility alone does not grant reuse rights.
 
+## Design Manager contract pilot
+
+The [implementation plan](docs/design-manager/plan.md) maps the approved
+blueprint to ordered slices and verification criteria. The first slice exports
+typed lifecycle, tier, role, evidence and gate contracts through
+`software-factory/design-manager`, with a strict project-record schema and
+adjacent-stage helpers. Run `npm test` to check the contracts. These records
+describe design work; they do not dispatch specialists, authenticate evidence,
+certify acceptance or grant production authority.
+
 ## Deterministic enforcement
 
 The factory treats agent prompts and skills as guidance, not architecture

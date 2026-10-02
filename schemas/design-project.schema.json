@@ -1,0 +1,352 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jbookout/software-factory/schemas/design-project.schema.json",
+  "title": "Development-time Design Manager project contract",
+  "description": "Reported design state. Structural validation grants no authority and does not authenticate gate evidence.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "projectId",
+    "sourceRevision",
+    "entry",
+    "tier",
+    "stage",
+    "status",
+    "versionContract",
+    "handoffs",
+    "gates"
+  ],
+  "properties": {
+    "schema": {
+      "const": "design-project.v1"
+    },
+    "projectId": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "sourceRevision": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "entry": {
+      "type": "string",
+      "enum": [
+        "new-product",
+        "feature",
+        "workflow-redesign",
+        "audit",
+        "design-system",
+        "platform-derivation",
+        "concept-evaluation",
+        "post-build-refinement",
+        "automation-interaction"
+      ]
+    },
+    "tier": {
+      "type": "string",
+      "enum": [
+        "lean",
+        "standard",
+        "high-assurance"
+      ]
+    },
+    "stage": {
+      "type": "string",
+      "enum": [
+        "grill",
+        "intake",
+        "research",
+        "define",
+        "explore",
+        "prototype",
+        "test",
+        "decide",
+        "build-orchestration",
+        "implementation-verification",
+        "measure",
+        "refine"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "awaiting-human",
+        "blocked",
+        "closed"
+      ]
+    },
+    "versionContract": {
+      "$ref": "#/$defs/versionContract"
+    },
+    "handoffs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/handoff"
+      }
+    },
+    "gates": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/gate"
+      }
+    }
+  },
+  "$defs": {
+    "role": {
+      "type": "string",
+      "enum": [
+        "Design Manager",
+        "Research Specialist",
+        "Product/UX Strategist",
+        "Workflow Architect",
+        "Information Architect",
+        "Interaction Designer",
+        "Prototype Specialist",
+        "Visual-System Designer",
+        "Accessibility Specialist",
+        "Usability/Evaluation Specialist",
+        "Adversarial Reviewer",
+        "Implementation Translator",
+        "Implementation Verifier",
+        "Measurement Specialist"
+      ]
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ref",
+        "digest"
+      ],
+      "properties": {
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ref",
+        "digest",
+        "strength"
+      ],
+      "properties": {
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "strength": {
+          "type": "string",
+          "enum": [
+            "target-user-observation",
+            "representative-user-testing",
+            "domain-expert-feedback",
+            "owner-task-testing",
+            "heuristic-accessibility",
+            "competitor-pattern-research",
+            "simulated-critique"
+          ]
+        }
+      }
+    },
+    "handoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "makerId",
+        "artifact",
+        "evidence",
+        "unresolvedQuestions",
+        "confidence",
+        "limits"
+      ],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/role"
+        },
+        "makerId": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "artifact": {
+          "$ref": "#/$defs/artifact"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        },
+        "unresolvedQuestions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "minItems": 0
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "limits": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "minItems": 0
+        }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gate",
+        "status",
+        "artifact",
+        "reviewerId",
+        "evidence"
+      ],
+      "properties": {
+        "gate": {
+          "type": "string",
+          "enum": [
+            "problem",
+            "workflow",
+            "concept",
+            "interaction",
+            "system",
+            "build-readiness",
+            "implementation-fidelity",
+            "operational-evidence",
+            "version-closure"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "pass",
+            "fail"
+          ]
+        },
+        "artifact": {
+          "$ref": "#/$defs/artifact"
+        },
+        "reviewerId": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        }
+      }
+    },
+    "versionContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "includedWorkflows",
+        "exclusions",
+        "knownLimitations",
+        "blockingDefects",
+        "acceptanceCriteria",
+        "deferredRefinements",
+        "evidenceWindow"
+      ],
+      "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "includedWorkflows": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "minItems": 1
+        },
+        "exclusions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "minItems": 0
+        },
+        "knownLimitations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "minItems": 0
+        },
+        "blockingDefects": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "minItems": 0
+        },
+        "acceptanceCriteria": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "minItems": 1
+        },
+        "deferredRefinements": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "minItems": 0
+        },
+        "evidenceWindow": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        }
+      }
+    }
+  }
+}
