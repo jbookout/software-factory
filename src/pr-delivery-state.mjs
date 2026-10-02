@@ -29,7 +29,7 @@ export async function acquireLease(root, name) {
   try { await fs.access(reaper); return null } catch (e) { if (e.code !== "ENOENT") throw e }
   try {
     await fs.mkdir(dir, { mode: 0o700 })
-    await fs.writeFile(path.join(dir, "owner.json"), JSON.stringify({ pid: process.pid }), { mode: 0o600 })
+    await writeJson(path.join(dir, "owner.json"), { pid: process.pid })
     return () => fs.rm(dir, { recursive: true, force: true })
   } catch (e) { if (e.code !== "EEXIST") throw e }
   try { await fs.mkdir(reaper) } catch (e) { if (e.code === "EEXIST") return null; throw e }
