@@ -14,6 +14,13 @@ language-symbol tooling and removed if it does not provide enough value.
 The repository is publicly visible. No open-source license has been selected;
 public visibility alone does not grant reuse rights.
 
+## Finish line
+
+The [finish line](docs/finish-line.md) gives each declared capability a reproducible
+done test, implementation evidence, dependencies and remaining effort. It also
+orders the PR delivery loop and Design Manager ahead of the remaining work and
+states the dated completion arithmetic. `npm test` checks scope-row coverage.
+
 ## Design Manager contract pilot
 
 The [implementation plan](docs/design-manager/plan.md) maps the approved
