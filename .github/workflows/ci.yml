@@ -8,9 +8,19 @@ on:
 permissions:
   contents: read
 
+# Supersede only the same PR; main runs keep independent completed results.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Hosted baseline p90 14s, max 15s (2026-09-30); allow cold setup headroom.
+    # Leave termination headroom inside the 2m completion ceiling: a hosted
+    # hung fixture added 15s of cleanup after GitHub's execution timeout.
+    # Re-measure if ordinary successful jobs approach this ceiling.
+    timeout-minutes: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
