@@ -10,7 +10,7 @@ fitness, versions, licensing and account access need live qualification before u
 All steps are required:
 
 1. Intake records `DesignProject.platforms`: web, ios, android, desktop.
-2. The product runner detects react-native, expo, ios/, android/ and app.json signals.
+2. The product runner detects react-native, expo, ios/, android/, app.json, SwiftUI usage and .swift source signals.
 3. A detected platform absent from intake flags a mismatch and stops advancement until reconciled.
 4. Any declared ios/android platform activates the Prove mobile requirement.
 5. Without `capabilities/mobile-verification`, the gate fails with the exact message below.
@@ -42,3 +42,29 @@ The capability owner records selection, exact versions, licenses, model route,
 runtime, all planted-defect/trap results and an escape/removal path in the factory
 store. Prove keeps failing until required capability and evidence are qualified.
 No mobile implementation is part of this plan-revision PR.
+
+## iOS platform pack candidates
+
+The [iOS pack contract](plan.md#ios-platform-pack-swiftui-pro) adopts `swiftui-pro`
+for Build (Ship's build-orchestration) and Prove. Its sibling candidates use the
+**same deterministic `DesignProject.platforms` trigger as the mobile tools**:
+`ios` in intake, including after SwiftUI/`.swift` mismatch reconciliation,
+automatically resurfaces this pack and the candidates below. No remembered
+reminder or separate opt-in trigger is required. Detection conservatively
+suggests iOS; ambiguous/non-iOS Swift targets require intake resolution first.
+
+Paul Hudson's [Swift Agent Skills directory](https://github.com/twostraws/swift-agent-skills)
+lists these siblings. Each repository URL was verified through GitHub on
+2026-10-02; existence is verified, adoption is unqualified. Exact pins, licenses,
+framework fit and sample-review detection/false-positive checks remain required
+before selection. No sibling is installed or made mandatory by this PR.
+
+| Candidate | Why parked / property not met yet | Verified repository URL | Exact return trigger |
+| --- | --- | --- | --- |
+| Swift Concurrency Pro | Specialist concurrency review needs a representative async/actor fixture and qualification against the product's isolation settings | [twostraws/Swift-Concurrency-Agent-Skill](https://github.com/twostraws/Swift-Concurrency-Agent-Skill) | ios in reconciled platforms resurfaces the pack; evaluate for Swift concurrency work |
+| SwiftData Pro | Persistence review needs a SwiftData consumer and migration/CloudKit fixture | [twostraws/SwiftData-Agent-Skill](https://github.com/twostraws/SwiftData-Agent-Skill) | ios in reconciled platforms resurfaces the pack; evaluate when the product uses SwiftData |
+| Swift Testing Pro | Test review needs a Swift Testing consumer and representative test fixture | [twostraws/Swift-Testing-Agent-Skill](https://github.com/twostraws/Swift-Testing-Agent-Skill) | ios in reconciled platforms resurfaces the pack; evaluate when the product uses Swift Testing |
+
+Framework fit decides selection after automatic resurfacing; it does not suppress
+the platforms trigger. Qualification and selection receipts belong in the
+factory store under the existing capability process above.
