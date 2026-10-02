@@ -1,8 +1,8 @@
 # Design Manager implementation plan
 
-Joe-approved direction, 2026-10-01. TASK AE revises the plan after slice 1
-(PR 15) merged. This change builds only necessary slice-1 contracts and tests.
-All later slices below are planned, not implemented by this PR.
+Joe-approved direction, 2026-10-01. TASK AE revised the plan after slice 1
+(PR 15) merged. TASK AI applies the stringsaeed stack post before slice 2.
+This amendment changes the plan only. Later slices remain planned.
 
 ## Purpose and ownership
 
@@ -312,6 +312,34 @@ reported records authenticates a reviewer or supplies user evidence by itself.
 
 ## Prove: VERIFY skill, feature map and proof rules (slice 4)
 
+### Build inner loop and Prove acceptance
+
+**Build means Ship's `build-orchestration` stage**, not an additional station.
+The product-owned runner uses simulator/emulator driving and querying tools
+(agent-device, argent and stim resource orchestration) in Build's inner loop to
+inspect, mutate, debug and iterate. Web uses the same split: browser driving and
+querying support development; e2e's web engine supplies acceptance evidence.
+
+For **every user-facing acceptance criterion**, Prove requires e2e behavioral
+evidence from the applicable web or mobile engine on the **exact built revision**,
+bound to the product-runner build SHA and artifact digest. Map the criterion to
+the exercised user entry points, actions, assertions and observed results.
+A VERIFY receipt supported only by unit/component tests **fails** that criterion.
+A direct dev-loop driver session, screenshot, successful query/mutation or
+VERIFY label without the corresponding e2e acceptance evidence also fails.
+Unit/component tests remain useful supporting checks; they cannot replace this
+proof. Manual usability, assistive testing and other declared evidence still
+apply; e2e alone does not settle those verdicts.
+
+The split assigns workflow responsibility, not an upstream capability limit:
+agent-device and argent also offer verification/replay features, and e2e's mobile
+engine itself uses agent-device. Prove judges the criterion's e2e evidence, never
+the driver's identity or its development-session success. Source: the
+[practitioner post](https://x.com/stringsaeed/status/2105734077085303106), checked
+against [e2e mobile](https://github.com/tester-army/e2e/blob/8d38206f460415b70706b45acb820bb0e24832ae/docs/mobile.mdx),
+[agent-device](https://github.com/callstack/agent-device/blob/cc5e356595c75e459ed4968c55cedd3d1dbb715d/README.md)
+and [argent](https://github.com/software-mansion/argent/blob/a824fcba90f7ebc7ecdb00b4abf4c00d3fba9e42/README.md).
+
 Each product owns a **VERIFY SKILL** and feature map, adapting pstack's pattern
 to the product's supported skill directory rather than importing its Cursor
 router. There is an index and one file per user-facing feature. Each feature
@@ -349,6 +377,11 @@ Slice 4 runs Launch through Cleanup once on a small sample app, confirms evidenc
 survives teardown, then deliberately breaks a mapped feature and confirms failure.
 It also exercises skipped paths and forged/stale receipts. The slice-1 pure helper
 checks reported eligibility only; it does not drive a browser or certify proof.
+Add web and triggered-mobile fixtures where unit/component tests stay green but
+the user path is broken. Reject unit-only and direct-driver-only VERIFY receipts;
+require the e2e assertion to fail on the broken build and pass on the repaired
+build. A `method` string is not behavioral evidence. Criterion-level acceptance
+is a slice-4/10 gate responsibility, not a claim made by the slice-1 helper.
 
 ## Prove: agentic UI evaluation (slice 4, reused in 9–10)
 
@@ -479,7 +512,7 @@ appropriate simulator hosting. Source: [e2e mobile docs](https://github.com/test
 
 The same reconciled `DesignProject.platforms` trigger selects the iOS pack when
 it includes `ios`; SwiftUI/`.swift` detection above resurfaces it through intake.
-In the existing station model, **Build means Ship's `build-orchestration` stage**.
+Build uses the [inner-loop assignment](#build-inner-loop-and-prove-acceptance).
 Build and Prove's `implementation-verification` apply `swiftui-pro` alongside
 `codebase-design` and `zero-tech-debt`. This is a checklist in the existing
 platform capability, with product-owned skill configuration and supplied review
@@ -575,13 +608,13 @@ and Claude Design. Slices 4, 9 and 10 retain their requested numbers.
 | 1. Contracts (merged; AE extensions only) | lifecycle, tiers, checklist catalogs, handoffs/gates/version schema; stations, platforms, proof receipt and pure mobile precondition | actual public contract module/declarations/schema and sample fixtures against original catalogs, station/gate tables, malformed cases and baseline npm tests | renamed/lost rubric or stop, schema/type drift, invalid jumps, missing platforms, skipped/stale proof passes, iOS missing capability does not fail with exact message, regression |
 | 2. Entry playbooks | new product, feature, workflow redesign, audit, post-build refinement and all existing entry paths; one-question grill | initialized states/interview trace on sample apps against required artifacts and tier criteria | omitted critical work, batch interview, silent Lean default, hidden scope expansion |
 | 3. User settings and Codex cloud qualification | configurable station workers/modes; Joe profile; qualified background subscription runtime and dependent-seat routes | resolved settings, actual task IDs/model/effort/usage/resume/cancel/timeout results from a laptop-off sample task against source docs and eligible route baseline | hard-coded seat, API billing fallback, local execution called cloud, lost result, hidden blocked Claude/Dot route, unqualified entitlement or expiry recovery |
-| 4. Independent review, VERIFY and agentic UI qualification | maker/reviewer/tester independence, bounded repair/escalation; product VERIFY/map; e2e explore/bug bash/MCP wrapper | frozen planted-defect/trap manifest, broken/clean app outputs, failing repros, independent reviewer context, archived proof after cleanup and second-run model-call count against all declared expectations | author approves self, any defect missed, any trap flagged, non-bug accepted, no failing repro, broken VERIFY passes, lost evidence, model call during replay, third failed automatic repair, missing escalation |
+| 4. Independent review, VERIFY and agentic UI qualification | maker/reviewer/tester independence, bounded repair/escalation; product VERIFY/map; e2e explore/bug bash/MCP wrapper | frozen planted-defect/trap manifest, broken/clean app outputs (including unit-green broken user paths), criterion-to-e2e assertions on the exact build SHA/digest for web and triggered mobile, failing repros, independent reviewer context, archived proof after cleanup and second-run model-call count against all declared expectations | user-facing criterion has only unit/component tests or dev-loop driver evidence, missing exact-build e2e behavioral evidence, author approves self, any defect missed, any trap flagged, non-bug accepted, no failing repro, broken VERIFY passes, lost evidence, model call during replay, third failed automatic repair, missing escalation |
 | 5. Factory Design Journal | SQLite records, immutable artifacts, MCP-ready commands, project isolation and restore | actual written/read-back/restore records and digest-addressed bytes against decisions, idempotency/revision conflicts, scope and evidence labels on sample apps | provenance loss, cross-project access, transcript dependence, conflicting authority, public/private material committed, incomplete restore |
 | 6. Own progress view | lightweight browser supervision and one-question interview box | rendered/task-observed sample state against journal projection, comprehension and accessibility criteria | false station/gate/expiry status, unclear decision, missing progress visual, batch question, accessibility/trust failure, added cognitive load |
 | 7. MCP core and thin plugin adapters | one contracts/gates/journal server; portable Codex package and Claude Code plugin | actual MCP request/response and install/invoke receipts on supported surfaces against same core command results and declared schema | duplicate gate/store, unqualified plugin loading, app session created, paid key, authentication leak, surface mismatch |
 | 8. Design synthesis and build readiness | station checklist orchestration, alternatives, workflows/states/tokens, translator and acceptance contract | sample-app design artifacts against all retained rubric/stops, gate table and credible alternatives | omitted required checklist, unchecked system/flow, generic unjustified styling, uncheckable acceptance, scope drift |
 | 9. Behavioral prototypes and usability scripts | coded task behavior; reuse qualified e2e; VERIFY maintenance; owner/representative task scripts per tier | live sample prototype, scripts/observations/screens and clean/changed/blocked maintenance results against declared questions, loading/empty/stale/failure/conflict/permission/recovery states and prior baseline | missing critical state, stale map confused with product bug, maintenance edits product code, production claim, coached discoverability, simulated critique labelled users |
-| 10. Implementation verification | exact built-revision checks paired with e2e, independent live verdict, VERIFY maintenance and mobile requirement when applicable | accepted contract versus product-runner build SHA/artifact digest, exact deterministic check outputs, live repros/visual/state/accessibility comparisons and deployment/activation/consumer receipts | revision mismatch, stale passing check, heuristic accessibility claimed formal, missing simulator/mobile-engine evidence, self-verdict, unproven consumer behavior |
+| 10. Implementation verification | exact built-revision checks paired with e2e, independent live verdict, VERIFY maintenance and mobile requirement when applicable | accepted contract and every user-facing criterion versus product-runner build SHA/artifact digest, applicable web/mobile e2e assertions and observed results, exact deterministic check outputs, live repros/visual/state/accessibility comparisons and deployment/activation/consumer receipts | user-facing criterion has only unit/component tests or dev-loop driver evidence, missing exact-build e2e behavioral evidence, revision mismatch, stale passing check, heuristic accessibility claimed formal, missing simulator/mobile-engine evidence, self-verdict, unproven consumer behavior |
 | 11. Figma pilot | native draft create/edit, FigJam, live-screen capture, components/variables/auto layout | editable native artifacts on sample apps against exact source screen/tokens and operation checklist | any required capability unproved, duplicate work without measured value, upgrade without proved plan blocker |
 | 12. Claude Design handoff | optional visible human handoff, retaining source binding | actual artifact refs and acknowledgments on sample apps against declared task/subscription route | app automation, paid API, lost provenance, unapproved publication |
 | 13. Full DoctorCRE design cycle | full lifecycle, exact candidate verification, measurement and bounded next version after manager qualification | product-owner supplied baseline/candidate receipts, task observations and measurement records against chosen real-work task set and accepted contract | no measured improvement, unresolved trust/safety/core failure, direct DoctorCRE/CARR access, product runtime dependency, nonreconstructible proof |
@@ -611,12 +644,34 @@ This plan replaces the prior DoctorCRE-first placement and CARR source/store
 assumptions under Joe's explicit TASK AE direction. Public source studies link
 upstream instead of copying code. pstack is MIT, studied at
 `c47b12849e43f18d5c374c7069c744cc55b0ea00` ([license](https://github.com/cursor/plugins/blob/c47b12849e43f18d5c374c7069c744cc55b0ea00/pstack/LICENSE)).
-The [shared X post](https://x.com/stringsaeed/status/2105734077085303106) was not
-read successfully (Grok retrieval timed out); no post text or inferred claim is
-treated as verified. Applications above come from raw public pstack/e2e files and
-Joe's specified additions. Parked mobile tools, MiniSim and pstack's full router
-are declined for now with reasons and deterministic return conditions in
-[parked.md](parked.md); they are not silently discarded.
+The [shared X post](https://x.com/stringsaeed/status/2105734077085303106) and its
+[quoted e2e announcement](https://x.com/o_kwasniewski/status/2105675143464763540)
+were read in full from the saved verbatim copy at
+`/Users/booko/carr-system/out/orch/evidence/stringsaeed-post.txt`, retrieved via
+Grok on **2026-10-02**. That private evidence file is not committed. The post
+reports one practitioner's experience, not measured fitness for this manager.
+Raw upstream files confirm documented capabilities; reliability, relative speed,
+authoring cost and the composed stack need the live qualification below and in
+[parked.md](parked.md). Existing mobile triggers, per-tool qualifications and
+pstack full-router constraints remain in force.
+
+### Post applications before slice 2
+
+For each claim, ask what the source achieves that the current plan cannot prove,
+then add the missing requirement or cite the exact existing requirement. No
+mobile stack is installed or qualified by this amendment.
+
+| Source claim | Gap and concrete application / property test |
+| --- | --- |
+| pstack plus e2e made mobile verification reliable; prior verification was unit-heavy | The plan did not explicitly fail unit-only acceptance. Prove now requires criterion-bound e2e behavior on the exact build; slices 4/10 reject unit-green broken paths and driver-only receipts. Reliability remains unproved until defect/trap fixtures pass. Upstream pstack asks for real-app driving; the reported unit-heavy result describes this practitioner's use, not the skill's documented standard. |
+| agent-device/argent support development, e2e proves the feature | No explicit Build/Prove responsibility split existed. The new inner-loop section assigns direct query/mutate/browser driving to Build and e2e acceptance to Prove, including web as the lateral application. Driver success cannot stand in for acceptance. |
+| pstack handles most work; stim orchestrates/warms sims; agent-device queries; argent queries/mutates faster | The separate parked candidates did not specify this composition or measure its speed. It is now the first mobile configuration to qualify, with matched query/mutate latency and cold/warm pool measurements. Literal pstack router adoption still fails the existing vendor-neutral/runtime property test unless its return trigger passes. |
+| Hand-built Maestro flows were too costly to be practical | Coverage/reliability alone missed implementation effort. The parked comparison now includes timed authoring and maintenance after a controlled feature change; the report motivates that test without predetermining its winner. |
+| MiniSim is recommended | The recommendation's provenance was missing. It is now cited in the parked row. Unattended adoption remains declined: a menu-bar GUI launcher fails the headless background runtime property test; optional human tooling retains its exact trigger. |
+| The workflow looks promising while efficiency remains unsettled | This plan cannot claim an efficient composed stack today. Qualification records latency, startup and authoring/maintenance cost alongside detection, clean-code acceptance and cleanup; promising is not a passing receipt. |
+| Quoted post: open source; deterministic and agentic APIs | Already specified exactly: “package pin **`e2e@0.15.1`**, Apache-2.0” in [agentic UI evaluation](#prove-agentic-ui-evaluation-slice-4-reused-in-910), “Agent steps run through the **Codex worker using e2e's supported ChatGPT OAuth provider**” in [execution](#execution-and-attended-authentication), and “Use deterministic assertions for this replay” in [acceptance](#explore-bug-bash-mcp-and-acceptance). No package or replay is qualified today. |
+| Quoted post: web, mobile and more; any app | Web/mobile engines are documented; generic any-app coverage is unproved. The exact existing mobile requirement is “simulator/emulator execution of the VERIFY skill **and e2e's mobile engine**” in [mobile trigger](#deterministic-mobile-trigger). This amendment makes web acceptance equally explicit. Other platforms need their own supported-engine fixture before any coverage claim. |
+| Quoted post: bring your own agent/infrastructure; local or CI execution | Configurable workers and product-owned fixtures already exist in the plan: “Workers, model/effort, concurrency, availability and allowed routes come from a private **per-user settings file**” and “The product owns e2e as a development dependency, its lockfile, `e2e.config.ts`, fixtures, scripts and baseline expectations.” Upstream [README](https://github.com/tester-army/e2e/blob/8d38206f460415b70706b45acb820bb0e24832ae/README.md) and [mobile CI](https://github.com/tester-army/e2e/blob/8d38206f460415b70706b45acb820bb0e24832ae/docs/mobile-ci.mdx) document the routes. These sentences do not prove local/CI execution: slice 4 must produce the same fixture's local and hosted-CI receipts on the chosen authorized infrastructure, preserving attended-auth and no-paid-fallback constraints. |
 
 Open questions, all **unverified** until the owning slice supplies a receipt:
 
@@ -630,8 +685,8 @@ Open questions, all **unverified** until the owning slice supplies a receipt:
 | Does Joe's account support e2e ChatGPT OAuth use; can its attended worker return cloud-bound evidence safely? | Slice 4: login, exact account model, usage and expired-token tests; no OAuth upload or paid fallback |
 | How is an independent reviewer identity/fresh context authenticated, beyond supplied strings? | Slice 4: author/reviewer collision and forged-receipt adversarial tests |
 | Which iOS simulator host and exact mobile companion pins meet the triggered gate? | Triggered mobile qualification: simulator + mobile-engine fixture, license/version/runtime/removal checks |
-| What additional claims or linked sources does the unread X post contain? | Research: retry through a qualified Grok route, read raw post/links; retain unverified status until then |
+| Does the reported mobile composition beat alternatives on this manager's fixture? | Triggered mobile qualification: matched query/mutate latency, cold/warm startup and Maestro authoring/maintenance cost, plus all existing per-tool qualification checks |
 
-TASK AE ends with local/hosted CI green and one ordinary unmerged PR. Orchestrator
+This amendment ends with local/hosted CI green and one ordinary unmerged PR. Orchestrator
 review with Jev occurs before any later merge. No later slice has been delivered
 merely because its plan or reported receipt type exists.
