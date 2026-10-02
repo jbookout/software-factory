@@ -21,6 +21,7 @@
     "@shadcn/lint": "0.1.0",
     "@typescript-eslint/parser": "8.70.0",
     "eslint": "10.10.0",
+    "marked": "18.0.14",
     "tailwindcss": "4.3.3"
   },
   "dependencies": {

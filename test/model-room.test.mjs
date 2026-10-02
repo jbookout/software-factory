@@ -70,13 +70,22 @@ test("Jev sees exact pinned contract but cannot promote insufficient replay case
   assert.equal(result.qualifications[0].checked_cases, 2)
 })
 
-test("independent failing and unverified cases do not qualify a route", async () => {
-  const observations = [observation("pr44", { oracle_status: "fail" }), observation("pr45"),
-    observation("pr45"), observation("pr46", { attested: false })]
-  const result = await routeDoctorCreBuild({ ...common, observations, apiKey: "test", fetchImpl: jev() })
-  assert.deepEqual(result.selected_route, baseline)
-  assert.equal(result.qualifications[0].checked_cases, 0)
-})
+for (const [name, observations, checkedCases] of [
+  ["failed oracle", [observation("pr44", { oracle_status: "fail" }), observation("pr45"),
+    observation("pr46"), observation("pr47")], 0],
+  ["duplicate case", [observation("pr44"), observation("pr45"), observation("pr45")], 2],
+  ["unverified case", [observation("pr44"), observation("pr45"),
+    observation("pr46", { attested: false })], 2]
+]) {
+  test(`${name} cannot promote a candidate under explicit control`, async () => {
+    const result = await routeDoctorCreBuild({ ...common, observations,
+      controlEnabled: true, verifyControl: () => true, apiKey: "test", fetchImpl: jev() })
+    assert.deepEqual(result.selected_route, baseline)
+    assert.equal(result.qualifications[0].checked_cases, checkedCases)
+    assert.deepEqual(result.eligible_routes, [])
+    assert.equal(result.jev.reason, "single_qualified_route")
+  })
+}
 
 test("three distinct authenticated passes permit explicit control", async () => {
   const observations = [observation("pr44"), observation("pr45"), observation("pr46")]
