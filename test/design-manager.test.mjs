@@ -3,14 +3,16 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import Ajv2020 from 'ajv/dist/2020.js'
 import { DESIGN_STAGES, DESIGN_TIERS, DESIGN_ROLES, DESIGN_GATES, EVIDENCE_STRENGTHS,
-  nextDesignStage, advanceDesignStage } from 'software-factory/design-manager'
+  nextDesignStage, advanceDesignStage, DESIGN_STATIONS, PROJECT_PLATFORMS,
+  stationForDesignStage, stationForDesignGate, inspectProjectPlatforms,
+  isVerifiedUserPath, evaluateMobileVerification, MOBILE_CAPABILITY_REQUIRED } from 'software-factory/design-manager'
 
 const schema = JSON.parse(readFileSync(new URL('../schemas/design-project.schema.json', import.meta.url)))
 const validate = new Ajv2020({ allErrors: true, strict: true }).compile(schema)
 const artifact = () => ({ ref: 'fixture:prototype', digest: `sha256:${'a'.repeat(64)}` })
 const project = (projectId = 'unrelated-sample') => ({
   schema: 'design-project.v1', projectId, sourceRevision: 'b'.repeat(40),
-  entry: 'post-build-refinement', tier: 'standard', stage: 'intake', status: 'active',
+  platforms: ['web'], entry: 'post-build-refinement', tier: 'standard', stage: 'intake', status: 'active',
   versionContract: { version: 1, includedWorkflows: ['retrieve a fact'], exclusions: [],
     knownLimitations: [], blockingDefects: [], acceptanceCriteria: ['correct fact retrieved'],
     deferredRefinements: [], evidenceWindow: 'two weeks of real use' },
@@ -110,6 +112,10 @@ test('declaration unions and required fields match the serialized schema contrac
     DesignRole: schema.$defs.role.enum, DesignGate: schema.$defs.gate.properties.gate.enum,
     GateStatus: schema.$defs.gate.properties.status.enum,
     EvidenceStrength: schema.$defs.evidence.properties.strength.enum,
+    DesignStation: DESIGN_STATIONS, ProjectPlatform: PROJECT_PLATFORMS,
+    EvaluationOutcome: schema.$defs.verificationProof.properties.outcome.enum,
+    EntryPointStatus: schema.$defs.verificationProof.properties.entryPointStatus.enum,
+    VerificationMethod: schema.$defs.verificationProof.properties.method.enum,
     ModelMode: ['fast', 'thorough', 'specialist', 'best-available', 'efficient-eco']
   }
   for (const [name, values] of Object.entries(enums)) {
@@ -117,6 +123,7 @@ test('declaration unions and required fields match the serialized schema contrac
     assert.deepEqual(annotation.types.map(x => x.literal.value), values, name)
   }
   for (const [name, contract] of Object.entries({ DesignProject: schema,
+    VerificationProof: schema.$defs.verificationProof, PersistenceProof: schema.$defs.persistenceProof,
     ArtifactRef: schema.$defs.artifact, HandoffManifest: schema.$defs.handoff,
     GateRecord: schema.$defs.gate, VersionContract: schema.$defs.versionContract })) {
     const members = declarations.get(name).body.body
@@ -124,4 +131,104 @@ test('declaration unions and required fields match the serialized schema contrac
     assert.ok(members.every(x => !x.optional), `${name} has optional required fields`)
   }
   assert.equal(declarations.get('EvidenceRef').extends[0].expression.name, 'ArtifactRef')
+})
+
+const proof = (platform = 'web', method = 'verify-skill') => ({
+  ...artifact(), strength: method === 'e2e' ? 'simulated-critique' : 'owner-task-testing',
+  verification: { sourceRevision: 'b'.repeat(40), platform, method,
+    entryPoint: '/notes/new', entryPointStatus: 'exercised', outcome: 'passed',
+    actionAndResult: artifact(), persistence: { writtenValue: artifact(),
+      independentReadback: { ...artifact(), ref: 'fixture:database-readback' },
+      readbackMethod: 'read-only storage query after the user saves' } }
+})
+
+test('stations own every existing stage and gate without changing the stage path', () => {
+  assert.deepEqual(DESIGN_STATIONS, ['research', 'define', 'design', 'prove', 'ship'])
+  assert.deepEqual(DESIGN_STAGES.map(stationForDesignStage), [
+    'define', 'define', 'research', 'define', 'design', 'design', 'prove', 'design',
+    'ship', 'prove', 'prove', 'define'])
+  assert.deepEqual(DESIGN_GATES.map(stationForDesignGate), [
+    'define', 'define', 'design', 'prove', 'design', 'ship', 'prove', 'prove', 'ship'])
+  for (const input of ['constructor', '__proto__', 'release', null]) {
+    assert.throws(() => stationForDesignStage(input), /unknown design stage/)
+    assert.throws(() => stationForDesignGate(input), /unknown design gate/)
+  }
+})
+
+test('platform intake is explicit and repository mobile signals flag mismatches', () => {
+  assert.deepEqual(PROJECT_PLATFORMS, ['web', 'ios', 'android', 'desktop'])
+  assert.deepEqual(inspectProjectPlatforms(['web'], { dependencies: [], paths: [] }),
+    { detected: [], missing: [], mismatch: false })
+  for (const dependencies of [['react-native'], ['expo']]) {
+    assert.deepEqual(inspectProjectPlatforms(['web'], { dependencies, paths: [] }),
+      { detected: ['ios', 'android'], missing: ['ios', 'android'], mismatch: true })
+  }
+  assert.deepEqual(inspectProjectPlatforms(['ios'], { dependencies: [], paths: ['ios/App.swift'] }),
+    { detected: ['ios'], missing: [], mismatch: false })
+  assert.deepEqual(inspectProjectPlatforms(['web'], { dependencies: [], paths: ['android/app/build.gradle'] }).missing, ['android'])
+  assert.equal(inspectProjectPlatforms(['web'], { dependencies: [], paths: ['app.json'] }).mismatch, true)
+  assert.equal(inspectProjectPlatforms(['web'], { dependencies: [], paths: ['app.json'], appJsonPlatforms: ['web'] }).mismatch, false)
+  for (const platforms of [undefined, [], ['watch'], ['ios', 'ios']]) {
+    const value = project(); value.platforms = platforms
+    assert.equal(validate(value), false)
+  }
+})
+
+test('verification proof requires exercised user path, fresh revision and independent persistence readback', () => {
+  const value = project(); value.handoffs[0].evidence = [proof()]
+  assert.equal(validate(value), true, JSON.stringify(validate.errors))
+  assert.equal(isVerifiedUserPath(proof(), value.sourceRevision), true)
+  const withoutPersistence = proof(); withoutPersistence.verification.persistence = null
+  assert.equal(isVerifiedUserPath(withoutPersistence, value.sourceRevision), true)
+  for (const mutate of [
+    x => { x.verification.entryPointStatus = 'skipped' },
+    x => { x.verification.entryPointStatus = 'blocked' },
+    x => { x.verification.outcome = 'failed' },
+    x => { x.verification.outcome = 'blocked' },
+    x => { x.verification.sourceRevision = 'c'.repeat(40) },
+    x => { delete x.verification.persistence.writtenValue.digest },
+    x => { delete x.verification.persistence.independentReadback },
+    x => { x.verification.persistence.independentReadback = x.verification.persistence.writtenValue }
+  ]) {
+    const evidence = proof(); mutate(evidence)
+    assert.equal(isVerifiedUserPath(evidence, value.sourceRevision), false)
+  }
+  assert.equal(isVerifiedUserPath({ ...artifact(), strength: 'simulated-critique' }, value.sourceRevision), false)
+  for (const mutate of [
+    x => { x.verification.entryPointStatus = 'verified' },
+    x => { x.verification.outcome = 'pending' },
+    x => { delete x.verification.actionAndResult },
+    x => { x.verification.extra = true },
+    x => { x.verification.persistence.independentReadback.digest = 'wrong' }
+  ]) {
+    const evidence = proof(); mutate(evidence); value.handoffs[0].evidence = [evidence]
+    assert.equal(validate(value), false)
+  }
+  value.handoffs[0].evidence = [proof()]; value.gates[0].status = 'blocked'
+  assert.equal(validate(value), true)
+})
+
+test('ios without mobile capability fails Prove with the exact remediation', () => {
+  const value = project(); value.platforms = ['ios']
+  const message = 'mobile verification capability not installed: add capabilities/mobile-verification (e2e mobile engine / agent-device, stim, argent; see docs/design-manager/parked.md)'
+  assert.equal(MOBILE_CAPABILITY_REQUIRED, message)
+  assert.deepEqual(evaluateMobileVerification(value, []), { status: 'fail', message })
+  for (const platforms of [['android'], ['web', 'ios']]) {
+    value.platforms = platforms
+    assert.deepEqual(evaluateMobileVerification(value, []), { status: 'fail', message })
+  }
+  value.platforms = ['web', 'desktop']
+  assert.equal(evaluateMobileVerification(value, []).status, 'pass')
+})
+
+test('reported mobile coverage requires verify skill and e2e on each exact platform/revision', () => {
+  const value = project(); value.platforms = ['ios', 'android']
+  const available = ['capabilities/mobile-verification']
+  assert.equal(evaluateMobileVerification(value, available).status, 'pending')
+  const evidence = ['ios', 'android'].flatMap(p => [proof(p), proof(p, 'e2e')])
+  assert.equal(evaluateMobileVerification(value, available, evidence).status, 'pass')
+  evidence[3].verification.entryPointStatus = 'skipped'
+  assert.equal(evaluateMobileVerification(value, available, evidence).status, 'pending')
+  evidence[3] = proof('android', 'e2e'); evidence[3].verification.sourceRevision = 'c'.repeat(40)
+  assert.equal(evaluateMobileVerification(value, available, evidence).status, 'pending')
 })

@@ -20,6 +20,17 @@ export const DESIGN_TIERS = Object.freeze([
   "high-assurance"
 ])
 
+export const DESIGN_STATIONS = Object.freeze(['research', 'define', 'design', 'prove', 'ship'])
+export const PROJECT_PLATFORMS = Object.freeze(['web', 'ios', 'android', 'desktop'])
+
+const stageStations = Object.freeze([
+  'define', 'define', 'research', 'define', 'design', 'design', 'prove', 'design',
+  'ship', 'prove', 'prove', 'define'
+])
+const gateStations = Object.freeze([
+  'define', 'define', 'design', 'prove', 'design', 'ship', 'prove', 'prove', 'ship'
+])
+
 export const DESIGN_GATES = Object.freeze([
   "problem",
   "workflow",
@@ -321,4 +332,60 @@ export function advanceDesignStage(stage, target) {
   const next = nextDesignStage(stage)
   if (next === null || next !== target) throw new Error("invalid design transition")
   return target
+}
+
+export function stationForDesignStage(stage) {
+  const index = DESIGN_STAGES.indexOf(stage)
+  if (index < 0) throw new Error('unknown design stage')
+  return stageStations[index]
+}
+
+export function stationForDesignGate(gate) {
+  const index = DESIGN_GATES.indexOf(gate)
+  if (index < 0) throw new Error('unknown design gate')
+  return gateStations[index]
+}
+
+/** Supplied repository signals only; never reads a product repository itself. */
+export function inspectProjectPlatforms(platforms, { dependencies, paths, appJsonPlatforms }) {
+  const mobileDependency = dependencies.some(name => name === 'react-native' || name === 'expo')
+  const native = platform => paths.some(path => path === `${platform}/` || path.startsWith(`${platform}/`))
+  const appJson = paths.includes('app.json')
+  const detected = PROJECT_PLATFORMS.filter(platform =>
+    ((platform === 'ios' || platform === 'android') && (mobileDependency || native(platform)
+      || (appJson && appJsonPlatforms === undefined)))
+    || (appJson && appJsonPlatforms?.includes(platform)))
+  const missing = detected.filter(platform => !platforms.includes(platform))
+  return { detected, missing, mismatch: missing.length > 0 }
+}
+
+/** Reported proof eligibility only: fetching, authenticity and digest checks belong to Prove. */
+export function isVerifiedUserPath(evidence, sourceRevision) {
+  const proof = evidence.verification
+  const persistence = proof?.persistence
+  return Boolean(proof && proof.sourceRevision === sourceRevision
+    && proof.entryPointStatus === 'exercised' && proof.outcome === 'passed'
+    && proof.entryPoint?.trim() && proof.actionAndResult?.ref && proof.actionAndResult?.digest
+    && (persistence === null || (persistence?.writtenValue?.ref && persistence?.writtenValue?.digest
+      && persistence?.independentReadback?.ref && persistence?.independentReadback?.digest
+      && persistence?.readbackMethod?.trim()
+      && persistence.writtenValue.ref !== persistence.independentReadback.ref)))
+}
+
+export const MOBILE_CAPABILITY_REQUIRED = 'mobile verification capability not installed: add capabilities/mobile-verification (e2e mobile engine / agent-device, stim, argent; see docs/design-manager/parked.md)'
+
+/** Pure Prove precondition; pass never certifies a full design gate or grants authority. */
+export function evaluateMobileVerification(project, availableCapabilities, evidence = []) {
+  const mobile = project.platforms.filter(platform => platform === 'ios' || platform === 'android')
+  if (mobile.length === 0) return { status: 'pass', message: 'mobile verification not required' }
+  if (!availableCapabilities.includes('capabilities/mobile-verification'))
+    return { status: 'fail', message: MOBILE_CAPABILITY_REQUIRED }
+  const missing = mobile.flatMap(platform => ['verify-skill', 'e2e'].filter(method =>
+    !evidence.some(item => item.verification?.platform === platform
+      && item.verification?.method === method
+      && (method !== 'e2e' || item.strength === 'simulated-critique')
+      && isVerifiedUserPath(item, project.sourceRevision))).map(method => `${platform}/${method}`))
+  return missing.length
+    ? { status: 'pending', message: `mobile evidence required: ${missing.join(', ')}` }
+    : { status: 'pass', message: 'reported mobile evidence covers each declared mobile platform' }
 }
