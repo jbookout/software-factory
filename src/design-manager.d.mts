@@ -66,6 +66,7 @@ export const PROJECT_PLATFORMS: readonly ProjectPlatform[];
 export const MOBILE_CAPABILITY_REQUIRED: string;
 export interface RepositoryPlatformSignals {
   dependencies: readonly string[]; paths: readonly string[];
+  // If supplied, must be non-empty and contain only known platforms; invalid lists throw.
   appJsonPlatforms?: readonly ProjectPlatform[];
 }
 export interface PlatformInspection {
@@ -75,5 +76,6 @@ export interface GateRequirement { status: 'pending' | 'pass' | 'fail'; message:
 export function stationForDesignStage(stage: DesignStage): DesignStation;
 export function stationForDesignGate(gate: DesignGate): DesignStation;
 export function inspectProjectPlatforms(platforms: readonly ProjectPlatform[], signals: RepositoryPlatformSignals): PlatformInspection;
-export function isVerifiedUserPath(evidence: EvidenceRef, sourceRevision: string): boolean;
+// Validates unknown receipts against the shared schema before testing reported eligibility.
+export function isVerifiedUserPath(evidence: unknown, sourceRevision: string): boolean;
 export function evaluateMobileVerification(project: DesignProject, availableCapabilities: readonly string[], evidence?: readonly EvidenceRef[]): GateRequirement;

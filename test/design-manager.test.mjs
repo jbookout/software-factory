@@ -9,6 +9,8 @@ import { DESIGN_STAGES, DESIGN_TIERS, DESIGN_ROLES, DESIGN_GATES, EVIDENCE_STREN
 
 const schema = JSON.parse(readFileSync(new URL('../schemas/design-project.schema.json', import.meta.url)))
 const validate = new Ajv2020({ allErrors: true, strict: true }).compile(schema)
+const validateEvidence = new Ajv2020({ strict: true }).addSchema(schema)
+  .compile({ $ref: `${schema.$id}#/$defs/evidence` })
 const artifact = () => ({ ref: 'fixture:prototype', digest: `sha256:${'a'.repeat(64)}` })
 const project = (projectId = 'unrelated-sample') => ({
   schema: 'design-project.v1', projectId, sourceRevision: 'b'.repeat(40),
@@ -231,4 +233,84 @@ test('reported mobile coverage requires verify skill and e2e on each exact platf
   assert.equal(evaluateMobileVerification(value, available, evidence).status, 'pending')
   evidence[3] = proof('android', 'e2e'); evidence[3].verification.sourceRevision = 'c'.repeat(40)
   assert.equal(evaluateMobileVerification(value, available, evidence).status, 'pending')
+})
+
+test('malformed receipts fail the shared schema, direct eligibility and mobile coverage', async t => {
+  const mutations = {
+    'missing evidence ref': x => { delete x.ref },
+    'missing evidence digest': x => { delete x.digest },
+    'missing evidence strength': x => { delete x.strength },
+    'blank evidence ref': x => { x.ref = ' ' },
+    'invalid evidence digest': x => { x.digest = 'garbage' },
+    'unknown evidence strength': x => { x.strength = 'real' },
+    'extra evidence field': x => { x.extra = true },
+    'missing platform': x => { delete x.verification.platform },
+    'unknown platform': x => { x.verification.platform = 'watch' },
+    'missing method': x => { delete x.verification.method },
+    'unknown method': x => { x.verification.method = 'manual' },
+    'invalid source revision': x => { x.verification.sourceRevision = 'latest' },
+    'missing entry point': x => { delete x.verification.entryPoint },
+    'blank entry point': x => { x.verification.entryPoint = ' ' },
+    'extra proof field': x => { x.verification.extra = true },
+    'blank action ref': x => { x.verification.actionAndResult.ref = ' ' },
+    'invalid action digest': x => { x.verification.actionAndResult.digest = 'garbage' },
+    'partial action artifact': x => { delete x.verification.actionAndResult.digest },
+    'missing persistence': x => { delete x.verification.persistence },
+    'blank written value ref': x => { x.verification.persistence.writtenValue.ref = ' ' },
+    'invalid readback digest': x => { x.verification.persistence.independentReadback.digest = 'garbage' },
+    'blank readback method': x => { x.verification.persistence.readbackMethod = ' ' },
+    'partial readback artifact': x => { delete x.verification.persistence.independentReadback.ref }
+  }
+  for (const [name, mutate] of Object.entries(mutations)) {
+    await t.test(name, () => {
+      const evidence = proof('ios'); mutate(evidence)
+      assert.equal(validateEvidence(evidence), false, name)
+      assert.equal(isVerifiedUserPath(evidence, evidence.verification.sourceRevision), false, name)
+      const value = project(); value.platforms = ['ios']
+      assert.equal(evaluateMobileVerification(value, ['capabilities/mobile-verification'],
+        [evidence, proof('ios', 'e2e')]).status, 'pending', name)
+    })
+  }
+  for (const evidence of [null, undefined, 'receipt', {}, { verification: null }]) {
+    await t.test(`partial record ${JSON.stringify(evidence)}`, () => {
+      assert.equal(validateEvidence(evidence), false)
+      assert.equal(isVerifiedUserPath(evidence, project().sourceRevision), false)
+      const value = project(); value.platforms = ['ios']
+      assert.equal(evaluateMobileVerification(value, ['capabilities/mobile-verification'],
+        [evidence, proof('ios', 'e2e')]).status, 'pending')
+    })
+  }
+})
+
+test('e2e receipts use simulated critique on every platform in the schema and helper', () => {
+  for (const platform of PROJECT_PLATFORMS) {
+    for (const strength of EVIDENCE_STRENGTHS) {
+      const evidence = proof(platform, 'e2e'); evidence.strength = strength
+      const expected = strength === 'simulated-critique'
+      assert.equal(validateEvidence(evidence), expected, `${platform}/${strength}: schema`)
+      assert.equal(isVerifiedUserPath(evidence, project().sourceRevision), expected,
+        `${platform}/${strength}: helper`)
+      const value = project(); value.handoffs[0].evidence = [evidence]
+      assert.equal(validate(value), expected, `${platform}/${strength}: project`)
+      evidence.verification.method = 'verify-skill'
+      assert.equal(validateEvidence(evidence), true, `${platform}/${strength}: verify-skill`)
+      assert.equal(isVerifiedUserPath(evidence, value.sourceRevision), true)
+    }
+  }
+})
+
+test('invalid app.json platform signals cannot suppress mobile reconciliation', async t => {
+  for (const appJsonPlatforms of [[], ['watch'], ['web', 'watch'], null, 'web', {}]) {
+    await t.test(JSON.stringify(appJsonPlatforms), () => {
+      assert.throws(() => inspectProjectPlatforms(['web'], {
+        dependencies: [], paths: ['app.json'], appJsonPlatforms
+      }), /appJsonPlatforms must be a non-empty array of known project platforms/)
+    })
+  }
+  assert.deepEqual(inspectProjectPlatforms(['web'], {
+    dependencies: [], paths: ['app.json'], appJsonPlatforms: undefined
+  }), { detected: ['ios', 'android'], missing: ['ios', 'android'], mismatch: true })
+  assert.deepEqual(inspectProjectPlatforms(['web'], {
+    dependencies: [], paths: ['app.json'], appJsonPlatforms: ['web', 'ios']
+  }), { detected: ['web', 'ios'], missing: ['ios'], mismatch: true })
 })

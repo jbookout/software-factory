@@ -151,6 +151,23 @@
     "evidence": {
       "type": "object",
       "additionalProperties": false,
+      "if": {
+        "required": ["verification"],
+        "properties": {
+          "verification": {
+            "type": "object",
+            "required": ["method"],
+            "properties": {
+              "method": { "const": "e2e" }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "strength": { "const": "simulated-critique" }
+        }
+      },
       "required": [
         "ref",
         "digest",
