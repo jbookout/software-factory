@@ -72,3 +72,12 @@ schema, adapters, and evaluation harness. Each product repository owns its own
 configuration and derived artifact. The pilot must beat `rg` and
 language-symbol baselines on representative work or be retired; it is never a
 merge, release, repository-creation, or runtime prerequisite.
+
+## Before every PR: design and debt pass
+
+Before opening or updating any pull request, apply both skills to the diff:
+
+1. `codebase-design`: deep modules, real seams, design the interface twice when it matters.
+2. `zero-tech-debt`: rework the change from its intended end state; delete dead compatibility paths and duplicated rules.
+
+Both are installed at `~/.agents/skills/` (sources: github.com/mattpocock/skills `skills/engineering/codebase-design`, github.com/jnsahaj/skills `skills/zero-tech-debt`). The PR reviewer checks both, so all two are required.
