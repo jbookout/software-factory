@@ -201,6 +201,30 @@ test('AW-2: malformed assessments, unsupported strong claims, missing layers and
     { ...assessments()[4], revision: 2 }), /depend/)
 })
 
+test('AW-2: every submission checks dependency revisions against the current layer with the same repair guidance', () => {
+  const initial = intake(apps[0], 'feature')
+  const current = assessments(null, 'weak', 3)
+  const complete = finish(answer(initial, current))
+  const pending = answer(initial, assessments('domain', 'weak', 3))
+  const staleDependency = { name: 'TypeError',
+    message: 'stale dependency assessment: reread the current layer revision' }
+  for (const revision of [2, 4]) {
+    const supplied = structuredClone(current)
+    supplied[1].dependencies[0].revision = revision
+    assert.throws(() => answer(initial, supplied), staleDependency)
+    const assessment = { ...supplied[1], revision: 4 }
+    assert.throws(() => manager.reassessDesignLayer(complete.interview, assessment), staleDependency)
+    assert.throws(() => answer(pending, { response: 'Supplied domain observation', assessment }), staleDependency)
+  }
+  const assessment = { ...current[1], revision: 4 }
+  const revised = manager.reassessDesignLayer(complete.interview, assessment)
+  assert.deepEqual(revised.diagnosis.invalidatedLayers, ['need', 'strategy', 'model', 'flow', 'surface'])
+  assert.equal(revised.diagnosis.assessments[2].dependencies[0].revision, 3,
+    'existing dependents remain historical and stale until individually reassessed')
+  assert.deepEqual(replay(revised), revised)
+  assert.equal(answer(pending, { response: 'Supplied domain observation', assessment }).question.layer, 'need')
+})
+
 test('AW-2: altered question, trace order, assessment revision and derived projection fail replay/inspection', () => {
   const view = finish(answer(intake(apps[0], 'feature'), assessments()))
   for (const corrupt of [

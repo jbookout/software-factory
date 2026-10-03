@@ -550,6 +550,13 @@ function checkLayerSet(assessments) {
   }
 }
 
+function checkDependencyRevisions(assessment, assessments) {
+  for (const dependency of assessment.dependencies) {
+    if (dependency.revision !== assessments.find(a => a.layer === dependency.layer).revision)
+      throw new TypeError('stale dependency assessment: reread the current layer revision')
+  }
+}
+
 // Preserve supplied assessments; derive invalidation from revisions and transitive support.
 function layerDiagnosis(assessments) {
   if (!assessments) return null
@@ -573,10 +580,7 @@ function reviseLayer(assessments, assessment) {
   if (assessment.revision !== current.revision + 1) throw new TypeError('reassessment requires the next layer revision')
   const revised = assessments.map(a => a.layer === assessment.layer ? assessment : a)
   checkLayerSet(revised)
-  for (const dependency of assessment.dependencies) {
-    if (dependency.revision !== revised.find(a => a.layer === dependency.layer).revision)
-      throw new TypeError('stale dependency assessment: reread the current layer revision')
-  }
+  checkDependencyRevisions(assessment, revised)
   if (assessment.support === 'strong' && layerDiagnosis(revised).invalidatedLayers.includes(assessment.layer))
     throw new TypeError('strong assessment cannot depend on unsupported decisions')
   return revised
@@ -664,8 +668,7 @@ function checkAnswer(question, answer) {
     throw new TypeError('supplied input must be an ArtifactRef')
   if (question.id === 'layer-assessments') {
     checkLayerSet(answer.value)
-    if (answer.value.some(a => a.dependencies.some(d => d.revision !== answer.value.find(t => t.layer === d.layer).revision)))
-      throw new TypeError('stale dependency assessment')
+    for (const assessment of answer.value) checkDependencyRevisions(assessment, answer.value)
   }
   if (question.layer && (!exactKeys(answer.value, ['response', 'assessment']) || !text(answer.value.response)
     || answer.value.assessment?.layer !== question.layer))
