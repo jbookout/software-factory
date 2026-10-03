@@ -30,6 +30,33 @@ done test, implementation evidence, dependencies and remaining effort. It also
 orders the PR delivery loop and Design Manager ahead of the remaining work and
 states the dated completion arithmetic. `npm test` checks scope-row coverage.
 
+## Loop budgets and receipts
+
+`createFactory().run(job, adapter)` defaults to three verification rounds and two
+review rounds. Each failing round permits a repair only when another round
+remains. Repeated findings stop at the first repeated round; a missing check or
+repair stops immediately. Optional `job.budgets.verificationRounds` and
+`job.budgets.reviewRounds` use the [job schema](schemas/factory-job.schema.json)'s
+integer range of 1–10. Invalid budgets are rejected before clock, ID or adapter
+work. The [budget acceptance test](test/acceptance/loop-budgets.test.mjs) checks
+exhaustion, stall, missing steps, invalid input and final-round success.
+
+The public import exports `verifyFactoryReceipt(receipt, trustedDigest)`, which
+returns a boolean. Supply the original `receiptDigest` retained in a separately
+trusted location; passing the digest from the receipt being inspected provides
+no protection against a rewritten payload and checksum. The verifier compares
+the embedded digest and SHA-256 of `JSON.stringify` on every receipt field except
+`receiptDigest` with that trusted digest. JSON serialization/parse preserves the
+property order used by this checksum; reordering object properties changes it.
+Missing/malformed input or digest returns `false`.
+
+This is an unkeyed checksum: it detects changes against a trusted original digest,
+does not authenticate an author and cannot prevent someone computing a new
+checksum. It binds evidence references, without checking their contents or
+availability. The [receipt acceptance test](test/acceptance/tamper-evident-receipt.test.mjs)
+compares fixed expected bytes and checks round trips, mutations and rewritten
+checksums through the public verifier.
+
 ## Design Manager contract pilot
 
 The [implementation plan](docs/design-manager/plan.md) maps the approved

@@ -1,13 +1,39 @@
 import { createHash, randomUUID } from "node:crypto"
+import { readFileSync } from "node:fs"
+import Ajv2020 from "ajv/dist/2020.js"
 
 import { evaluatePerformance } from "./performance-factory.mjs"
 import { classifyRisk, reviewsFor } from "./risk-router.mjs"
 import { verifyPinnedBuildContext } from "./model-room.mjs"
 
 const DEFAULT_BUDGETS = { verificationRounds: 3, reviewRounds: 2 }
+const jobSchema = JSON.parse(readFileSync(new URL("../schemas/factory-job.schema.json", import.meta.url)))
+const ajv = new Ajv2020({ strict: true })
+const validateBudgetInput = ajv.compile(jobSchema.properties.budgets)
+const validateBudgets = ajv.compile({ ...jobSchema.properties.budgets, required: Object.keys(DEFAULT_BUDGETS) })
+
+function resolveBudgets(input = {}) {
+  if (!validateBudgetInput(input)) throw new Error(`invalid budgets: ${ajv.errorsText(validateBudgetInput.errors)}`)
+  const budgets = { ...DEFAULT_BUDGETS, ...input }
+  if (!validateBudgets(budgets)) throw new Error(`invalid budgets: ${ajv.errorsText(validateBudgets.errors)}`)
+  return budgets
+}
 
 function hash(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex")
+}
+
+// trustedDigest must come from a separately trusted original, not this receipt.
+// This unkeyed JSON checksum detects changes; it does not authenticate an author.
+export function verifyFactoryReceipt(receipt, trustedDigest) {
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)
+      || typeof trustedDigest !== "string" || !/^[a-f0-9]{64}$/.test(trustedDigest)) return false
+  try {
+    const { receiptDigest, ...body } = receipt
+    return receiptDigest === trustedDigest && hash(body) === trustedDigest
+  } catch {
+    return false
+  }
 }
 
 function findingKey(findings) {
@@ -27,10 +53,10 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
     async run(job, adapter) {
       assertJob(job)
       if (!adapter || typeof adapter.execute !== "function") throw new Error("adapter.execute is required")
+      const budgets = resolveBudgets(job.budgets)
 
       const startedAt = now()
       const jobId = job.id ?? makeId()
-      const budgets = { ...DEFAULT_BUDGETS, ...job.budgets }
       const events = []
       const findings = []
       const evidence = []
@@ -80,7 +106,13 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
             return false
           }
           previous = current
-          if (round < limit) await execute(repairStep, { round, findings: result.findings })
+          if (round < limit) {
+            const repair = await execute(repairStep, { round, findings: result.findings })
+            if (repair.status === "skip") {
+              stopped = `${repairStep}:missing`
+              return false
+            }
+          }
         }
         stopped = `${step}:budget-exhausted`
         return false
@@ -161,7 +193,11 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
             stopped = "review:budget-exhausted"
             break
           }
-          await execute("repair:review", { round, findings: failed })
+          const repair = await execute("repair:review", { round, findings: failed })
+          if (repair.status === "skip") {
+            stopped = "repair:review:missing"
+            break
+          }
         }
       }
 
