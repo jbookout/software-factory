@@ -81,3 +81,42 @@ export function inspectProjectPlatforms(platforms: readonly ProjectPlatform[], s
 // Validates unknown receipts against the shared schema before testing reported eligibility.
 export function isVerifiedUserPath(evidence: unknown, sourceRevision: string): boolean;
 export function evaluateMobileVerification(project: DesignProject, availableCapabilities: readonly string[], evidence?: readonly EvidenceRef[]): GateRequirement;
+
+export interface TierChoice {
+  value: DesignTier; included: string[]; omitted: string[]; effort: string;
+  protectedRisks: string[]; scopeImpact?: string[];
+}
+export interface ScopeProposal { workflow: string; reason: string }
+export interface InterviewQuestion {
+  id: string; prompt: string; choices?: readonly string[] | TierChoice[];
+  recommendation?: DesignTier; requiredPlatforms?: ProjectPlatform[];
+  expansion?: ScopeProposal & { before: string[]; after: string[] };
+}
+export type InterviewAnswer = { status: 'answered'; value: string | number | string[] | ArtifactRef }
+  | { status: 'unknown' | 'declined' };
+export type InterviewTraceEvent = { question: InterviewQuestion; answer: InterviewAnswer }
+  | { proposal: ScopeProposal };
+export interface DesignInterview {
+  schema: 'design-interview.v1'; projectId: string; sourceRevision: string;
+  trace: InterviewTraceEvent[]; signals?: RepositoryPlatformSignals;
+}
+export interface EntryRequirement {
+  id: string; stage: DesignStage; role: DesignRole; artifacts: string[];
+  criterion: string; stop: string; workflows: string[]; status: 'pending';
+}
+export interface DesignInterviewView {
+  interview: DesignInterview; question: InterviewQuestion | null;
+  project: DesignProject | null; requirements: EntryRequirement[];
+  inputs: Record<string, string | ArtifactRef>;
+}
+// Pure snapshots: save interview before displaying the next question. No storage/dispatch authority.
+export function startDesignInterview(identity: {
+  projectId: string; sourceRevision: string; signals?: RepositoryPlatformSignals;
+}): DesignInterviewView;
+export function resumeDesignInterview(interview: DesignInterview): DesignInterviewView;
+export function answerDesignInterview(interview: DesignInterview, response: {
+  questionId: string; answer: InterviewAnswer;
+}): DesignInterviewView;
+export function proposeDesignScope(interview: DesignInterview, proposal: ScopeProposal): DesignInterviewView;
+// Checks initialization consistency only, never design acceptance or authenticated provenance.
+export function inspectDesignInitialization(value: unknown): { status: 'pass' | 'fail'; errors: string[] };

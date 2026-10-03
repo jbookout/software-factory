@@ -209,13 +209,18 @@ function stationForDesignStage(stage: DesignStage): DesignStation;
 function stationForDesignGate(gate: DesignGate): DesignStation;
 // inspectProjectPlatforms takes supplied signals; evaluateMobileVerification
 // returns a pure precondition; isVerifiedUserPath tests reported eligibility.
-// Planned, not executable in slice 1:
-// initialize(entry: DesignEntry, brief: Brief): Promise<DesignProject>
+// Slice 2: startDesignInterview, answerDesignInterview, resumeDesignInterview,
+// proposeDesignScope and inspectDesignInitialization return/check pure snapshots.
+// Planned, not executable in slices 1–2:
 // route(station: DesignStation, state: DesignProject, settings: UserSettings): Promise<Assignment>
 // review(handoff: HandoffManifest, candidate: ArtifactRef): Promise<GateRecord>
 // appendJournal(project: DesignProject, event: JournalEvent): Promise<JournalRef>
 // projectControlSurface(state: DesignProject, journal: JournalRef): ControlSurface
 ```
+
+Slice 2's [entry playbooks and interview interface](entry-playbooks.md) initialize
+the same project schema at Intake with explicit tier, scope and pending work.
+They preserve the standard adjacent-stage path and confer no execution authority.
 
 ### Station checklists: inputs, outputs, rubrics and stops
 

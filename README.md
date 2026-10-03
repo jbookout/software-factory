@@ -40,6 +40,12 @@ adjacent-stage helpers. Run `npm test` to check the contracts. These records
 describe design work; they do not dispatch specialists, authenticate evidence,
 certify acceptance or grant production authority.
 
+[Entry playbooks](docs/design-manager/entry-playbooks.md) build on those contracts
+with one-question interview snapshots, explicit tier and workflow assurance,
+entry-specific artifact inputs, pending required work and visible scope expansion.
+Initialization is pure bookkeeping; durable journals and execution remain later
+slices.
+
 ## Deterministic enforcement
 
 The factory treats agent prompts and skills as guidance, not architecture

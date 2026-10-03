@@ -1,10 +1,24 @@
 // Pure development-time contracts. No dispatch, persistence or acceptance authority.
 import { readFileSync } from 'node:fs'
 import Ajv2020 from 'ajv/dist/2020.js'
+import { isDeepStrictEqual } from 'node:util'
 
 const projectSchema = JSON.parse(readFileSync(new URL('../schemas/design-project.schema.json', import.meta.url)))
-const validateEvidence = new Ajv2020({ strict: true }).addSchema(projectSchema)
-  .compile({ $ref: `${projectSchema.$id}#/$defs/evidence` })
+const projectAjv = new Ajv2020({ strict: true }).addSchema(projectSchema)
+const schemaRef = pointer => ({ $ref: `${projectSchema.$id}#/${pointer}` })
+const validateEvidence = projectAjv.compile(schemaRef('$defs/evidence'))
+const validateProject = projectAjv.getSchema(projectSchema.$id)
+const validateArtifact = projectAjv.compile(schemaRef('$defs/artifact'))
+const validateProjectId = projectAjv.compile(schemaRef('properties/projectId'))
+const validateSourceRevision = projectAjv.compile(schemaRef('properties/sourceRevision'))
+const validateSignalStrings = projectAjv.compile({ type: 'array',
+  items: schemaRef('$defs/versionContract/properties/includedWorkflows/items') })
+const sharedAnswerValidators = Object.fromEntries([
+  ...['entry', 'tier', 'platforms'].map(id => [id, `properties/${id}`]),
+  ...['version', 'includedWorkflows', 'exclusions', 'acceptanceCriteria', 'evidenceWindow']
+    .map(id => [id, `$defs/versionContract/properties/${id}`])
+].map(([id, pointer]) => [id, projectAjv.compile(schemaRef(pointer))]))
+const validateScopeCriterion = projectAjv.compile(schemaRef('$defs/versionContract/properties/acceptanceCriteria/items'))
 
 export const DESIGN_STAGES = Object.freeze([
   "grill",
@@ -355,9 +369,7 @@ export function stationForDesignGate(gate) {
 
 /** Supplied repository signals only; invalid app.json platforms throw instead of clearing ambiguity. */
 export function inspectProjectPlatforms(platforms, { dependencies, paths, appJsonPlatforms, usesSwiftUI }) {
-  if (appJsonPlatforms !== undefined && (!Array.isArray(appJsonPlatforms)
-    || appJsonPlatforms.length === 0
-    || !appJsonPlatforms.every(platform => PROJECT_PLATFORMS.includes(platform))))
+  if (appJsonPlatforms !== undefined && !sharedAnswerValidators.platforms(appJsonPlatforms))
     throw new TypeError('appJsonPlatforms must be a non-empty array of known project platforms')
   const mobileDependency = dependencies.some(name => name === 'react-native' || name === 'expo')
   const native = platform => paths.some(path => path === `${platform}/` || path.startsWith(`${platform}/`))
@@ -397,4 +409,298 @@ export function evaluateMobileVerification(project, availableCapabilities, evide
   return missing.length
     ? { status: 'pending', message: `mobile evidence required: ${missing.join(', ')}` }
     : { status: 'pass', message: 'reported mobile evidence covers each declared mobile platform' }
+}
+
+// Interview snapshots are values for the future factory journal, never a private store.
+const entryPlaybooks = {
+  'new-product': { inputs: [], artifact: 'product-brief', focus: 'Bound users, jobs, outcomes and the first product version.' },
+  feature: { inputs: ['existing-contract'], artifact: 'feature-delta', focus: 'Compare the feature to the existing product contract and protect adjacent workflows.' },
+  'workflow-redesign': { inputs: ['current-workflow'], artifact: 'current-proposed-flow', focus: 'Compare current and proposed owners, states, exceptions and failure history.' },
+  audit: { inputs: ['built-candidate'], artifact: 'severity-ranked-findings', focus: 'Compare the supplied candidate to explicit criteria; rank findings without authorizing repairs.' },
+  'design-system': { inputs: ['current-system'], artifact: 'system-inventory', focus: 'Inventory tokens, components, themes and accessibility across the included workflows.' },
+  'platform-derivation': { inputs: ['source-design'], artifact: 'platform-mapping', focus: 'Map source intent to declared target platforms and native behavior.' },
+  'concept-evaluation': { inputs: ['candidate-concepts'], artifact: 'concept-comparison', focus: 'Compare supplied concepts against the job, alternatives and declared test questions.' },
+  'post-build-refinement': { inputs: ['built-candidate', 'accepted-design', 'operational-baseline'], artifact: 'contract-candidate-comparison', focus: 'Compare the exact candidate with accepted design and observed outcomes; bound a new refinement version.' },
+  'automation-interaction': { inputs: ['authority-model'], artifact: 'authority-refusal-recovery-model', focus: 'Make human and automation authority, refusal, recovery and irreversible consequences visible.' }
+}
+const tierCriteria = {
+  lean: [
+    ['grill', 'intake', 'Persist one answer before selecting the next question.'],
+    ['workflow', 'define', 'Map normal, refusal, recovery, handoff and concurrency paths.'],
+    ['concepts', 'explore', 'Compare one or two bounded concepts against the job.'],
+    ['owner-testing', 'test', 'Record owner task testing and its limits; simulated critique is not user observation.'],
+    ['accessibility', 'test', 'Declare the accessibility target and check critical workflows and states.'],
+    ['implementation-criteria', 'build-orchestration', 'Provide checkable implementation acceptance criteria.'],
+    ['post-build-review', 'implementation-verification', 'Compare the exact built candidate against the accepted design.']
+  ],
+  standard: [
+    ['domain-research', 'research', 'Record primary sources, patterns, factual gaps and inference.'],
+    ['alternatives', 'explore', 'Compare credible alternatives with explicit selection reasons.'],
+    ['interactive-prototype', 'prototype', 'Exercise a behaviorally adequate interactive prototype.'],
+    ['task-evaluation', 'test', 'Evaluate declared tasks without coaching and record outcomes and limits.'],
+    ['failure-states', 'prototype', 'Cover loading, empty, stale, failure, conflict, permission and recovery states.'],
+    ['measurable-baseline', 'measure', 'Name the baseline, window, population and limits before measuring deltas.'],
+    ['decision-record', 'decide', 'Record the decision, rationale, alternatives and accepted limits.']
+  ],
+  'high-assurance': [
+    ['representative-users', 'test', 'Require representative-user testing; simulated critique cannot substitute.'],
+    ['privacy-threat-analysis', 'define', 'Analyze privacy, threats, authority and data-loss risks.'],
+    ['formal-accessibility', 'test', 'Require formal accessibility and assistive testing for the declared target.'],
+    ['stronger-validation', 'test', 'Validate consequential assumptions with stronger independent evidence.'],
+    ['staged-release', 'build-orchestration', 'Specify staged release criteria without granting activation authority.'],
+    ['monitoring', 'measure', 'Specify monitored outcomes, thresholds and responses.'],
+    ['rollback', 'build-orchestration', 'Specify rollback triggers and recovery verification.'],
+    ['independent-assurance', 'implementation-verification', 'Require independent assurance of the exact candidate and its evidence.']
+  ]
+}
+const roleStages = {
+  'Design Manager': 'intake', 'Research Specialist': 'research', 'Product/UX Strategist': 'define',
+  'Workflow Architect': 'define', 'Information Architect': 'explore', 'Interaction Designer': 'prototype',
+  'Prototype Specialist': 'prototype', 'Visual-System Designer': 'explore', 'Accessibility Specialist': 'test',
+  'Usability/Evaluation Specialist': 'test', 'Adversarial Reviewer': 'decide',
+  'Implementation Translator': 'build-orchestration', 'Implementation Verifier': 'implementation-verification',
+  'Measurement Specialist': 'measure'
+}
+const gateComparisons = {
+  problem: ['define', 'Intent against observable problem and outcome.'],
+  workflow: ['define', 'Mapped job against owners, states, failures and exceptions.'],
+  concept: ['decide', 'Chosen direction against credible alternatives and stated reasons.'],
+  interaction: ['test', 'Critical task observations against completion criteria.'],
+  system: ['decide', 'Tokens, components and accessibility evidence against the declared system and target.'],
+  'build-readiness': ['build-orchestration', 'Design against user/job, critical flow, tested risk assumptions, concept rationale, loading, empty, stale, failure, conflict, permission states, accessibility, checkable acceptance and post-build evaluation.'],
+  'implementation-fidelity': ['implementation-verification', 'Exact built candidate against the accepted design contract.'],
+  'operational-evidence': ['measure', 'Real task outcomes against the named baseline, window and population.'],
+  'version-closure': ['refine', 'Fixed included scope against acceptance, defects, exclusions, limitations, deferred work and the next-version evidence window.']
+}
+const intakeQuestions = [
+  ['platforms', 'Which platforms does this version target?'],
+  ['intent', 'What observable outcome should this version achieve?'],
+  ['users', 'Who performs the included work?'],
+  ['constraints', 'What constraints bound this version?'],
+  ['includedWorkflows', 'Which workflows are included in this version?'],
+  ['exclusions', 'Which work is explicitly excluded?'],
+  ['acceptanceCriteria', 'What observable criteria decide acceptance?'],
+  ['evidenceWindow', 'What evidence window informs the next version?'],
+  ['version', 'Which bounded version is being initialized?']
+]
+const tierRank = tier => DESIGN_TIERS.indexOf(tier)
+const criteriaFor = tier => DESIGN_TIERS.slice(0, tierRank(tier) + 1)
+  .flatMap(key => tierCriteria[key])
+function tierChoices() {
+  return DESIGN_TIERS.map((value, index) => ({ value,
+    included: criteriaFor(value).map(([, , criterion]) => criterion),
+    omitted: DESIGN_TIERS.slice(index + 1).flatMap(key => tierCriteria[key].map(([, , criterion]) => criterion)),
+    effort: ['Concise owner-led design and review', 'Research, prototype and measured task evaluation',
+      'Representative participants, formal checks and independent release assurance'][index],
+    protectedRisks: ['Core workflow and accessibility', 'Core workflow, failure states and unsupported decisions',
+      'Privacy, threats, accessibility, data loss and consequential release risks'][index].split(', ')
+  }))
+}
+const text = value => typeof value === 'string' && value.trim().length > 0
+function exactKeys(value, required, optional = []) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    && required.every(key => Object.hasOwn(value, key))
+    && Object.keys(value).every(key => [...required, ...optional].includes(key))
+}
+
+function questionFor(interview, answers, proposal = null) {
+  const make = (id, prompt, choices) => ({ id,
+    prompt: `${interview.projectId}: ${prompt}`, ...(choices ? { choices } : {}) })
+  if (!answers.entry) return make('entry', 'Which design entry path applies?', DESIGN_ENTRIES)
+  if (!answers.risk) return make('risk', 'What is the consequential risk level?', ['bounded', 'consequential', 'unknown'])
+  if (!answers.tier) return { ...make('tier', 'Which assurance tier do you select?', tierChoices()),
+    recommendation: answers.risk === 'bounded' ? 'standard' : 'high-assurance' }
+  for (const [id, prompt] of intakeQuestions) {
+    if (answers[id] === undefined) {
+      const question = make(id, prompt)
+      if (id === 'platforms' && interview.signals) question.requiredPlatforms =
+        inspectProjectPlatforms([], interview.signals).detected
+      return question
+    }
+  }
+  for (const id of entryPlaybooks[answers.entry].inputs) {
+    if (!answers[`input:${id}`]) return make(`input:${id}`, `Which supplied artifact contains the ${id.replaceAll('-', ' ')}?`)
+  }
+  if (proposal) return { ...make('scope-expansion', 'Do you accept this scope expansion?', ['accept', 'decline']),
+    expansion: { ...proposal, before: answers.includedWorkflows,
+      after: [...answers.includedWorkflows, proposal.workflow] } }
+  for (const [index, workflow] of answers.includedWorkflows.entries()) {
+    if (answers[`scope-added:${index}`] && !answers[`scope-criteria:${index}`])
+      return make(`scope-criteria:${index}`, `What observable criterion decides acceptance of workflow “${workflow}”?`)
+    if (!answers[`assurance:${index}`]) return { ...make(`assurance:${index}`,
+      `Which assurance tier does workflow “${workflow}” require?`, tierChoices().map(choice => ({
+        ...choice, scopeImpact: choice.included.filter(criterion => !criteriaFor(answers.tier).some(([, , text]) => text === criterion))
+      }))),
+    recommendation: answers.risk === 'bounded' ? answers.tier : 'high-assurance' }
+  }
+  return null
+}
+
+function checkAnswer(question, answer) {
+  if (!exactKeys(answer, ['status'], ['value'])
+    || !['answered', 'unknown', 'declined'].includes(answer.status)
+    || (answer.status !== 'answered' && Object.hasOwn(answer, 'value')))
+    throw new TypeError('invalid interview answer')
+  if (answer.status !== 'answered') return
+  if (question.choices && !question.choices.some(choice => (choice.value ?? choice) === answer.value))
+    throw new TypeError(`invalid answer for ${question.id}`)
+  if (['intent', 'users', 'constraints'].includes(question.id) && !text(answer.value))
+    throw new TypeError(`nonblank answer required for ${question.id}`)
+  const validateShared = sharedAnswerValidators[question.id]
+  if (validateShared && !validateShared(answer.value))
+    throw new TypeError(`${['platforms', 'includedWorkflows', 'exclusions', 'acceptanceCriteria'].includes(question.id)
+      ? 'invalid list' : 'invalid answer'} for ${question.id}`)
+  if (['platforms', 'includedWorkflows', 'exclusions', 'acceptanceCriteria'].includes(question.id)) {
+    const values = answer.value
+    if (new Set(values).size !== values.length)
+      throw new TypeError(`invalid list for ${question.id}`)
+    if (question.requiredPlatforms?.some(platform => !values.includes(platform)))
+      throw new TypeError('platform mismatch: reconcile supplied mobile signals explicitly')
+  }
+  if (question.id.startsWith('scope-criteria:') && !validateScopeCriterion(answer.value))
+    throw new TypeError('new workflow requires an observable acceptance criterion')
+  if (question.id.startsWith('input:') && !validateArtifact(answer.value))
+    throw new TypeError('supplied input must be an ArtifactRef')
+}
+
+function replayInterview(interview) {
+  if (!exactKeys(interview, ['schema', 'projectId', 'sourceRevision', 'trace'], ['signals'])
+    || interview.schema !== 'design-interview.v1' || !validateProjectId(interview.projectId)
+    || !validateSourceRevision(interview.sourceRevision) || !Array.isArray(interview.trace))
+    throw new TypeError('invalid design interview')
+  if (Object.hasOwn(interview, 'signals')) {
+    const signals = interview.signals
+    if (!exactKeys(signals, ['dependencies', 'paths'], ['appJsonPlatforms', 'usesSwiftUI'])
+      || !validateSignalStrings(signals.dependencies) || !validateSignalStrings(signals.paths)
+      || (signals.usesSwiftUI !== undefined && typeof signals.usesSwiftUI !== 'boolean'))
+      throw new TypeError('invalid supplied platform signals')
+    inspectProjectPlatforms([], signals)
+  }
+  const answers = {}
+  let proposal = null
+  const deferred = new Set()
+  for (const event of interview.trace) {
+    const question = questionFor(interview, answers, proposal)
+    if (exactKeys(event, ['proposal'])) {
+      if (question || !exactKeys(event.proposal, ['workflow', 'reason'])
+        || !text(event.proposal.workflow) || !text(event.proposal.reason)
+        || answers.includedWorkflows.includes(event.proposal.workflow)
+        || answers.exclusions.includes(event.proposal.workflow))
+        throw new TypeError('scope proposal requires completed intake and new non-excluded work')
+      proposal = event.proposal
+      continue
+    }
+    if (!question || !exactKeys(event, ['question', 'answer']) || !isDeepStrictEqual(event.question, question))
+      throw new TypeError('trace must contain exactly one expected question per answer')
+    checkAnswer(question, event.answer)
+    if (event.answer.status === 'answered') {
+      if (question.id === 'scope-expansion') {
+        if (event.answer.value === 'accept') {
+          answers[`scope-added:${answers.includedWorkflows.length}`] = true
+          answers.includedWorkflows = [...answers.includedWorkflows, proposal.workflow]
+          deferred.delete(proposal.workflow)
+        }
+        else deferred.add(proposal.workflow)
+        proposal = null
+      } else {
+        if (question.id === 'exclusions' && event.answer.value.some(value => answers.includedWorkflows.includes(value)))
+          throw new TypeError('a workflow cannot be both included and excluded')
+        answers[question.id] = event.answer.value
+        if (question.id.startsWith('scope-criteria:'))
+          answers.acceptanceCriteria = [...answers.acceptanceCriteria, event.answer.value]
+      }
+    }
+  }
+  return { answers, proposal, deferred: [...deferred] }
+}
+
+function initializedState(interview, answers, deferred) {
+  const project = { schema: 'design-project.v1', projectId: interview.projectId,
+    sourceRevision: interview.sourceRevision, platforms: answers.platforms,
+    entry: answers.entry, tier: answers.tier, stage: 'intake', status: 'active',
+    versionContract: { version: answers.version, includedWorkflows: answers.includedWorkflows,
+      exclusions: answers.exclusions, acceptanceCriteria: answers.acceptanceCriteria,
+      evidenceWindow: answers.evidenceWindow, knownLimitations: [], blockingDefects: [],
+      deferredRefinements: deferred }, handoffs: [], gates: [] }
+  if (!validateProject(project)) throw new TypeError('initialized project violates slice 1 contract')
+  const workflows = project.versionContract.includedWorkflows
+  const requirements = DESIGN_ROLES.map(contract => ({
+    id: `checklist:${contract.role}`, stage: roleStages[contract.role], role: contract.role,
+    artifacts: [...contract.outputs], criterion: contract.rubric, stop: contract.stop,
+    workflows: [...workflows], status: 'pending' }))
+  for (const gate of DESIGN_GATES) {
+    const [stage, criterion] = gateComparisons[gate]
+    requirements.push({ id: `gate:${gate}`, stage, role: 'Design Manager',
+      artifacts: [`${gate} comparison`], criterion,
+      stop: 'Stop missing comparison evidence; initialization never passes a gate',
+      workflows: [...workflows], status: 'pending' })
+  }
+  const playbook = entryPlaybooks[answers.entry]
+  requirements.push({ id: `entry:${playbook.artifact}`, stage: 'define', role: 'Design Manager',
+    artifacts: [playbook.artifact], criterion: playbook.focus, stop: 'Stop omitted critical entry work',
+    workflows: [...workflows], status: 'pending' })
+  requirements.push({ id: 'proof:criterion-e2e', stage: 'implementation-verification', role: 'Implementation Verifier',
+    artifacts: ['criterion-to-entry-point map', 'exact-revision e2e action/assertion/result', 'independent stored-value readback'],
+    criterion: 'Every user-facing acceptance criterion requires exact-revision e2e behavioral evidence; unit/component or direct-driver-only receipts fail. Stored writes require independent readback; skipped paths never verify.',
+    stop: 'Stop missing criterion-bound e2e, stale revisions, skipped paths or missing stored-value readback',
+    workflows: [...workflows], status: 'pending' })
+  if (project.platforms.some(p => p === 'ios' || p === 'android')) requirements.push({
+    id: 'proof:mobile', stage: 'implementation-verification', role: 'Implementation Verifier',
+    artifacts: ['simulator/emulator VERIFY skill receipt', 'e2e mobile-engine receipt'],
+    criterion: 'Require simulator/emulator VERIFY skill and e2e mobile-engine user-path proofs on each declared mobile platform and exact revision. Qualification remains pending.',
+    stop: MOBILE_CAPABILITY_REQUIRED, workflows: [...workflows], status: 'pending' })
+  for (const tier of DESIGN_TIERS) {
+    const applicable = workflows.filter((_, index) => Math.max(tierRank(answers.tier),
+      tierRank(answers[`assurance:${index}`])) >= tierRank(tier))
+    if (!applicable.length) continue
+    for (const [id, stage, criterion] of tierCriteria[tier]) requirements.push({
+      id: `tier:${id}`, stage, role: 'Design Manager', artifacts: [id], criterion,
+      stop: 'Stop missing tier evidence or unsupported evidence claims', workflows: applicable, status: 'pending' })
+  }
+  return { project, requirements, inputs: Object.fromEntries(Object.entries(answers)
+    .filter(([id]) => ['intent', 'users', 'constraints'].includes(id) || id.startsWith('input:'))) }
+}
+
+export function startDesignInterview({ projectId, sourceRevision, signals }) {
+  return resumeDesignInterview({ schema: 'design-interview.v1', projectId, sourceRevision, trace: [],
+    ...(signals === undefined ? {} : { signals }) })
+}
+
+export function resumeDesignInterview(interview) {
+  const snapshot = structuredClone(interview)
+  const { answers, proposal, deferred } = replayInterview(snapshot)
+  const question = questionFor(snapshot, answers, proposal)
+  return { interview: snapshot, question: structuredClone(question),
+    ...(question ? { project: null, requirements: [], inputs: {} }
+      : structuredClone(initializedState(snapshot, answers, deferred))) }
+}
+
+export function answerDesignInterview(interview, response) {
+  if (!exactKeys(response, ['questionId', 'answer'])) throw new TypeError('submit one answer at a time')
+  const view = resumeDesignInterview(interview)
+  if (!view.question || response.questionId !== view.question.id) throw new TypeError('answer the pending question')
+  checkAnswer(view.question, response.answer)
+  view.interview.trace.push({ question: view.question, answer: structuredClone(response.answer) })
+  return resumeDesignInterview(view.interview)
+}
+
+/** Proposals never modify scope until their single pending question is answered. */
+export function proposeDesignScope(interview, proposal) {
+  const view = resumeDesignInterview(interview)
+  if (view.question) throw new TypeError('finish the pending interview before proposing scope')
+  view.interview.trace.push({ proposal: structuredClone(proposal) })
+  return resumeDesignInterview(view.interview)
+}
+
+/** Compares reported initialization with its replay; this is not design acceptance. */
+export function inspectDesignInitialization(value) {
+  try {
+    const expected = resumeDesignInterview(value?.interview)
+    if (!expected.project) return { status: 'fail', errors: ['interview is incomplete; answer the pending question'] }
+    if (!isDeepStrictEqual(value, expected)) return { status: 'fail',
+      errors: ['initialization differs from the interview: restore required work, explicit tier and approved scope'] }
+    return { status: 'pass', errors: [] }
+  } catch (error) {
+    return { status: 'fail', errors: [error.message] }
+  }
 }
