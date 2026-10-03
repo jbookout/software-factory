@@ -6,6 +6,11 @@ model, authenticate evidence, write a journal or authorize execution. The
 [plan](plan.md#ordered-slices-and-verification) defines later store, progress-view,
 worker and independent-review slices.
 
+The planned [layer-diagnosis follow-up](plan.md#entry-diagnosis-slice-2-follow-up)
+selects the lowest unsupported evidence/domain/need/strategy/model/flow/surface
+decision. The merged interface described here still initializes intake only;
+it does not yet accept layer assessments or diagnose those decisions.
+
 ## Interface
 
 ```text
