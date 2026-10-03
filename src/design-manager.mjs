@@ -503,7 +503,86 @@ function exactKeys(value, required, optional = []) {
     && Object.keys(value).every(key => [...required, ...optional].includes(key))
 }
 
-function questionFor(interview, answers, proposal = null) {
+export const DESIGN_LAYERS = Object.freeze(['evidence', 'domain', 'need', 'strategy', 'model', 'flow', 'surface'])
+const layerSupports = ['strong', 'partial', 'assumed', 'weak', 'not-started', 'N/A']
+const positiveRevision = value => Number.isSafeInteger(value) && value > 0
+function checkLayer(assessment) {
+  if (!exactKeys(assessment, ['layer', 'revision', 'decision', 'evidenceCriterion', 'criterionMet',
+    'artifacts', 'uncertainty', 'dependencies', 'support', 'notApplicableReason', 'question'])
+    || !DESIGN_LAYERS.includes(assessment.layer) || !positiveRevision(assessment.revision)
+    || !layerSupports.includes(assessment.support)
+    || ![assessment.decision, assessment.evidenceCriterion, assessment.uncertainty].every(text)
+    || typeof assessment.criterionMet !== 'boolean'
+    || !Array.isArray(assessment.artifacts) || !Array.from(assessment.artifacts).every(a => validateArtifact(a))
+    || !Array.isArray(assessment.dependencies) || !Array.from(assessment.dependencies).every(d =>
+      exactKeys(d, ['layer', 'revision']) && positiveRevision(d.revision)
+      && DESIGN_LAYERS.indexOf(d.layer) >= 0
+      && DESIGN_LAYERS.indexOf(d.layer) < DESIGN_LAYERS.indexOf(assessment.layer))
+    || new Set(assessment.dependencies.map(d => d.layer)).size !== assessment.dependencies.length)
+    throw new TypeError('invalid layer assessment or dependency')
+  if (assessment.support === 'N/A') {
+    if (!text(assessment.notApplicableReason) || assessment.dependencies.length
+      || assessment.criterionMet || assessment.question !== null)
+      throw new TypeError('N/A requires an explicit no-dependent applicability reason')
+  } else {
+    if (assessment.notApplicableReason !== null) throw new TypeError('applicable layer cannot claim an N/A reason')
+    if (assessment.support === 'strong') {
+      if (!assessment.criterionMet || !assessment.artifacts.length || assessment.question !== null)
+        throw new TypeError('strong layer requires artifacts and a met evidence criterion')
+    } else if (!exactKeys(assessment.question, ['id', 'prompt']) || !text(assessment.question.id)
+      || !text(assessment.question.prompt) || assessment.question.prompt.split('?').length !== 2)
+      throw new TypeError('unsupported layer requires exactly one unresolved question')
+  }
+}
+
+function checkLayerSet(assessments) {
+  if (!Array.isArray(assessments) || assessments.length !== DESIGN_LAYERS.length)
+    throw new TypeError('assess every design layer in dependency order')
+  for (const [index, layer] of DESIGN_LAYERS.entries()) {
+    const assessment = assessments[index]
+    checkLayer(assessment)
+    if (assessment.layer !== layer) throw new TypeError('assess every design layer in dependency order')
+    if (assessment.support === 'N/A') continue
+    for (const dependency of assessment.dependencies) {
+      const target = assessments.find(a => a.layer === dependency.layer)
+      if (target.support === 'N/A') throw new TypeError('N/A cannot have an in-scope dependent decision')
+    }
+  }
+}
+
+// Preserve supplied assessments; derive invalidation from revisions and transitive support.
+function layerDiagnosis(assessments) {
+  if (!assessments) return null
+  const invalidatedLayers = []
+  for (const assessment of assessments) {
+    if (assessment.support === 'N/A') continue
+    if (assessment.dependencies.some(d => {
+      const target = assessments.find(a => a.layer === d.layer)
+      return target.revision !== d.revision || target.support !== 'strong' || invalidatedLayers.includes(d.layer)
+    })) invalidatedLayers.push(assessment.layer)
+  }
+  return { assessments, invalidatedLayers,
+    pendingLayer: assessments.find(a => a.support !== 'N/A'
+      && (a.support !== 'strong' || invalidatedLayers.includes(a.layer)))?.layer ?? null }
+}
+
+function reviseLayer(assessments, assessment) {
+  if (!assessments) throw new TypeError('assess all layers before reassessment')
+  checkLayer(assessment)
+  const current = assessments.find(a => a.layer === assessment.layer)
+  if (assessment.revision !== current.revision + 1) throw new TypeError('reassessment requires the next layer revision')
+  const revised = assessments.map(a => a.layer === assessment.layer ? assessment : a)
+  checkLayerSet(revised)
+  for (const dependency of assessment.dependencies) {
+    if (dependency.revision !== revised.find(a => a.layer === dependency.layer).revision)
+      throw new TypeError('stale dependency assessment: reread the current layer revision')
+  }
+  if (assessment.support === 'strong' && layerDiagnosis(revised).invalidatedLayers.includes(assessment.layer))
+    throw new TypeError('strong assessment cannot depend on unsupported decisions')
+  return revised
+}
+
+function questionFor(interview, answers, proposal = null, assessments = null) {
   const make = (id, prompt, choices) => ({ id,
     prompt: `${interview.projectId}: ${prompt}`, ...(choices ? { choices } : {}) })
   if (!answers.entry) return make('entry', 'Which design entry path applies?', DESIGN_ENTRIES)
@@ -518,13 +597,10 @@ function questionFor(interview, answers, proposal = null) {
       return question
     }
   }
-  for (const id of entryPlaybooks[answers.entry].inputs) {
-    if (!answers[`input:${id}`]) return make(`input:${id}`, `Which supplied artifact contains the ${id.replaceAll('-', ' ')}?`)
-  }
   if (proposal) return { ...make('scope-expansion', 'Do you accept this scope expansion?', ['accept', 'decline']),
     expansion: { ...proposal, before: answers.includedWorkflows,
       after: [...answers.includedWorkflows, proposal.workflow] } }
-  for (const [index, workflow] of answers.includedWorkflows.entries()) {
+  const workflowQuestion = (index, workflow) => {
     if (answers[`scope-added:${index}`] && !answers[`scope-criteria:${index}`])
       return make(`scope-criteria:${index}`, `What observable criterion decides acceptance of workflow “${workflow}”?`)
     if (!answers[`assurance:${index}`]) return { ...make(`assurance:${index}`,
@@ -532,6 +608,31 @@ function questionFor(interview, answers, proposal = null) {
         ...choice, scopeImpact: choice.included.filter(criterion => !criteriaFor(answers.tier).some(([, , text]) => text === criterion))
       }))),
     recommendation: answers.risk === 'bounded' ? answers.tier : 'high-assurance' }
+    return null
+  }
+  // Scope authorization stays separate; assess the newly bounded work afterward.
+  for (const [index, workflow] of answers.includedWorkflows.entries()) {
+    const question = answers[`scope-added:${index}`] && workflowQuestion(index, workflow)
+    if (question) return question
+  }
+  if (!assessments) return make('layer-assessments', 'Which supplied assessments cover all seven design layers?')
+  const diagnosis = layerDiagnosis(assessments)
+  if (diagnosis.pendingLayer) {
+    const assessment = assessments.find(a => a.layer === diagnosis.pendingLayer)
+    const invalidated = diagnosis.invalidatedLayers.includes(assessment.layer)
+    const uncertainty = invalidated ? `Dependency evidence changed or remains unsupported for ${assessment.layer}: ${assessment.evidenceCriterion}`
+      : assessment.uncertainty
+    const pending = invalidated ? { id: 'reassess', prompt: `Which evidence reassesses the ${assessment.layer} decision against its current dependencies?` }
+      : assessment.question
+    return { ...make(`layer:${assessment.layer}:${assessment.revision}:${pending.id}`, pending.prompt),
+      layer: assessment.layer, uncertainty }
+  }
+  for (const id of entryPlaybooks[answers.entry].inputs) {
+    if (!answers[`input:${id}`]) return make(`input:${id}`, `Which supplied artifact contains the ${id.replaceAll('-', ' ')}?`)
+  }
+  for (const [index, workflow] of answers.includedWorkflows.entries()) {
+    const question = workflowQuestion(index, workflow)
+    if (question) return question
   }
   return null
 }
@@ -561,6 +662,14 @@ function checkAnswer(question, answer) {
     throw new TypeError('new workflow requires an observable acceptance criterion')
   if (question.id.startsWith('input:') && !validateArtifact(answer.value))
     throw new TypeError('supplied input must be an ArtifactRef')
+  if (question.id === 'layer-assessments') {
+    checkLayerSet(answer.value)
+    if (answer.value.some(a => a.dependencies.some(d => d.revision !== answer.value.find(t => t.layer === d.layer).revision)))
+      throw new TypeError('stale dependency assessment')
+  }
+  if (question.layer && (!exactKeys(answer.value, ['response', 'assessment']) || !text(answer.value.response)
+    || answer.value.assessment?.layer !== question.layer))
+    throw new TypeError('one response and reassessment of the pending layer required')
 }
 
 function replayInterview(interview) {
@@ -578,9 +687,17 @@ function replayInterview(interview) {
   }
   const answers = {}
   let proposal = null
+  let assessments = null
+  let priorAssessments = null
   const deferred = new Set()
   for (const event of interview.trace) {
-    const question = questionFor(interview, answers, proposal)
+    const question = questionFor(interview, answers, proposal, assessments)
+    if (exactKeys(event, ['assessment'])) {
+      if (question?.layer === event.assessment?.layer && ['strong', 'N/A'].includes(event.assessment?.support))
+        throw new TypeError('record one answer before resolving the pending layer')
+      assessments = reviseLayer(assessments, event.assessment)
+      continue
+    }
     if (exactKeys(event, ['proposal'])) {
       if (question || !exactKeys(event.proposal, ['workflow', 'reason'])
         || !text(event.proposal.workflow) || !text(event.proposal.reason)
@@ -594,8 +711,16 @@ function replayInterview(interview) {
       throw new TypeError('trace must contain exactly one expected question per answer')
     checkAnswer(question, event.answer)
     if (event.answer.status === 'answered') {
-      if (question.id === 'scope-expansion') {
+      if (question.id === 'layer-assessments') {
+        if (priorAssessments && event.answer.value.some((a, index) => a.revision !== priorAssessments[index].revision + 1))
+          throw new TypeError('expanded scope requires the next revision of every layer')
+        assessments = event.answer.value
+      }
+      else if (question.layer) assessments = reviseLayer(assessments, event.answer.value.assessment)
+      else if (question.id === 'scope-expansion') {
         if (event.answer.value === 'accept') {
+          priorAssessments = assessments
+          assessments = null
           answers[`scope-added:${answers.includedWorkflows.length}`] = true
           answers.includedWorkflows = [...answers.includedWorkflows, proposal.workflow]
           deferred.delete(proposal.workflow)
@@ -611,7 +736,7 @@ function replayInterview(interview) {
       }
     }
   }
-  return { answers, proposal, deferred: [...deferred] }
+  return { answers, proposal, assessments, deferred: [...deferred] }
 }
 
 function initializedState(interview, answers, deferred) {
@@ -668,9 +793,10 @@ export function startDesignInterview({ projectId, sourceRevision, signals }) {
 
 export function resumeDesignInterview(interview) {
   const snapshot = structuredClone(interview)
-  const { answers, proposal, deferred } = replayInterview(snapshot)
-  const question = questionFor(snapshot, answers, proposal)
+  const { answers, proposal, assessments, deferred } = replayInterview(snapshot)
+  const question = questionFor(snapshot, answers, proposal, assessments)
   return { interview: snapshot, question: structuredClone(question),
+    diagnosis: structuredClone(layerDiagnosis(assessments)),
     ...(question ? { project: null, requirements: [], inputs: {} }
       : structuredClone(initializedState(snapshot, answers, deferred))) }
 }
@@ -681,6 +807,13 @@ export function answerDesignInterview(interview, response) {
   if (!view.question || response.questionId !== view.question.id) throw new TypeError('answer the pending question')
   checkAnswer(view.question, response.answer)
   view.interview.trace.push({ question: view.question, answer: structuredClone(response.answer) })
+  return resumeDesignInterview(view.interview)
+}
+
+/** Supplied new evidence revises one layer and invalidates dependent decisions. */
+export function reassessDesignLayer(interview, assessment) {
+  const view = resumeDesignInterview(interview)
+  view.interview.trace.push({ assessment: structuredClone(assessment) })
   return resumeDesignInterview(view.interview)
 }
 

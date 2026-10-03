@@ -87,15 +87,29 @@ export interface TierChoice {
   protectedRisks: string[]; scopeImpact?: string[];
 }
 export interface ScopeProposal { workflow: string; reason: string }
+export type DesignLayer = 'evidence' | 'domain' | 'need' | 'strategy' | 'model' | 'flow' | 'surface';
+export type LayerSupport = 'strong' | 'partial' | 'assumed' | 'weak' | 'not-started' | 'N/A';
+export const DESIGN_LAYERS: readonly DesignLayer[];
+export interface LayerAssessment {
+  layer: DesignLayer; revision: number; decision: string; evidenceCriterion: string;
+  criterionMet: boolean; artifacts: ArtifactRef[]; uncertainty: string;
+  dependencies: { layer: DesignLayer; revision: number }[]; support: LayerSupport;
+  notApplicableReason: string | null; question: { id: string; prompt: string } | null;
+}
+export interface LayerAnswer { response: string; assessment: LayerAssessment }
+export interface LayerDiagnosis {
+  assessments: LayerAssessment[]; invalidatedLayers: DesignLayer[]; pendingLayer: DesignLayer | null;
+}
 export interface InterviewQuestion {
   id: string; prompt: string; choices?: readonly string[] | TierChoice[];
   recommendation?: DesignTier; requiredPlatforms?: ProjectPlatform[];
   expansion?: ScopeProposal & { before: string[]; after: string[] };
+  layer?: DesignLayer; uncertainty?: string;
 }
-export type InterviewAnswer = { status: 'answered'; value: string | number | string[] | ArtifactRef }
+export type InterviewAnswer = { status: 'answered'; value: string | number | string[] | ArtifactRef | LayerAssessment[] | LayerAnswer }
   | { status: 'unknown' | 'declined' };
 export type InterviewTraceEvent = { question: InterviewQuestion; answer: InterviewAnswer }
-  | { proposal: ScopeProposal };
+  | { proposal: ScopeProposal } | { assessment: LayerAssessment };
 export interface DesignInterview {
   schema: 'design-interview.v1'; projectId: string; sourceRevision: string;
   trace: InterviewTraceEvent[]; signals?: RepositoryPlatformSignals;
@@ -106,6 +120,7 @@ export interface EntryRequirement {
 }
 export interface DesignInterviewView {
   interview: DesignInterview; question: InterviewQuestion | null;
+  diagnosis: LayerDiagnosis | null;
   project: DesignProject | null; requirements: EntryRequirement[];
   inputs: Record<string, string | ArtifactRef>;
 }
@@ -118,5 +133,6 @@ export function answerDesignInterview(interview: DesignInterview, response: {
   questionId: string; answer: InterviewAnswer;
 }): DesignInterviewView;
 export function proposeDesignScope(interview: DesignInterview, proposal: ScopeProposal): DesignInterviewView;
+export function reassessDesignLayer(interview: DesignInterview, assessment: LayerAssessment): DesignInterviewView;
 // Checks initialization consistency only, never design acceptance or authenticated provenance.
 export function inspectDesignInitialization(value: unknown): { status: 'pass' | 'fail'; errors: string[] };
