@@ -42,9 +42,14 @@ separate from execution authorization and the later independent-review gate.
 Run `npm run design-cloud:qualify -- --help` for the supported flags. The CLI uses
 the configured Define work allocation in Fast mode unless another mode is supplied.
 Pass `--settings` to select a private profile. `--state` selects a private receipt
-outside the public checkout; otherwise the CLI creates one under
+outside every Git checkout, in a user-owned mode-700 directory; otherwise the CLI
+creates one under
 `~/.local/share/software-factory/design-manager/qualifications/`. The receipt binds
-the settings selection and factory source revision. Exit 2 means unqualified;
+the settings selection and the executing factory checkout's source revision,
+regardless of the invoking directory. The execution module rejects unknown request
+fields, incomplete selections and source IDs other than exact SHA-1/SHA-256 IDs.
+It captures a detached frozen request before asynchronous work starts.
+Exit 2 means unqualified;
 exit 1 means invalid input or a harness failure. Offline acceptance runs in
 `npm test` and directly through the two `test/acceptance/` slice-3 test files.
 
@@ -58,8 +63,14 @@ identity. The CLI cannot attest environment ownership from an ID. No environment
 is invented or selected from an unrelated task. No diff is applied locally.
 
 Receipts include task ID, requested model/effort, probe exit/deadline/latency,
-observations, checked synthetic result bytes and explicit missing facts. Task-list
-titles/bodies are omitted. Requested config is never reported as the model/effort
+observations, checked synthetic result bytes and explicit missing facts. Raw CLI
+diagnostics and task-list titles/bodies are omitted. Only allowlisted observations
+and a validated CLI version are retained. Result checks require an unambiguous
+leading READY status and a complete new regular-file unified diff for the sum
+artifact. Reconstructed bytes retain final-newline semantics and bind the artifact
+digest. Modifications, symlinks, additional files and unsupported diff shapes are
+refused; the CLI supplies no base file for reconstruction. Requested config is
+never reported as the model/effort
 the cloud actually used. Local timeouts kill local subprocess groups only; remote
 timeout/cancellation remains unverified. Claude/Dot/Grok dependencies are visibly
 blocked until separately qualified. This build prohibits Claude execution.
@@ -70,7 +81,12 @@ laptop-off result. Those need a supported surface and live evidence before a
 future adapter can certify the plan's full row. Cloud task inspection after a
 caller restart is separate from steering/resuming the remote task.
 
-Receipts are mode 600, atomically replaced and checksummed. The unkeyed checksum
+Receipts use `codex-cloud-qualification.v2`, are mode 600, atomically replaced
+from exclusively created unique temporary files and checksummed. Receipt symlinks,
+hard links and directory substitution are refused. Legacy receipts remain audit
+artifacts and cannot be resumed by this version; inspect their cloud tasks before
+starting a new receipt. No legacy receipt is automatically replayed. The unkeyed
+checksum
 detects changes against the original digest; it authenticates neither observations
 nor the author. A lock refuses concurrent runs. An interrupted unknown submission
 never resubmits: inspect cloud tasks first. Reusing the same receipt reads the
@@ -85,8 +101,9 @@ Official [developer commands](https://learn.chatgpt.com/docs/developer-commands#
 document cloud submission and listing. Official
 [cloud environments](https://learn.chatgpt.com/docs/environments/cloud-environments)
 document web/desktop setup and laptop-asleep execution. These establish the
-documented surface, not this account's qualification. The installed CLI's actual
-help and live outputs are recorded privately by the harness.
+documented surface, not this account's qualification. The harness records
+command arguments, exit/deadline metadata and allowlisted observations privately;
+it never retains raw CLI help or diagnostic output.
 
 The harness is an opt-in pilot, not a merge/release/runtime prerequisite. Remove
 the two package exports, qualification npm script, CLI and adjacent modules/tests

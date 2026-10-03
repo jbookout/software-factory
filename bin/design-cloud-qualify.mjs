@@ -2,6 +2,7 @@
 import { loadDesignSettings, resolveDesignAssignment } from '../src/design-settings.mjs'
 import { qualifyCodexCloud } from '../src/codex-cloud-qualification.mjs'
 import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
 import { execFileSync } from 'node:child_process'
 
@@ -21,8 +22,11 @@ try {
   const work = binding.assignments.find(a => a.purpose === 'work')
   if (work.route !== 'codex-cloud' || work.provider !== 'codex' || work.availability !== 'available') throw new Error('configured Define worker is not available on codex-cloud; no alternate provider will be selected')
   const stateFile = flags['--state'] ? resolve(flags['--state']) : join(homedir(), '.local/share/software-factory/design-manager/qualifications', `${Date.now()}.json`)
-  const sourceRevision = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
-  const receipt = await qualifyCodexCloud({ stateFile, cwd: process.cwd(), sourceRevision,
+  const factory = fileURLToPath(new URL('../', import.meta.url))
+  const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: factory, encoding: 'utf8' }).trim()
+  if (resolve(root) !== resolve(factory)) throw new Error('qualification script must execute from its factory checkout')
+  const sourceRevision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: factory, encoding: 'utf8' }).trim()
+  const receipt = await qualifyCodexCloud({ stateFile, cwd: factory, sourceRevision,
     model: work.model, effort: work.effort, settingsBinding: {
       userId: binding.userId, version: binding.version, settingsDigest: binding.settingsDigest,
       workerId: work.workerId, station: binding.station, mode: binding.mode

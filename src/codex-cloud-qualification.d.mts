@@ -1,6 +1,7 @@
+import type { DesignStation, ModelMode } from './design-manager.mjs'
 export interface QualificationCheck { status: 'passed' | 'blocked' | 'unsupported' | 'unverified'; reason: string }
 export interface SettingsBinding {
-  userId: string; version: number; settingsDigest: string; workerId: string; station: string; mode: string;
+  userId: string; version: number; settingsDigest: string; workerId: string; station: DesignStation; mode: ModelMode;
 }
 export interface CloudQualificationOptions {
   stateFile: string; sourceRevision: string; model: string; effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -9,7 +10,7 @@ export interface CloudQualificationOptions {
   environment?: { id: string; repository: 'jbookout/software-factory'; branch: string; factoryOnly: true } | null;
 }
 export interface CloudQualificationReceipt {
-  schema: 'codex-cloud-qualification.v1'; qualified: false; taskId: string | null;
+  schema: 'codex-cloud-qualification.v2'; qualified: false; taskId: string | null;
   phase: 'preflight' | 'submission-pending' | 'submitted' | 'finished'; startedAt: string;
   request: { sourceRevision: string; model: string; effort: string; sampleDigest: string; environment: CloudQualificationOptions['environment']; settingsBinding: SettingsBinding | null };
   requestDigest: string; receiptDigest: string; cliVersion?: string;
