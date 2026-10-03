@@ -3,8 +3,10 @@
 Joe-approved direction, 2026-10-01. TASK AE revised the plan after slice 1
 (PR 15) merged; TASK AI applied the stringsaeed stack post before slice 2.
 TASK AW applies Joe's 2026-10-02 design sources after slice 2 (PR 24) merged.
-This amendment changes the plan only, including an explicit slice-2 follow-up.
-Later slices and the follow-up remain planned; none is qualified by this text.
+TASK AW changed the plan only, including an explicit slice-2 follow-up.
+Slice 3 now has [settings and an offline-tested cloud qualification harness](settings-cloud.md).
+Its live account/background-runtime qualification remains incomplete. The other
+later slices and the follow-up remain planned; none is qualified by this text.
 
 ## Purpose and ownership
 

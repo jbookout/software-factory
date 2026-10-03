@@ -7,6 +7,14 @@
     "./design-manager": {
       "types": "./src/design-manager.d.mts",
       "import": "./src/design-manager.mjs"
+    },
+    "./codex-cloud-qualification": {
+      "types": "./src/codex-cloud-qualification.d.mts",
+      "import": "./src/codex-cloud-qualification.mjs"
+    },
+    "./design-settings": {
+      "types": "./src/design-settings.d.mts",
+      "import": "./src/design-settings.mjs"
     }
   },
   "engines": {
@@ -15,6 +23,7 @@
   "scripts": {
     "test": "node --test",
     "factory": "node ./bin/factory.mjs",
+    "design-cloud:qualify": "node ./bin/design-cloud-qualify.mjs",
     "model-room:evidence": "node ./bin/model-room-evidence.mjs"
   },
   "devDependencies": {
