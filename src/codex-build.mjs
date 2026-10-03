@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { spawn } from "node:child_process"
+import { runProcess } from "./process-runner.mjs"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -29,9 +29,15 @@ export function createCodexBuildPrompt(request) {
   ].join("\n\n")
 }
 
+export function createCodexExecArgs(route) {
+  if (!TOKEN.test(route?.model ?? "") || !TOKEN.test(route?.effort ?? ""))
+    throw new Error("invalid Codex model or effort")
+  return ["exec", "--ephemeral", "-m", route.model,
+    "-c", `model_reasoning_effort=${JSON.stringify(route.effort)}`]
+}
+
 export function createCodexBuildArgs(request, output) {
-  return ["exec", "--ephemeral", "-m", request.route.model,
-    "-c", `model_reasoning_effort=${JSON.stringify(request.route.effort)}`,
+  return [...createCodexExecArgs(request.route),
     "--approve-for-me", "--output-schema", SCHEMA,
     "--output-last-message", output, "-"]
 }
@@ -43,20 +49,13 @@ export async function runCodexBuild(request, { cwd = process.cwd(), codex = "cod
   const output = path.join(temp, "result.json")
   const args = createCodexBuildArgs(request, output)
   try {
-    await new Promise((resolve, reject) => {
-      const child = spawn(codex, args, { cwd, env: process.env, shell: false,
-        stdio: ["pipe", "ignore", "pipe"] })
-      let stderr = ""
-      const timer = setTimeout(() => child.kill("SIGTERM"), timeoutMs)
-      child.stderr.on("data", chunk => { if (stderr.length < 100_000) stderr += chunk })
-      child.on("error", reject)
-      child.on("close", code => {
-        clearTimeout(timer)
-        if (code === 0) resolve()
-        else reject(new Error(`Codex build failed (${code}): ${createHash("sha256").update(stderr).digest("hex")}`))
-      })
-      child.stdin.end(prompt)
-    })
+    let stderr = ""
+    const result = await runProcess([codex, ...args], { cwd, input: prompt, timeoutMs,
+      captureOutput: false, onOutput(chunk, stream) {
+        if (stream === "stderr" && stderr.length < 100_000) stderr += chunk
+      } })
+    if (result.code !== 0)
+      throw new Error(`Codex build failed (${result.code}): ${createHash("sha256").update(stderr).digest("hex")}`)
     return JSON.parse(await fs.readFile(output, "utf8"))
   } finally {
     await fs.rm(temp, { recursive: true, force: true })

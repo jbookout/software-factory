@@ -111,3 +111,13 @@ optional excerpts are omitted when Jev is unavailable or returns an invalid
 answer. Receipts record each choice and source digest, while the excerpt text
 stays only in the build request. This trims build context without treating Jev
 as an authority over required contracts or model qualification.
+
+## PR delivery
+
+The [PR delivery CLI and cutover note](docs/pr-delivery-cutover.md) port the
+review, repair, usage guard, worktree, and serial merge queue into tested Node
+modules. [One private configuration](config/pr-delivery.example.json) maps
+repositories to local checkouts/worktree roots and configures model, effort,
+holds, and limits. The delivery adapter uses the factory's `execute` seam;
+build and delivery share the shell-free Codex process runner. Offline CLI tests
+use temporary Git remotes and fake `gh`/`codex`, and run in `npm test`.
