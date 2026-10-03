@@ -27,6 +27,9 @@ platform `signals` from a product-owned runner. Each question names the project.
 Only the pending question ID can be answered. Unknown and declined answers are
 distinct trace events and leave the required question pending. No answer silently
 selects Lean or skips required intake. JSON round trips resume the same question.
+Shared fields validate against the canonical project-schema subschemas before an
+answer enters the trace. Intake lists and supplied signal arrays reject holes,
+so an accepted snapshot does not acquire invalid null items when serialized.
 
 ```js
 import { startDesignInterview, answerDesignInterview } from 'software-factory/design-manager'
@@ -82,11 +85,16 @@ All cumulative tier criteria become pending requirements. A workflow can select
 stronger assurance than its project. Its tier choice shows the additional work,
 and that work applies to that workflow; choosing a lower workflow tier cannot
 weaken the project tier. The selected project tier never changes silently.
+The one-question Grill protocol remains pending at Intake, where initialization
+starts. Optional upfront Grill does not leave mandatory pending work at an earlier
+lifecycle stage or certify completed design evidence.
 
 After completed intake, a scope proposal names one new workflow and its reason.
 The single pending scope question displays before/after scope. Acceptance requires
 a separate acceptance-criterion question and then the new workflow's assurance
 question. Decline retains scope and records the workflow as deferred refinement.
+Repeated declines produce one current deferral. Accepting a previously declined
+workflow removes its current deferral while the trace retains every decision.
 Excluded work requires a new explicitly bounded intake; it cannot be appended by
 an expansion proposal. This interface does not reopen a closed product version.
 

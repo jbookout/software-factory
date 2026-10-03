@@ -3,6 +3,10 @@ import assert from 'node:assert/strict'
 import * as manager from 'software-factory/design-manager'
 import { readFileSync } from 'node:fs'
 import Ajv2020 from 'ajv/dist/2020.js'
+import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const identity = { projectId: 'synthetic-task-web', sourceRevision: 'a'.repeat(40) }
 const schema = JSON.parse(readFileSync(new URL('../schemas/design-project.schema.json', import.meta.url)))
@@ -50,6 +54,138 @@ function complete(app, entry, tier) {
   assert.equal(view.question, null, 'interview must finish')
   return view
 }
+
+const intakeValues = { entry: 'new-product', risk: 'bounded', tier: 'lean', platforms: ['web'],
+  intent: apps[0].criteria, users: 'Synthetic owner', constraints: 'Synthetic data only',
+  includedWorkflows: [apps[0].workflow], exclusions: [], acceptanceCriteria: [apps[0].criteria],
+  evidenceWindow: 'Two weeks of owner task use', version: 1 }
+function atQuestion(id) {
+  let view = manager.startDesignInterview(identity)
+  while (view.question.id !== id) view = answer(view, intakeValues[view.question.id])
+  return view
+}
+const jsonReplay = view => manager.resumeDesignInterview(JSON.parse(JSON.stringify(view.interview)))
+
+test('reconsidered scope derives unique current deferrals while retaining all historical decisions', async t => {
+  for (const decision of ['decline', 'accept']) await t.test(`decline then ${decision}`, () => {
+    const proposal = { workflow: 'Archive', reason: 'Explicit owner request' }
+    let view = answer(manager.proposeDesignScope(complete(apps[0], 'new-product', 'lean').interview, proposal), 'decline')
+    view = answer(manager.proposeDesignScope(view.interview, proposal), decision)
+    if (decision === 'accept') {
+      view = answer(view, 'Archived tasks remain retrievable')
+      view = answer(view, 'lean')
+    }
+    assert.deepEqual(view.project.versionContract.deferredRefinements, decision === 'accept' ? [] : ['Archive'])
+    assert.equal(view.project.versionContract.includedWorkflows.includes('Archive'), decision === 'accept')
+    assert.deepEqual(view.interview.trace.filter(e => e.question?.id === 'scope-expansion')
+      .map(e => e.answer.value), ['decline', decision])
+    assert.deepEqual(jsonReplay(view), view)
+    assert.equal(manager.inspectDesignInitialization(jsonReplay(view)).status, 'pass')
+    const contradicted = structuredClone(view)
+    contradicted.project.versionContract.deferredRefinements = ['Archive', 'Archive']
+    assert.equal(manager.inspectDesignInitialization(contradicted).status, 'fail')
+  })
+})
+
+test('sparse intake string lists reject immediately and after JSON serialization', async t => {
+  for (const id of ['platforms', 'includedWorkflows', 'exclusions', 'acceptanceCriteria'])
+    await t.test(id, () => {
+      const view = atQuestion(id)
+      const partial = [...intakeValues[id]]
+      partial.length += 1
+      for (const sparse of [new Array(1), partial, [...partial]]) {
+        // Spread materializes holes as undefined; both partial forms must reject.
+        assert.throws(() => answer(view, sparse), /invalid list/)
+        assert.throws(() => answer(view, JSON.parse(JSON.stringify(sparse))), /invalid list/)
+      }
+      assert.deepEqual(jsonReplay(answer(view, intakeValues[id])), answer(view, intakeValues[id]))
+    })
+})
+
+test('sparse supplied signal arrays reject immediately and after JSON serialization', async t => {
+  for (const key of ['dependencies', 'paths', 'appJsonPlatforms']) await t.test(key, () => {
+    const signals = { dependencies: [], paths: [], [key]: new Array(1) }
+    assert.throws(() => manager.startDesignInterview({ ...identity, signals }))
+    assert.throws(() => manager.startDesignInterview({ ...identity, signals: JSON.parse(JSON.stringify(signals)) }))
+    const valid = manager.startDesignInterview({ ...identity,
+      signals: { dependencies: [], paths: [], appJsonPlatforms: ['web'] } })
+    assert.deepEqual(jsonReplay(valid), valid)
+  })
+})
+
+test('every mandatory pending requirement is reachable through the initialized forward lifecycle', () => {
+  for (const entry of manager.DESIGN_ENTRIES) for (const tier of manager.DESIGN_TIERS) {
+    const view = jsonReplay(complete(apps[0], entry, tier))
+    const reachable = new Set([view.project.stage])
+    let stage = view.project.stage
+    while (manager.nextDesignStage(stage)) {
+      stage = manager.advanceDesignStage(stage, manager.nextDesignStage(stage))
+      reachable.add(stage)
+    }
+    for (const requirement of view.requirements) {
+      assert.equal(requirement.status, 'pending', 'initialization claims no completed evidence')
+      assert.ok(reachable.has(requirement.stage), `${entry}/${tier}: ${requirement.id} stranded at ${requirement.stage}`)
+    }
+    assert.equal(manager.inspectDesignInitialization(view).status, 'pass')
+  }
+})
+
+test('public interview validation follows canonical subschema changes before accepting shared fields', async t => {
+  // A stricter canonical contract must affect the interview without a second edit to its validators.
+  const directory = await mkdtemp(join(tmpdir(), 'design-schema-parity-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  await mkdir(join(directory, 'src'))
+  await mkdir(join(directory, 'schemas'))
+  await symlink(new URL('../node_modules', import.meta.url), join(directory, 'node_modules'), 'dir')
+  await copyFile(new URL('../src/design-manager.mjs', import.meta.url), join(directory, 'src/design-manager.mjs'))
+  const canonical = structuredClone(schema)
+  canonical.properties.projectId.minLength = 32
+  canonical.properties.sourceRevision.pattern = '^c{40}$'
+  canonical.properties.platforms.items.enum = ['web', 'desktop']
+  const contract = canonical.$defs.versionContract.properties
+  contract.version.minimum = 2
+  contract.includedWorkflows.minItems = 2
+  contract.exclusions.maxItems = 0
+  contract.acceptanceCriteria.minItems = 2
+  contract.evidenceWindow.minLength = 30
+  canonical.$defs.artifact.properties.ref.pattern = '^canonical:'
+  canonical.$defs.artifact.properties.digest.const = `sha256:${'c'.repeat(64)}`
+  await writeFile(join(directory, 'schemas/design-project.schema.json'), JSON.stringify(canonical))
+  const isolated = await import(pathToFileURL(join(directory, 'src/design-manager.mjs')).href)
+  const ajv = new Ajv2020({ strict: true }).addSchema(canonical)
+  const validIdentity = { projectId: 'synthetic-canonical-contract-parity', sourceRevision: 'c'.repeat(40) }
+  const validArtifact = { ref: 'canonical:built-candidate', digest: `sha256:${'c'.repeat(64)}` }
+  const values = { ...intakeValues, entry: 'audit', includedWorkflows: ['Create', 'Archive'],
+    acceptanceCriteria: ['Created task persists', 'Archived task persists'],
+    evidenceWindow: 'Thirty days of synthetic owner task testing', version: 2 }
+  const respond = (view, value) => isolated.answerDesignInterview(view.interview,
+    { questionId: view.question.id, answer: { status: 'answered', value } })
+  for (const field of ['projectId', 'sourceRevision']) await t.test(field, () => {
+    const validate = ajv.compile({ $ref: `${canonical.$id}#/properties/${field}` })
+    assert.equal(validate(identity[field]), false)
+    assert.throws(() => isolated.startDesignInterview({ ...validIdentity, [field]: identity[field] }))
+    const view = isolated.startDesignInterview(validIdentity)
+    assert.deepEqual(isolated.resumeDesignInterview(JSON.parse(JSON.stringify(view.interview))), view)
+  })
+  let view = isolated.startDesignInterview(validIdentity)
+  while (view.question) {
+    const id = view.question.id
+    const invalid = { platforms: ['ios'], version: 1, includedWorkflows: ['Create'],
+      exclusions: ['Sharing'], acceptanceCriteria: ['Created task persists'], evidenceWindow: 'Two weeks',
+      'input:built-candidate': artifact('built-candidate') }
+    if (Object.hasOwn(invalid, id)) await t.test(id, () => {
+      const pointer = id.startsWith('input:') ? '$defs/artifact' : id === 'platforms'
+        ? 'properties/platforms' : `$defs/versionContract/properties/${id}`
+      const validate = ajv.compile({ $ref: `${canonical.$id}#/${pointer}` })
+      assert.equal(validate(invalid[id]), false)
+      assert.throws(() => respond(view, invalid[id]), `canonical ${id} constraint must reject immediately`)
+    })
+    view = respond(view, id.startsWith('input:') ? validArtifact
+      : id.startsWith('assurance:') ? 'lean' : values[id])
+    assert.deepEqual(isolated.resumeDesignInterview(JSON.parse(JSON.stringify(view.interview))), view)
+  }
+  assert.equal(isolated.inspectDesignInitialization(view).status, 'pass')
+})
 
 test('entry interview asks one question, records one answer and resumes without a tier default', () => {
   const initial = manager.startDesignInterview(identity)

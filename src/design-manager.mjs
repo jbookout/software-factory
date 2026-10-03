@@ -4,9 +4,21 @@ import Ajv2020 from 'ajv/dist/2020.js'
 import { isDeepStrictEqual } from 'node:util'
 
 const projectSchema = JSON.parse(readFileSync(new URL('../schemas/design-project.schema.json', import.meta.url)))
-const validateEvidence = new Ajv2020({ strict: true }).addSchema(projectSchema)
-  .compile({ $ref: `${projectSchema.$id}#/$defs/evidence` })
-const validateProject = new Ajv2020({ strict: true }).compile(projectSchema)
+const projectAjv = new Ajv2020({ strict: true }).addSchema(projectSchema)
+const schemaRef = pointer => ({ $ref: `${projectSchema.$id}#/${pointer}` })
+const validateEvidence = projectAjv.compile(schemaRef('$defs/evidence'))
+const validateProject = projectAjv.getSchema(projectSchema.$id)
+const validateArtifact = projectAjv.compile(schemaRef('$defs/artifact'))
+const validateProjectId = projectAjv.compile(schemaRef('properties/projectId'))
+const validateSourceRevision = projectAjv.compile(schemaRef('properties/sourceRevision'))
+const validateSignalStrings = projectAjv.compile({ type: 'array',
+  items: schemaRef('$defs/versionContract/properties/includedWorkflows/items') })
+const sharedAnswerValidators = Object.fromEntries([
+  ...['entry', 'tier', 'platforms'].map(id => [id, `properties/${id}`]),
+  ...['version', 'includedWorkflows', 'exclusions', 'acceptanceCriteria', 'evidenceWindow']
+    .map(id => [id, `$defs/versionContract/properties/${id}`])
+].map(([id, pointer]) => [id, projectAjv.compile(schemaRef(pointer))]))
+const validateScopeCriterion = projectAjv.compile(schemaRef('$defs/versionContract/properties/acceptanceCriteria/items'))
 
 export const DESIGN_STAGES = Object.freeze([
   "grill",
@@ -357,9 +369,7 @@ export function stationForDesignGate(gate) {
 
 /** Supplied repository signals only; invalid app.json platforms throw instead of clearing ambiguity. */
 export function inspectProjectPlatforms(platforms, { dependencies, paths, appJsonPlatforms, usesSwiftUI }) {
-  if (appJsonPlatforms !== undefined && (!Array.isArray(appJsonPlatforms)
-    || appJsonPlatforms.length === 0
-    || !appJsonPlatforms.every(platform => PROJECT_PLATFORMS.includes(platform))))
+  if (appJsonPlatforms !== undefined && !sharedAnswerValidators.platforms(appJsonPlatforms))
     throw new TypeError('appJsonPlatforms must be a non-empty array of known project platforms')
   const mobileDependency = dependencies.some(name => name === 'react-native' || name === 'expo')
   const native = platform => paths.some(path => path === `${platform}/` || path.startsWith(`${platform}/`))
@@ -415,7 +425,7 @@ const entryPlaybooks = {
 }
 const tierCriteria = {
   lean: [
-    ['grill', 'grill', 'Persist one answer before selecting the next question.'],
+    ['grill', 'intake', 'Persist one answer before selecting the next question.'],
     ['workflow', 'define', 'Map normal, refusal, recovery, handoff and concurrency paths.'],
     ['concepts', 'explore', 'Compare one or two bounded concepts against the job.'],
     ['owner-testing', 'test', 'Record owner task testing and its limits; simulated critique is not user observation.'],
@@ -534,45 +544,41 @@ function checkAnswer(question, answer) {
   if (answer.status !== 'answered') return
   if (question.choices && !question.choices.some(choice => (choice.value ?? choice) === answer.value))
     throw new TypeError(`invalid answer for ${question.id}`)
-  if (['intent', 'users', 'constraints', 'evidenceWindow'].includes(question.id) && !text(answer.value))
+  if (['intent', 'users', 'constraints'].includes(question.id) && !text(answer.value))
     throw new TypeError(`nonblank answer required for ${question.id}`)
+  const validateShared = sharedAnswerValidators[question.id]
+  if (validateShared && !validateShared(answer.value))
+    throw new TypeError(`${['platforms', 'includedWorkflows', 'exclusions', 'acceptanceCriteria'].includes(question.id)
+      ? 'invalid list' : 'invalid answer'} for ${question.id}`)
   if (['platforms', 'includedWorkflows', 'exclusions', 'acceptanceCriteria'].includes(question.id)) {
     const values = answer.value
-    if (!Array.isArray(values) || !values.every(text) || new Set(values).size !== values.length
-      || (question.id !== 'exclusions' && values.length === 0)
-      || (question.id === 'platforms' && !values.every(x => PROJECT_PLATFORMS.includes(x))))
+    if (new Set(values).size !== values.length)
       throw new TypeError(`invalid list for ${question.id}`)
     if (question.requiredPlatforms?.some(platform => !values.includes(platform)))
       throw new TypeError('platform mismatch: reconcile supplied mobile signals explicitly')
   }
-  if (question.id.startsWith('scope-criteria:') && !text(answer.value))
+  if (question.id.startsWith('scope-criteria:') && !validateScopeCriterion(answer.value))
     throw new TypeError('new workflow requires an observable acceptance criterion')
-  if (question.id === 'version' && (!Number.isInteger(answer.value) || answer.value < 1))
-    throw new TypeError('version must be a positive integer')
-  if (question.id.startsWith('input:') && (!exactKeys(answer.value, ['ref', 'digest'])
-    || !text(answer.value.ref) || typeof answer.value.digest !== 'string'
-    || !/^sha256:[a-f0-9]{64}$/.test(answer.value.digest)))
+  if (question.id.startsWith('input:') && !validateArtifact(answer.value))
     throw new TypeError('supplied input must be an ArtifactRef')
 }
 
 function replayInterview(interview) {
   if (!exactKeys(interview, ['schema', 'projectId', 'sourceRevision', 'trace'], ['signals'])
-    || interview.schema !== 'design-interview.v1' || !text(interview.projectId)
-    || typeof interview.sourceRevision !== 'string'
-    || !/^[a-f0-9]{40}$/.test(interview.sourceRevision) || !Array.isArray(interview.trace))
+    || interview.schema !== 'design-interview.v1' || !validateProjectId(interview.projectId)
+    || !validateSourceRevision(interview.sourceRevision) || !Array.isArray(interview.trace))
     throw new TypeError('invalid design interview')
   if (Object.hasOwn(interview, 'signals')) {
     const signals = interview.signals
     if (!exactKeys(signals, ['dependencies', 'paths'], ['appJsonPlatforms', 'usesSwiftUI'])
-      || !Array.isArray(signals.dependencies) || !signals.dependencies.every(text)
-      || !Array.isArray(signals.paths) || !signals.paths.every(text)
+      || !validateSignalStrings(signals.dependencies) || !validateSignalStrings(signals.paths)
       || (signals.usesSwiftUI !== undefined && typeof signals.usesSwiftUI !== 'boolean'))
       throw new TypeError('invalid supplied platform signals')
     inspectProjectPlatforms([], signals)
   }
   const answers = {}
   let proposal = null
-  const deferred = []
+  const deferred = new Set()
   for (const event of interview.trace) {
     const question = questionFor(interview, answers, proposal)
     if (exactKeys(event, ['proposal'])) {
@@ -592,8 +598,9 @@ function replayInterview(interview) {
         if (event.answer.value === 'accept') {
           answers[`scope-added:${answers.includedWorkflows.length}`] = true
           answers.includedWorkflows = [...answers.includedWorkflows, proposal.workflow]
+          deferred.delete(proposal.workflow)
         }
-        else deferred.push(proposal.workflow)
+        else deferred.add(proposal.workflow)
         proposal = null
       } else {
         if (question.id === 'exclusions' && event.answer.value.some(value => answers.includedWorkflows.includes(value)))
@@ -604,7 +611,7 @@ function replayInterview(interview) {
       }
     }
   }
-  return { answers, proposal, deferred }
+  return { answers, proposal, deferred: [...deferred] }
 }
 
 function initializedState(interview, answers, deferred) {
