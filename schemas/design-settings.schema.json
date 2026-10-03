@@ -1,0 +1,228 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://software-factory.local/schemas/design-settings.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "design-settings.v1"
+    },
+    "userId": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "workers": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/worker"
+      }
+    },
+    "stations": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "research": {
+          "$ref": "#/$defs/stationAllocations"
+        },
+        "define": {
+          "$ref": "#/$defs/stationAllocations"
+        },
+        "design": {
+          "$ref": "#/$defs/stationAllocations"
+        },
+        "prove": {
+          "$ref": "#/$defs/stationAllocations"
+        },
+        "ship": {
+          "$ref": "#/$defs/stationAllocations"
+        }
+      },
+      "required": [
+        "research",
+        "define",
+        "design",
+        "prove",
+        "ship"
+      ]
+    },
+    "modes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fast": {
+          "$ref": "#/$defs/modeChoices"
+        },
+        "thorough": {
+          "$ref": "#/$defs/modeChoices"
+        },
+        "specialist": {
+          "$ref": "#/$defs/modeChoices"
+        },
+        "best-available": {
+          "$ref": "#/$defs/modeChoices"
+        },
+        "efficient-eco": {
+          "$ref": "#/$defs/modeChoices"
+        }
+      },
+      "required": [
+        "fast",
+        "thorough",
+        "specialist",
+        "best-available",
+        "efficient-eco"
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "userId",
+    "version",
+    "workers",
+    "stations",
+    "modes"
+  ],
+  "$defs": {
+    "model": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^\\S(?:[^\\r\\n]*\\S)?$"
+    },
+    "effort": {
+      "enum": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra"
+      ]
+    },
+    "route": {
+      "enum": [
+        "codex-cloud",
+        "claude-subscription",
+        "dot-chatgpt",
+        "grok-research"
+      ]
+    },
+    "choice": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "$ref": "#/$defs/model"
+        },
+        "effort": {
+          "$ref": "#/$defs/effort"
+        }
+      },
+      "required": [
+        "model",
+        "effort"
+      ]
+    },
+    "worker": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "enum": [
+            "codex",
+            "claude",
+            "dot",
+            "grok"
+          ]
+        },
+        "model": {
+          "$ref": "#/$defs/model"
+        },
+        "effort": {
+          "$ref": "#/$defs/effort"
+        },
+        "concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
+        "availability": {
+          "enum": [
+            "available",
+            "unavailable"
+          ]
+        },
+        "allowedRoutes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/route"
+          }
+        }
+      },
+      "required": [
+        "provider",
+        "model",
+        "effort",
+        "concurrency",
+        "availability",
+        "allowedRoutes"
+      ]
+    },
+    "allocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workerId": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$"
+        },
+        "purpose": {
+          "enum": [
+            "work",
+            "judgment",
+            "review",
+            "x-research"
+          ]
+        },
+        "route": {
+          "$ref": "#/$defs/route"
+        }
+      },
+      "required": [
+        "workerId",
+        "purpose",
+        "route"
+      ]
+    },
+    "stationAllocations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/allocation"
+      }
+    },
+    "modeChoices": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/choice"
+      }
+    }
+  }
+}

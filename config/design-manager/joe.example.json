@@ -1,0 +1,151 @@
+{
+  "schema": "design-settings.v1",
+  "userId": "joe",
+  "version": 1,
+  "workers": {
+    "codex": {
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "concurrency": 1,
+      "availability": "available",
+      "allowedRoutes": [
+        "codex-cloud"
+      ]
+    },
+    "claude": {
+      "provider": "claude",
+      "model": "account-selection-required",
+      "effort": "medium",
+      "concurrency": 1,
+      "availability": "available",
+      "allowedRoutes": [
+        "claude-subscription"
+      ]
+    },
+    "dot": {
+      "provider": "dot",
+      "model": "account-selection-required",
+      "effort": "medium",
+      "concurrency": 1,
+      "availability": "available",
+      "allowedRoutes": [
+        "dot-chatgpt"
+      ]
+    },
+    "grok": {
+      "provider": "grok",
+      "model": "account-selection-required",
+      "effort": "medium",
+      "concurrency": 1,
+      "availability": "available",
+      "allowedRoutes": [
+        "grok-research"
+      ]
+    }
+  },
+  "stations": {
+    "research": [
+      {
+        "workerId": "dot",
+        "purpose": "work",
+        "route": "dot-chatgpt"
+      },
+      {
+        "workerId": "grok",
+        "purpose": "x-research",
+        "route": "grok-research"
+      }
+    ],
+    "define": [
+      {
+        "workerId": "codex",
+        "purpose": "work",
+        "route": "codex-cloud"
+      },
+      {
+        "workerId": "claude",
+        "purpose": "judgment",
+        "route": "claude-subscription"
+      }
+    ],
+    "design": [
+      {
+        "workerId": "codex",
+        "purpose": "work",
+        "route": "codex-cloud"
+      },
+      {
+        "workerId": "claude",
+        "purpose": "judgment",
+        "route": "claude-subscription"
+      }
+    ],
+    "prove": [
+      {
+        "workerId": "codex",
+        "purpose": "work",
+        "route": "codex-cloud"
+      },
+      {
+        "workerId": "codex",
+        "purpose": "review",
+        "route": "codex-cloud"
+      },
+      {
+        "workerId": "claude",
+        "purpose": "judgment",
+        "route": "claude-subscription"
+      }
+    ],
+    "ship": [
+      {
+        "workerId": "codex",
+        "purpose": "work",
+        "route": "codex-cloud"
+      },
+      {
+        "workerId": "codex",
+        "purpose": "review",
+        "route": "codex-cloud"
+      },
+      {
+        "workerId": "claude",
+        "purpose": "judgment",
+        "route": "claude-subscription"
+      }
+    ]
+  },
+  "modes": {
+    "fast": {
+      "codex": {
+        "model": "gpt-6.1-sol",
+        "effort": "low"
+      }
+    },
+    "thorough": {
+      "codex": {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      }
+    },
+    "specialist": {
+      "codex": {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      }
+    },
+    "best-available": {
+      "codex": {
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      }
+    },
+    "efficient-eco": {
+      "codex": {
+        "model": "gpt-6.1-sol",
+        "effort": "low"
+      }
+    }
+  }
+}

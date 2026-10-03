@@ -46,6 +46,11 @@ entry-specific artifact inputs, pending required work and visible scope expansio
 Initialization is pure bookkeeping; durable journals and execution remain later
 slices.
 
+[User settings and cloud qualification](docs/design-manager/settings-cloud.md)
+add editable station workers/modes, frozen version/digest bindings and a bounded
+synthetic CLI harness. Account and background-runtime qualification remain
+blocked until live lifecycle, usage and laptop-off evidence passes.
+
 ## Deterministic enforcement
 
 The factory treats agent prompts and skills as guidance, not architecture
