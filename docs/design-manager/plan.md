@@ -1,8 +1,10 @@
 # Design Manager implementation plan
 
 Joe-approved direction, 2026-10-01. TASK AE revised the plan after slice 1
-(PR 15) merged. TASK AI applies the stringsaeed stack post before slice 2.
-This amendment changes the plan only. Later slices remain planned.
+(PR 15) merged; TASK AI applied the stringsaeed stack post before slice 2.
+TASK AW applies Joe's 2026-10-02 design sources after slice 2 (PR 24) merged.
+This amendment changes the plan only, including an explicit slice-2 follow-up.
+Later slices and the follow-up remain planned; none is qualified by this text.
 
 ## Purpose and ownership
 
@@ -144,6 +146,40 @@ a time**. Persist each answer before choosing the next. Never batch questions
 or confirmations. Resume at the pending question and distinguish unknown from
 declined. Tier chips explain the recommendation without becoming a batch interview.
 
+### Entry diagnosis (slice 2 follow-up)
+
+Entry paths select applicable work, not an assumed design maturity. Diagnose in
+dependency order: **evidence → domain → need → strategy → model → flow → surface**.
+For each layer record its decision, supporting artifact refs, uncertainty,
+dependencies and support: strong / partial / assumed / weak / not-started / N/A.
+Strong means the named decision meets its declared evidence criterion; partial,
+assumed, weak and not-started are unsupported. N/A requires a reason showing
+that no in-scope decision depends on it. A confidence score alone proves nothing.
+
+All three steps are required, in order:
+
+1. Assess each layer using supplied evidence and explicit applicability reasons.
+2. Select the first unsupported applicable layer and its next unresolved question.
+3. Record one answer, then reassess dependencies before selecting another question.
+
+Evidence asks what happened and what contradicts the claim. Domain resolves terms,
+objects and authority. Need names an observable outcome without naming widgets.
+Strategy selects a bet and its falsifiable assumption. Model specifies objects,
+actions, ownership and allowed transitions. Flow includes destinations, refusal,
+recovery and work outside the app. Surface selects hierarchy, copy and expression
+against that foundation. These are cross-cutting diagnoses within the five stations,
+not new stages or permission to skip adjacent lifecycle transitions.
+
+Every next action names the uncertainty it resolves. Unknown/declined stays
+unresolved; resume preserves the pending question. New contradictory evidence
+invalidates dependent decisions, while retaining the prior decision and evidence.
+If every applicable layer is supported, return to the entry's pending work rather
+than inventing another interview. A surface request with an unsupported domain
+decision routes to that domain question first, without silently expanding scope.
+This follow-up will add supplied layer-assessment types and replay tests at the
+existing pure interview interface; the merged slice-2 intake does not diagnose
+layers today. Its existing one-question, tier, scope and resume rules remain binding.
+
 ## Contracts first
 
 The existing public import remains `software-factory` (`src/index.mjs`). The typed
@@ -221,6 +257,12 @@ function stationForDesignGate(gate: DesignGate): DesignStation;
 Slice 2's [entry playbooks and interview interface](entry-playbooks.md) initialize
 the same project schema at Intake with explicit tier, scope and pending work.
 They preserve the standard adjacent-stage path and confer no execution authority.
+The future criterion evidence, reference records and project design contract
+below are specifications for their owning slices, not additions to today's
+`VerificationProof`, project schema or public declarations. The current helpers
+check reported eligibility/initialization only. Slices 4/5 will version stored
+contracts and reject older incomplete receipts for acceptance; no compatibility
+path may promote today's receipt shape into the stronger proof contract.
 
 ### Station checklists: inputs, outputs, rubrics and stops
 
@@ -387,6 +429,41 @@ the user path is broken. Reject unit-only and direct-driver-only VERIFY receipts
 require the e2e assertion to fail on the broken build and pass on the repaired
 build. A `method` string is not behavioral evidence. Criterion-level acceptance
 is a slice-4/10 gate responsibility, not a claim made by the slice-1 helper.
+
+### Criterion evidence contract (slices 4 and 10)
+
+VERIFY is a set of criterion-level evidence records, never a compliance stamp.
+Before execution, assign each criterion a stable ID and freeze its expectation,
+blocking status, required evidence kind, applicable platforms and entry points.
+Every check records the criterion ID, fixture ID/revision/digest, actor and starting
+state, steps, expected result, observed result, assertion/repro artifact refs and
+outcome. Keep failed and blocked observations alongside passing ones. A missing
+required row stays pending; a blocked row cannot pass. An aggregate craft score
+cannot override a failed blocking criterion or an unresolved required row.
+
+Bind each record to project/version, accepted design-contract revision/digest,
+source commit, **immutable build artifact digest**, build configuration and fixture
+digests, platform/engine version and inspected target identity. A commit alone
+does not distinguish two builds with different bytes or configuration. Reviewer
+identity, fresh-context receipt and review evidence are separate from maker identity
+and self-critique. The core authenticates them and reads the bound bytes; supplied
+IDs/digests do not establish independence or correctness. For stored changes,
+retain the existing independent persistence readback requirement.
+
+Each check must demonstrate failure: supply at least one deliberately broken
+fixture with a known expected violation, run the same assertion/oracle on it and
+record detection, then repair the fixture and record success. Manual or judgment
+checks use a planted violation and independently documented expected finding;
+they are not relabelled deterministic e2e. A check that passes its broken fixture
+is disqualified. The frozen defect manifest prevents rewriting expectations to
+match the defect. Keep clean refusal/empty-state traps to expose false positives.
+
+Approval compares the candidate's full build identity and contract revision with
+every required proof record. Evidence for build A can **never approve build B**,
+even at the same source commit. A rebuild, configuration/fixture change or changed
+contract creates a new evaluation target and requires fresh candidate-bound proof.
+Old evidence remains historical/comparator evidence. Checks for unrelated criteria
+need no redesign, but their prior passing records cannot certify the new build.
 
 ## Prove: agentic UI evaluation (slice 4, reused in 9–10)
 
@@ -561,9 +638,11 @@ the accepted contract, exact built revision and live target, independently prove
 each change and reads the evidence. Reviewer is never the author; identity and
 fresh context are checked, not merely asserted in a manifest. All known fixes
 go in **one push**, followed by fresh exact-revision checks/verdict; new findings
-invalidate only the affected proof and restart bounded repair. Source:
+restart bounded repair of affected criteria. A changed build requires fresh
+candidate-bound proof as specified by the criterion evidence contract; retain
+prior evidence as history rather than reusing its approval. Source:
 [pstack verify-and-ship](https://github.com/cursor/plugins/blob/c47b12849e43f18d5c374c7069c744cc55b0ea00/pstack/docs/guide/06-verify-and-ship.md).
-Ship recommends readiness, never grants merge/deployment authority. For TASK AE,
+Ship recommends readiness, never grants merge/deployment authority. For TASK AW,
 one ordinary PR is delivered with green CI; this session never merges it.
 
 ## Prove maintenance (slices 9–10)
@@ -599,6 +678,124 @@ handoff in the penultimate tool slice. No app-session automation is introduced.
 Access/login, extra cost, publication, destructive replacement and material
 direction changes retain their human boundary.
 
+### Reference evidence records (slices 5 and 8)
+
+Research references are structured journal records partitioned by project/version.
+Each has a stable ID, original source URL/author, source revision when available,
+source date and inspection/capture date, platform/viewport/state and artifact refs.
+Label evidence **still / recording / live / inspected-source / vendor-claim**;
+missing access remains explicitly unverified. Distinguish observed property from
+inference, and retain the user decision, borrowed property, proposed adaptation,
+mismatch, rejection test, reviewer outcome and license/reuse status. Link sources;
+copy code/assets only after reuse rights are verified. Generated concepts and
+reconstructed examples retain those labels, even when attractive.
+
+Evidence level limits the claim: stills establish appearance, recordings depict
+bounded transitions, operated live examples establish only exercised behavior,
+inspected source establishes implementation facts, vendor claims remain claims.
+None approves the target build. A pictured copy/save control proves no copy/save
+outcome. A blocked gallery or paid unseen prompt supplies no inspected mechanism.
+Record experiment → failed property → replacement rather than dropping rejected
+references. Restore must preserve these records and their artifact digests.
+
+Design selects a small task-relevant comparison set. Hold task, synthetic content,
+viewport and starting state constant; vary a named hierarchy, layout, density,
+interaction or expression hypothesis. Anchor feedback to build/variant and stable
+element identity, with observation, consequence and requested change. A hybrid
+winner must rerun the same tasks; its ingredients' scores cannot approve it.
+
+### Project design contract and state-first critique (slices 8–12)
+
+Each project owns one accepted, immutable design-contract revision with a digest,
+scope, decisions, provenance and explicit exceptions. It combines semantic tokens
+(roles, values and platform mappings), usage rules (meaning, permitted variants,
+responsive behavior and exclusions), component/state fixtures and accessibility
+criteria. A token value without its meaning or state rule is incomplete. A
+project's system does not become the factory's global theme. Order conflicts by
+task/approved system, truthful behavior/accessibility, chosen method, then recipe
+defaults; consequential exceptions retain the existing authority rules.
+
+Before code, enumerate the scoped state list: initial/intermediate/final,
+loading, empty, partial, stale, denied, failure, timeout, unknown outcome, conflict,
+cancellation and recovery, with explicit N/A reasons. Each action names its object,
+owner, allowed transition, destination and observable consequence. Include a
+motion/state contract for each transition: **trigger, source identity, states,
+authoritative completion event, interruption, reversal, focus and reduced motion**,
+plus timing/property ownership and teardown. The no-motion route preserves the
+same task and information. Animation completion never certifies persistence;
+unknown server outcomes require reconciliation rather than an assumed rollback.
+
+Slice 8 freezes this list and named review criteria before build readiness.
+Slice 9 renders the actual prototype and performs bounded self-critique before
+independent review. All four steps are required, in order:
+
+1. Render the identified candidate's relevant states, transitions and failure paths.
+2. Score named criteria with observations and artifact refs, including hard failures.
+3. Fix the three worst evidenced problems, or all remaining problems if fewer.
+4. Rerender affected states and repeat until every threshold and hard criterion passes.
+
+Criteria include task clarity, readability at target size, hierarchy, state truth,
+recovery, accessibility, system fidelity and motion continuity where applicable.
+Freeze anchored score descriptions and thresholds before rendering; craft scores
+use an 8/10 minimum with a described meaning, never round a borderline score up.
+No average hides a failed criterion. Keep each round's build identity, scores,
+three selected defects, fixes and new evidence in the journal. The existing
+two-failed-round repair limit still applies: reaching it stops for diagnosis and
+escalation rather than an unbounded “repeat until good.” Scores are simulated
+critique, not user evidence. The fresh reviewer receives contract, rubric,
+reference evidence and candidate without the maker's scores; it reruns checks
+and can fail a self-scored pass. Self-critique cannot advance Ship.
+
+For motion/video artifacts only, adapt the course's deterministic seek/draw method:
+seed variation, seek frames without timer dependence, compare repeat-render hashes,
+inspect a contact sheet/fast-action strip, target-size readability and loop seams.
+A continuous live app recording and a deterministic rendered film remain distinct.
+Use supplied product captures when depicting implemented UI; invented screens
+must be labelled concepts. Aspect-ratio exports preserve layout through explicit
+layout rules, not blind crops. Audio/beat criteria apply only when in scope.
+No video engine, mandatory motion library, subagent pipeline or marketing service
+is introduced by this plan.
+
+The **same revision/digest** feeds slice 11's Figma pilot, slice 12's optional
+Claude Design packet and slice 10's implementation review. Figma variables,
+components and state frames map to contract IDs; Claude receives that contract,
+state list, bounded reference packet and unresolved questions. Derived exports
+record their own digest and parent revision. Tool edits are proposals until
+accepted as a new revision; they cannot silently change the contract. A second
+screen/component round-trip checks computed values, usage, responsive behavior,
+states and motion against the accepted revision. Reading the same spec or exporting
+successfully does not establish compliance. Mismatched revisions block review.
+
+### Capability-aware adapter contract (slice 7)
+
+Keep ordinary MCP commands, authorization, gates and journal authoritative.
+Adapters negotiate and record host/version/transport/capabilities and qualify
+operations on the actual surface. Optional workspace/thread/file entry points,
+display modes, deep links, selected context, mentions, settings and typed forms
+translate core results. Missing support falls back to ordinary commands and
+one-question text/resource-ref input without losing answers, drafts or pending work.
+No capability declaration, installed manifest, read-only hint or host metadata
+grants access or proves runtime invocation.
+
+Selected evidence is a removable, revision-bound view of canonical records,
+not durable history or approval. Test clearing, remount, rapid selection, late
+responses, two-thread/project isolation, stale-version saves and unsubscribe/cleanup.
+Only permitted supplied artifacts are opened; opaque URIs are not filesystem paths.
+Registered-host forms require a separately qualified response-correlation,
+pause/resume/cancel/reconnect lifecycle; a legacy helper is not qualification.
+Adapter packages pin reviewed schemas and keep core validation identical for
+typed and suggested values, including unknown fields, omission and cancellation.
+
+With **every host-specific extension disabled**, ordinary MCP must still initialize
+a sample project, persist/resume one question, inspect supplied evidence, request
+review, read the verdict and project progress. Optional rich controls disappear;
+the core workflow and all authorization/gate results remain the same. Test this
+against both rich adapters, malformed/unsupported capabilities and denied access.
+Host theming applies to adapter containers, not an automatic project-theme rewrite.
+Publish/install qualification checks exact source and built bytes, uses those same
+checked artifacts without rebuilding, and proves fresh installation; publication
+still needs separate authority. No adapter code is implemented by TASK AW.
+
 ## Ordered slices and verification
 
 Each slice must pass on small sample apps before proceeding. Use a synthetic web
@@ -611,18 +808,37 @@ and Claude Design. Slices 4, 9 and 10 retain their requested numbers.
 | Slice | Deliverable | Artifact read / compared against | Failure condition |
 | --- | --- | --- | --- |
 | 1. Contracts (merged; AE extensions only) | lifecycle, tiers, checklist catalogs, handoffs/gates/version schema; stations, platforms, proof receipt and pure mobile precondition | actual public contract module/declarations/schema and sample fixtures against original catalogs, station/gate tables, malformed cases and baseline npm tests | renamed/lost rubric or stop, schema/type drift, invalid jumps, missing platforms, skipped/stale proof passes, iOS missing capability does not fail with exact message, regression |
-| 2. Entry playbooks | new product, feature, workflow redesign, audit, post-build refinement and all existing entry paths; one-question grill | initialized states/interview trace on sample apps against required artifacts and tier criteria | omitted critical work, batch interview, silent Lean default, hidden scope expansion |
+| 2. Entry playbooks (merged; diagnosis follow-up planned) | existing entry paths and one-question grill; lowest unsupported layer diagnosis | initialized states/interview trace against required artifacts/tier criteria; layer assessments and dependency invalidation against AW-2 below | omitted critical work, batch interview, silent Lean default, hidden scope expansion, surface work conceals unsupported lower layer |
 | 3. User settings and Codex cloud qualification | configurable station workers/modes; Joe profile; qualified background subscription runtime and dependent-seat routes | resolved settings, actual task IDs/model/effort/usage/resume/cancel/timeout results from a laptop-off sample task against source docs and eligible route baseline | hard-coded seat, API billing fallback, local execution called cloud, lost result, hidden blocked Claude/Dot route, unqualified entitlement or expiry recovery |
-| 4. Independent review, VERIFY and agentic UI qualification | maker/reviewer/tester independence, bounded repair/escalation; product VERIFY/map; e2e explore/bug bash/MCP wrapper | frozen planted-defect/trap manifest, broken/clean app outputs (including unit-green broken user paths), criterion-to-e2e assertions on the exact build SHA/digest for web and triggered mobile, failing repros, independent reviewer context, archived proof after cleanup and second-run model-call count against all declared expectations | user-facing criterion has only unit/component tests or dev-loop driver evidence, missing exact-build e2e behavioral evidence, author approves self, any defect missed, any trap flagged, non-bug accepted, no failing repro, broken VERIFY passes, lost evidence, model call during replay, third failed automatic repair, missing escalation |
-| 5. Factory Design Journal | SQLite records, immutable artifacts, MCP-ready commands, project isolation and restore | actual written/read-back/restore records and digest-addressed bytes against decisions, idempotency/revision conflicts, scope and evidence labels on sample apps | provenance loss, cross-project access, transcript dependence, conflicting authority, public/private material committed, incomplete restore |
+| 4. Independent review, VERIFY and agentic UI qualification | maker/reviewer/tester independence, bounded repair/escalation; criterion evidence contract; product VERIFY/map; e2e explore/bug bash/MCP wrapper | frozen planted-defect/trap manifest, broken/clean app outputs (including unit-green broken user paths), criterion-to-e2e assertions on the exact build SHA/digest for web and triggered mobile, failing repros, independent reviewer context, archived proof after cleanup and second-run model-call count; AW-4 | user-facing criterion has only unit/component tests or dev-loop driver evidence, missing exact-build e2e behavioral evidence, author approves self, any check cannot detect its broken fixture, any defect missed, any trap flagged, non-bug accepted, no failing repro, build A approves B, lost evidence, model call during replay, third failed automatic repair, missing escalation |
+| 5. Factory Design Journal | SQLite records, reference evidence records, immutable artifacts, MCP-ready commands, project isolation and restore | actual written/read-back/restore records and digest-addressed bytes against decisions, idempotency/revision conflicts, scope and evidence labels on sample apps; AW-5 | provenance loss, evidence label promoted beyond observed scope, cross-project access, transcript dependence, conflicting authority, public/private material committed, incomplete restore |
 | 6. Own progress view | lightweight browser supervision and one-question interview box | rendered/task-observed sample state against journal projection, comprehension and accessibility criteria | false station/gate/expiry status, unclear decision, missing progress visual, batch question, accessibility/trust failure, added cognitive load |
-| 7. MCP core and thin plugin adapters | one contracts/gates/journal server; portable Codex package and Claude Code plugin | actual MCP request/response and install/invoke receipts on supported surfaces against same core command results and declared schema | duplicate gate/store, unqualified plugin loading, app session created, paid key, authentication leak, surface mismatch |
-| 8. Design synthesis and build readiness | station checklist orchestration, alternatives, workflows/states/tokens, translator and acceptance contract | sample-app design artifacts against all retained rubric/stops, gate table and credible alternatives | omitted required checklist, unchecked system/flow, generic unjustified styling, uncheckable acceptance, scope drift |
-| 9. Behavioral prototypes and usability scripts | coded task behavior; reuse qualified e2e; VERIFY maintenance; owner/representative task scripts per tier | live sample prototype, scripts/observations/screens and clean/changed/blocked maintenance results against declared questions, loading/empty/stale/failure/conflict/permission/recovery states and prior baseline | missing critical state, stale map confused with product bug, maintenance edits product code, production claim, coached discoverability, simulated critique labelled users |
-| 10. Implementation verification | exact built-revision checks paired with e2e, independent live verdict, VERIFY maintenance and mobile requirement when applicable | accepted contract and every user-facing criterion versus product-runner build SHA/artifact digest, applicable web/mobile e2e assertions and observed results, exact deterministic check outputs, live repros/visual/state/accessibility comparisons and deployment/activation/consumer receipts | user-facing criterion has only unit/component tests or dev-loop driver evidence, missing exact-build e2e behavioral evidence, revision mismatch, stale passing check, heuristic accessibility claimed formal, missing simulator/mobile-engine evidence, self-verdict, unproven consumer behavior |
-| 11. Figma pilot | native draft create/edit, FigJam, live-screen capture, components/variables/auto layout | editable native artifacts on sample apps against exact source screen/tokens and operation checklist | any required capability unproved, duplicate work without measured value, upgrade without proved plan blocker |
-| 12. Claude Design handoff | optional visible human handoff, retaining source binding | actual artifact refs and acknowledgments on sample apps against declared task/subscription route | app automation, paid API, lost provenance, unapproved publication |
+| 7. Capability-aware MCP core and thin plugin adapters | one contracts/gates/journal server; portable Codex package and Claude Code plugin; optional negotiated host extensions | actual MCP request/response and install/invoke receipts on supported surfaces against same core command results and declared schema; extension-free workflow and AW-7 | duplicate gate/store, core requires host extension, lost answer/draft, unqualified plugin loading, app session created, paid key, authentication leak, surface mismatch |
+| 8. Design synthesis and build readiness | station checklist orchestration, controlled alternatives/reference adaptations, project design contract, state list before code, translator and acceptance contract | sample-app design artifacts against all retained rubric/stops, gate table, credible alternatives and AW-8 | omitted required checklist, unchecked system/flow, missing usage/state/motion rule, reference promoted to proof, generic unjustified styling, uncheckable acceptance, scope drift |
+| 9. Behavioral prototypes and usability scripts | coded task behavior; render/score/fix-three loop before independent review; reuse qualified e2e; VERIFY maintenance; task scripts per tier | live sample prototype, critique rounds and scripts/observations/screens against named thresholds, declared states, clean/changed/blocked maintenance results and prior baseline; AW-9 | missing critical state, self-score substitutes for review, below-threshold candidate advances, unbounded repair, stale map confused with product bug, maintenance edits product code, production claim, coached discoverability, simulated critique labelled users |
+| 10. Implementation verification | criterion evidence contract against accepted project design contract; exact-build e2e, independent live verdict, VERIFY maintenance and triggered mobile | accepted contract and every criterion versus immutable product-runner build identity, fixture/expected/observed records, web/mobile assertions, exact deterministic check outputs, live comparisons and deployment/activation/consumer receipts; AW-10 | unit/component-only or dev-loop-driver-only acceptance, missing exact-build proof, build A approves B, contract mismatch, stale passing check, heuristic accessibility claimed formal, missing mobile evidence, self-verdict, unproven consumer behavior |
+| 11. Figma pilot | native draft create/edit, FigJam, live-screen capture, components/variables/auto layout from the shared project design-contract revision | editable native artifacts on sample apps against source screen, semantic tokens/usage/component/motion states, operation checklist and AW-11 | contract drift, any required capability unproved, duplicate work without measured value, upgrade without proved plan blocker |
+| 12. Claude Design handoff | optional visible human handoff, retaining the same project design-contract revision and source binding | artifact refs/digests and acknowledgments against declared task/subscription route, state/reference packet and AW-12 | revision mismatch, app automation, paid API, lost provenance, unapproved publication |
 | 13. Full DoctorCRE design cycle | full lifecycle, exact candidate verification, measurement and bounded next version after manager qualification | product-owner supplied baseline/candidate receipts, task observations and measurement records against chosen real-work task set and accepted contract | no measured improvement, unresolved trust/safety/core failure, direct DoctorCRE/CARR access, product runtime dependency, nonreconstructible proof |
+
+### TASK AW acceptance scenarios per affected slice
+
+These are future slice acceptance tests, not tests executed by this plan PR. Use
+both unrelated synthetic sample projects and the existing mobile trigger when
+applicable. Each row requires its passing case and deliberately failing case;
+retain the actual artifact/observation, expected outcome and source binding.
+
+| Test / slice | Passing case | Required failure or adversarial case |
+| --- | --- | --- |
+| AW-2 / entry follow-up | On every entry path, a fully assessed layer set selects the lowest unsupported layer; one answer persists and JSON resume returns the same pending question; all-supported returns entry work. Contradictory domain evidence invalidates dependent model/flow/surface decisions without losing history. | A surface request cannot skip weak domain evidence. Assumed evidence or an unjustified N/A cannot certify support; unknown/declined cannot advance; batch questions, missing layers, stale dependency assessments and altered trace fail replay. |
+| AW-4 / VERIFY | Each criterion/check has a frozen ID, fixture, expectation and observed result on the immutable candidate; authenticated independent review reads the evidence. The same oracle catches its broken fixture and passes the repaired one; clean traps stay clean. | Mutate one fixture per check, including manual/judgment checks, and require detection. Reject missing expected/observed rows, forged reviewer/fresh-context receipts, maker self-approval, skipped/blocked rows, aggregate pass over a critical failure and build A evidence submitted for B at the same commit. |
+| AW-5 / journal | Create, read back and restore records for every evidence label with source/date, borrowed property, adaptation, rejection test, limits and reuse status; records and digests survive cleanup/restart and project isolation. | Omit source/date/label/adaptation/rejection test; mislabel a generated still as live; substitute source bytes; lose rejected experiments during restore; cross-project reads and stale-revision/idempotency conflicts fail without corrupting records. |
+| AW-7 / adapters | Disable every host-specific extension and complete initialize → answer/persist/resume → inspect evidence → request review → read verdict/progress over ordinary MCP. Rich Codex/Claude adapters give the same authorized core results; exact checked package survives fresh install. | Missing/partial capabilities, malformed payloads and denied access never bypass core checks or strand work. Test two threads, clearing/remount, late selection/save replies, invalid forms, cancellation and registered-host reconnect/duplicate response; no lost draft, stale context resurrection or unreviewed rebuilt package. |
+| AW-8 / synthesis | Freeze state list before code; compare meaningful variants on identical tasks/content/conditions; review one complete semantic-token/usage/component/motion contract. Rerun the synthesized winner and preserve anchored feedback and rejected reference properties. | Missing failure/recovery state, token-role drift, motion with no interruption/reversal/focus/reduced-motion rule, false completion, color-swap-only alternatives or a hybrid accepted without retest blocks readiness. A still/recording/vendor claim cannot count as target behavior proof. |
+| AW-9 / prototype | Render actual states; score named criteria; fix the three worst (or remaining fewer); rerender to every frozen threshold, then independently review without maker scores. Repeated input, Escape, slow/failing data, reload and no-motion retain identity, drafts and focus. | Seed three ranked defects and require fixes/new evidence, not score edits. A critical failure or score below 8 cannot be averaged/rounded away. Stop after two failed repair rounds; independently fail a fabricated self-pass. For motion media, unseeded repeat hashes, unreadable target-size frames and a bad loop seam fail their declared checks. |
+| AW-10 / implementation | Read accepted design-contract bytes and exact built candidate; compare computed tokens/usage, behavior/states/motion and every criterion's expected/observed evidence, including independent stored-value readback. | Reject wrong contract revision, changed build/configuration/fixture digest at the same commit, stale checks, incomplete state coverage or missing per-check broken-fixture qualification. Build A proof never approves B, including B that looks identical in a screenshot. |
+| AW-11 / Figma | Native variables/components/state frames map to the accepted contract IDs/revision; a second screen round-trips semantic values, usage, responsive rules and motion/state intent into implementation review. | Change a token value, usage rule or component state in the derived artifact; drift or missing editable capability is detected. A successful export, interpreted style sample or re-skinned mock cannot certify fidelity. |
+| AW-12 / Claude Design | Human-visible bounded packet and acknowledgment retain the exact contract revision/digest also used by Figma and implementation review, state list, reference labels and unresolved questions. | Swap the contract after packet creation or lose a parent/source digest; reject review until a new accepted packet is acknowledged. Copying another app's identity, automating an app session or treating delivery as acceptance fails the contract. |
 
 Slice 13 retains the prior final-run task set: priorities, condition/commitments/
 next action, authoritative retrieval, commitment capture/assignment and one visual
@@ -677,6 +893,54 @@ mobile stack is installed or qualified by this amendment.
 | Quoted post: open source; deterministic and agentic APIs | Already specified exactly: “package pin **`e2e@0.15.1`**, Apache-2.0” in [agentic UI evaluation](#prove-agentic-ui-evaluation-slice-4-reused-in-910), “Agent steps run through the **Codex worker using e2e's supported ChatGPT OAuth provider**” in [execution](#execution-and-attended-authentication), and “Use deterministic assertions for this replay” in [acceptance](#explore-bug-bash-mcp-and-acceptance). No package or replay is qualified today. |
 | Quoted post: web, mobile and more; any app | Web/mobile engines are documented; generic any-app coverage is unproved. The exact existing mobile requirement is “simulator/emulator execution of the VERIFY skill **and e2e's mobile engine**” in [mobile trigger](#deterministic-mobile-trigger). This amendment makes web acceptance equally explicit. Other platforms need their own supported-engine fixture before any coverage claim. |
 | Quoted post: bring your own agent/infrastructure; local or CI execution | Configurable workers and product-owned fixtures already exist in the plan: “Workers, model/effort, concurrency, availability and allowed routes come from a private **per-user settings file**” and “The product owns e2e as a development dependency, its lockfile, `e2e.config.ts`, fixtures, scripts and baseline expectations.” Upstream [README](https://github.com/tester-army/e2e/blob/8d38206f460415b70706b45acb820bb0e24832ae/README.md) and [mobile CI](https://github.com/tester-army/e2e/blob/8d38206f460415b70706b45acb820bb0e24832ae/docs/mobile-ci.mdx) document the routes. These sentences do not prove local/CI execution: slice 4 must produce the same fixture's local and hosted-CI receipts on the chosen authorized infrastructure, preserving attended-auth and no-paid-fallback constraints. |
+
+### Joe's 2026-10-02 design sources: property-by-property application
+
+TASK AW read all four supplied Dot reports in full: **080-R-study-nurijanian**,
+**081-R-study-tonysimons**, **083-R-study-heydetya**, **084-R-study-abmankendrick**,
+and the supplied **0xmovez.txt** course outline. The outline is a relayed study,
+not this session's first-hand reading of the full article or linked repositories.
+The reports' capability, license, effectiveness and access claims remain proposals
+or attributed findings; no catalog, SDK, component, pack or engine was installed
+or qualified here. Private reports stay outside this public repository. Public
+links below preserve provenance without copying source implementations.
+
+For each family, ask: what exact property does the source demand; does main's plan
+specify a falsifiable test for it; what must change? Similar vocabulary is not a
+passing test. Consolidation below keeps conditional methods from becoming an
+unbounded requirement to implement every catalog recipe.
+
+| Report / source proposal | Test against the main plan and disposition |
+| --- | --- |
+| 080: [Layers](https://github.com/jamiemill/layers-skills/tree/main/skills), research/domain/need/strategy/model/flow/surface methods; evidence-grounded PM briefs and prioritization | Main's “Persist each answer before choosing the next” does not choose the lowest unsupported decision. Adopt layer diagnosis and dependencies in slice 2 follow-up. Research/strategy methods are conditional ways to answer a named gap, not mandatory surveys or invented numeric rankings. AW-2 tests a surface request with weak domain evidence. |
+| 080: [Design and Refine](https://github.com/0xdesign/design-plugin/tree/913a7ab2ac7e0f48eab77c93f2f5376150864b02), controlled alternatives, anchored critique, deliberate synthesis and cleanup | Main asks for “credible alternatives” without equal comparison conditions or stable feedback targets. Adopt controlled comparison, reference/experiment records and hybrid retest in 5/8/9. Main already requires “Evidence is archived before cleanup and its digest checked afterward”; AW-5 adds rejected-reference restore coverage. |
+| 080: [Taste](https://github.com/Leonxlnx/taste-skill/tree/ce26fc25c0e5e8cab638f883de62d9a86ee5e45b), [Hallmark](https://github.com/Nutlope/hallmark/tree/13ac0ec7e148655948100b6396439e481361d690), [MengTo](https://github.com/MengTo/Skills/tree/d5bd3a7e9c9f4b00853e84fffa60bc38eee9e744) visual catalogs, media/asset methods, preservation and reusable mechanisms | Main lists “workflows/states/tokens” without usage rules or a shared revision. Adopt the project contract and state-first comparison in 8/11/12. Layout, type, depth, chart, navigation, interaction, rendering, GPU/3D and atmosphere recipes remain conditional hypotheses: require a named job/brand purpose, truthful representation, rights and measured target-device budget. AW-8/9/11 test actual state/geometry/fidelity rather than catalog membership. |
+| 080: atomic review contracts, consolidated findings, portable adapters and tests that fail | Main's one broken feature does not prove every check detects its violation. Adopt per-check broken/repaired fixtures, hard failures before scores and authenticated exact-build proof in 4/10; capability qualification in 7. Findings retain location/state, consequence, repair and retest even when deduplicated. |
+| 080: [PM resource methods](https://www.prodmgmt.world/resources), metrics, assumption tests, communications and lateral uses | Main already requires “Baseline/window/population/limits” and forbids vanity metrics. Adopt source-linked contradictions, task-based reference/experiment records and falsifiable bets in 2/5/8. A release explanation derives from accepted build facts, not work volume. Statistical inference, procurement, migration and brokerage applications outside the manager fail the task/authority test here. |
+| 081: [MCP extensions](https://github.com/openai/mcp-extensions/tree/ca16cb3bc015baaa1b849082d8755bbef18770cb), negotiated entry points, context, resources, forms and settings | Main calls extensions optional but has no extension-free workflow test. Adopt capability-aware slice 7 and AW-7. Selected context is removable and revision-bound; authorization, journal and answer validation stay in the core. Published support and legacy helpers do not qualify an installed host or registered transport. |
+| 081: example draft/view/save separation, representation fidelity, bounded imports and exact-artifact release | Main has revision/idempotency requirements but no late-view/context test. Adopt late-response, remount, conflict, cleanup and package-byte/fresh-install scenarios in 7; derivative/source distinction in 5/8. Reject importing a local example store as the authoritative multi-project journal. |
+| 083: [Refero](https://styles.refero.design/), [OpenDesign](https://github.com/nexu-io/open-design/tree/main/design-systems), [Neuform](https://neuform.ai/learn), tokens plus usage and revisioned design packages | Main's tokens and source binding cannot detect conflicting prose/component mappings across Figma/Claude/code. Adopt one project contract with rules, component fixtures and provenance in 8/11/12; compare computed styles/behavior and a second screen. Interpreted styles and extracted DESIGN.md remain proposals until those tests pass. |
+| 083: [EvilCharts](https://evilcharts.com/docs), [Bencho](https://bencho.dev/), [Rewamp](https://github.com/palakonweb/Rewamp-UI), [Inspora](https://www.inspora.design/), narrow component qualification and failed experiments | Main has state/accessibility checks but no borrowed-property/rejection record. Adopt that record in 5/8 and actual slow/failure/cancel/retry/keyboard/no-motion tests in 9/10. Component adoption remains conditional on workflow, data/units/source fidelity, license and device budget; no chart, cursor, animation or backend is inferred from a demo. |
+| 084: [60fps](https://60fps.design/), [Design Spells](https://designspells.com/), [Recent](https://recent.design/), [CollectUI](https://collectui.com/), [Viewport](https://viewport-ui.design/), recorded flows and cause-specific states | Main says “loading/empty/stale/failure/conflict/permission states” but lacks evidence-level constraints and motion interruption tests. Adopt labelled references and complete transition contracts in 5/8; context/focus, repeated-input and recovery scenarios in 9/10. A recording does not prove its pictured control or backend works. |
+| 084: [Zajno](https://motion.zajno.com/) and [Motionin](https://www.motionin.design/), easing/delay/fade/morph/mask/depth/parallax/zoom | Main's reduced-motion requirement lacks trigger/completion/interruption/reversal/property ownership. Adopt motion/state contracts in 8/11/12 and same-task immediate/no-motion comparisons in 9/10. Each technique must preserve identity, readable information, precision targets and task access; none is universally required. |
+| 084: [SeeSaw](https://www.seesaw.website/), [Posts.design](https://posts.design/), unavailable/gated gallery material and presentation references | Main stores provenance but does not bound reference claims by observation. Adopt source/date/label/availability/rejection records in 5/8. Communication may borrow grammar with truthful released facts and cleared assets; popularity, an unavailable listing or promotional art fails behavioral-proof eligibility. |
+| 0xmovez: [course outline source](https://x.com/0xmovez/status/2104216919033192746), state list, render/score/fix-three loop, deterministic frames, references and formats | Main requires state coverage and bounded repair, but no pre-code state list or thresholded self-critique. Adopt state-first/critique in 8/9, revisioned grammar in 5/8/11/12, conditional deterministic-render/contact-sheet/size/seam tests for motion media in 9. Film pacing, sound/beat grids, springs and multi-format layout are tools only for an in-scope motion artifact, not universal app UX laws. |
+
+Declines apply to literal requirements or unqualified transfers, not to whole
+sources. Each needs a failed property test before it can return:
+
+| Declined item | Source | Specific failed property test / return condition |
+| --- | --- | --- |
+| Product-specific screens, record access, brokerage tasks or global brand prescriptions | 080/081/083/084 | App-agnostic/authority test: the manager must operate on unrelated samples with supplied receipts and no DoctorCRE/CARR access. Product owners may adapt ideas privately through the generic interface. |
+| Wholesale visual presets, fixed quotas, forced novelty/font/color/spacing/motion bans, dashboard exclusion or automatic broad redesign | 080; 083; 0xmovez house style | Coverage/scope/fidelity test: the method must preserve an in-scope task, accepted system, dense states and usable fallback. Conditional techniques may return after matched-task comparison; source taste is not global policy. |
+| Fake activity, simulated progress or telemetry presented as fact; imagined UI presented as capture | 080/083/084; 0xmovez | Truthful-state/provenance test: displayed completion and numbers must correspond to authoritative outcomes/sources; concepts and synthetic fixtures must be labelled. |
+| Screenshot/export/compliance stamp, average score or maker self-review as approval | 080/083/084; 0xmovez | Exact-build/independence test: the required criterion must have candidate-bound expected/observed proof and a separate authenticated reviewer; a broken critical path must fail despite attractive frames. |
+| Claimed validation percentages, time savings, popularity or model heuristics as expected gains; population conclusions from an inadequate sample | 080/081/084 | Reproducible-evaluation test: matched tasks, baseline, population, window and measured outcomes are missing. Keep attributed claims until a qualified evaluation supplies them. |
+| Copy/install disputed or unestablished-license packs, assets or paid unseen code/prompts | 080 Refactoring UI warning; 083 Rewamp/asset warnings; 084 paid references | Reuse/provenance test: verified permission must cover the exact code/asset and retained notices. Link and formulate original requirements; attribution alone grants no reuse right. |
+| Capability guessing, metadata as authorization, model context as durable store, legacy forms as registered-host proof, universal desktop/local-file/PiP support or transplanted example storage | 080/081 | Portability/authorization/durability test: the extension-free workflow, current-schema invocation, real transport, isolation and restore must pass. Optional feature returns only after its host-specific fixture passes. |
+| Gated/unavailable galleries, re-skinned mocks, generated showcases or pictured controls as inspected working behavior | 083/084 | Evidence-availability/claim-match test: the exact claimed behavior must be retrieved and exercised; vendor text, stills and recordings keep their narrower labels. |
+| Gesture-only access, drifting targets, hidden/clipped essential content, queued entrances, false success/rollback, perpetual auto-advance or background-dependent readability | 080/083/084 | Reachability/control/recovery test: keyboard/touch/no-motion, long content, failure/unknown outcome, rapid interruption and worst-background contrast must preserve the task and state. |
+| New tool stack/platform migration, blanket maximum effort, deployment/publishing permissions, autonomous chapter fan-out, video-studio/service buildout | 080/081/083; 0xmovez | Task-fit/authority/measured-value test: no authorized manager slice requires this infrastructure or cost. Select the smallest qualified method; this task authorizes no installs, subagents, publication or runtime expansion. |
 
 Open questions, all **unverified** until the owning slice supplies a receipt:
 
