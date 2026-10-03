@@ -6,10 +6,10 @@ model, authenticate evidence, write a journal or authorize execution. The
 [plan](plan.md#ordered-slices-and-verification) defines later store, progress-view,
 worker and independent-review slices.
 
-The planned [layer-diagnosis follow-up](plan.md#entry-diagnosis-slice-2-follow-up)
-selects the lowest unsupported evidence/domain/need/strategy/model/flow/surface
-decision. The merged interface described here still initializes intake only;
-it does not yet accept layer assessments or diagnose those decisions.
+The [layer diagnosis](plan.md#entry-diagnosis-slice-2-follow-up) selects the lowest
+unsupported evidence/domain/need/strategy/model/flow/surface decision through
+this same pure interface. Assessments report evidence; the manager does not
+authenticate artifact bytes or judge the truth of supplied observations.
 
 ## Interface
 
@@ -19,6 +19,10 @@ startDesignInterview(identity)
    one question + interview snapshot
              |
 answerDesignInterview(snapshot, one answer) <--- resumeDesignInterview(snapshot)
+             |
+   bounded intake → supplied layer set → lowest unsupported layer question
+             |                         ^
+   one response + reassessment         | reassessDesignLayer(snapshot, evidence)
              |
    next question, or initialized Intake project + pending requirements
              |
@@ -75,6 +79,43 @@ reported inputs, not proof that bytes were fetched or authenticated. Each workfl
 has its own explicit assurance-tier question. Included and excluded workflows
 must not overlap. Supplied mobile signals require explicit platform reconciliation.
 
+## Layer diagnosis
+
+After common intake bounds the work, `layer-assessments` accepts one structured
+supplied-evidence set for all seven layers in dependency order. This is one
+evidence input, not a batch human interview. Each assessment has `layer`, a
+positive integer `revision`, `decision`, `evidenceCriterion`, `criterionMet`,
+`artifacts`, `uncertainty`, revision-bound `dependencies`, `support`,
+`notApplicableReason` and one unresolved `question` (null for strong/N/A).
+
+Strong requires a reported met criterion and at least one schema-valid artifact
+reference. Partial, assumed, weak and not-started remain unsupported even with
+`criterionMet: true`. N/A requires a nonblank no-dependent applicability reason,
+no dependencies or question, and `criterionMet: false`; an applicable decision
+depending on N/A rejects the set. This checks the reported applicability contract,
+not the truth of a prose justification. Dependencies name earlier layers in the
+declared order; independent decisions may have none. Forward, duplicate or stale
+dependencies reject. The manager never invents links between independent decisions.
+
+`diagnosis` preserves the supplied assessments, lists invalidated layers and
+names the first unsupported applicable layer. Its single question names the
+project and uncertainty. Answer through `answerDesignInterview` with
+`{ status: 'answered', value: { response, assessment } }`: one nonblank response
+and the pending layer's next assessment revision, with current dependencies.
+Unknown/declined retain the question. All supported returns the entry's existing
+artifact/assurance work; no gate passes or extra interview are invented.
+
+`reassessDesignLayer(snapshot, assessment)` records newly supplied evidence,
+including after initialization. It cannot resolve a pending layer by bypassing
+its one recorded answer. A revision invalidates every transitive dependent
+decision; resolving the original uncertainty never resurrects their old support.
+Each needs a fresh revision against supported current dependencies. Old decisions,
+responses and artifact refs stay in the trace. This grants no scope or lifecycle
+change. JSON replay rejects missing sets, batched/altered questions, wrong layers
+or revisions and stale reassessments. A wholly rewritten valid trace still needs
+later journal/authentication protection; pure replay is not tamper authentication.
+Earlier intake snapshots without layer assessments cannot finish initialization.
+
 ## Tier and scope rules
 
 The tier question recommends Standard for declared bounded risk and High-Assurance
@@ -97,7 +138,10 @@ lifecycle stage or certify completed design evidence.
 After completed intake, a scope proposal names one new workflow and its reason.
 The single pending scope question displays before/after scope. Acceptance requires
 a separate acceptance-criterion question and then the new workflow's assurance
-question. Decline retains scope and records the workflow as deferred refinement.
+question. Acceptance then requires a fresh full layer set for the expanded scope,
+with every layer revision incremented; earlier assessments remain in history.
+Decline retains scope and records the workflow as deferred refinement without
+invalidating the original diagnosis.
 Repeated declines produce one current deferral. Accepting a previously declined
 workflow removes its current deferral while the trace retains every decision.
 Excluded work requires a new explicitly bounded intake; it cannot be appended by
@@ -129,4 +173,5 @@ batched or altered questions, silent tier defaults, scope drift and fabricated
 completion. Its pass means initialization is consistent with recorded answers;
 authentication of a human answer and independent evidence judgment are later
 responsibilities. Test cases live in `test/design-entry.test.mjs`; `npm test`
-runs them with the existing repository suite.
+runs them and `test/acceptance/design-layer-diagnosis.test.mjs` (AW-2) with the
+existing repository suite.

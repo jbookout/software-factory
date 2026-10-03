@@ -7,6 +7,7 @@ import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { assessments } from './fixtures/design-layers.mjs'
 
 const identity = { projectId: 'synthetic-task-web', sourceRevision: 'a'.repeat(40) }
 const schema = JSON.parse(readFileSync(new URL('../schemas/design-project.schema.json', import.meta.url)))
@@ -49,7 +50,7 @@ function complete(app, entry, tier) {
   for (let count = 0; view.question && count < 60; count++) {
     const id = view.question.id
     view = answer(view, id.startsWith('input:') ? artifact(id)
-      : id.startsWith('assurance:') ? tier : values[id])
+      : id.startsWith('assurance:') ? tier : id === 'layer-assessments' ? assessments() : values[id])
   }
   assert.equal(view.question, null, 'interview must finish')
   return view
@@ -74,6 +75,7 @@ test('reconsidered scope derives unique current deferrals while retaining all hi
     if (decision === 'accept') {
       view = answer(view, 'Archived tasks remain retrievable')
       view = answer(view, 'lean')
+      view = answer(view, assessments(null, 'weak', 2))
     }
     assert.deepEqual(view.project.versionContract.deferredRefinements, decision === 'accept' ? [] : ['Archive'])
     assert.equal(view.project.versionContract.includedWorkflows.includes('Archive'), decision === 'accept')
@@ -180,7 +182,8 @@ test('public interview validation follows canonical subschema changes before acc
       assert.equal(validate(invalid[id]), false)
       assert.throws(() => respond(view, invalid[id]), `canonical ${id} constraint must reject immediately`)
     })
-    view = respond(view, id.startsWith('input:') ? validArtifact
+    const layers = assessments().map(a => ({ ...a, artifacts: [validArtifact] }))
+    view = respond(view, id === 'layer-assessments' ? layers : id.startsWith('input:') ? validArtifact
       : id.startsWith('assurance:') ? 'lean' : values[id])
     assert.deepEqual(isolated.resumeDesignInterview(JSON.parse(JSON.stringify(view.interview))), view)
   }
@@ -301,6 +304,7 @@ test('scope expansion is displayed, accepted separately and requires new accepta
   assert.equal(view.question.id, 'assurance:1')
   assert.ok(view.question.choices.find(x => x.value === 'high-assurance').scopeImpact.length)
   view = answer(view, 'high-assurance')
+  view = answer(view, assessments(null, 'weak', 2))
   assert.equal(view.project.tier, 'lean', 'workflow assurance can exceed the project tier')
   assert.ok(view.project.versionContract.acceptanceCriteria.includes('Archived task is retrievable from the archive after reload'))
   assert.deepEqual(view.requirements.find(x => x.id === 'tier:representative-users').workflows, ['Archive completed tasks'])
@@ -347,7 +351,7 @@ test('intake carries exact-revision e2e requirements for every criterion and rec
   const values = { intent: apps[0].criteria, users: 'Synthetic owner', constraints: 'No production data',
     includedWorkflows: [apps[0].workflow], exclusions: [], acceptanceCriteria: [apps[0].criteria],
     evidenceWindow: 'Two weeks', version: 1 }
-  while (view.question) view = answer(view, view.question.id.startsWith('input:') ? artifact('source-design')
+  while (view.question) view = answer(view, view.question.id === 'layer-assessments' ? assessments() : view.question.id.startsWith('input:') ? artifact('source-design')
     : view.question.id.startsWith('assurance:') ? 'high-assurance' : values[view.question.id])
   const mobile = view.requirements.find(x => x.id === 'proof:mobile')
   assert.match(mobile.criterion, /each declared mobile platform/)
@@ -391,7 +395,7 @@ test('required supplied artifacts and non-overlapping scope must be explicit bef
     evidenceWindow: 'Two weeks', version: 1 }
   while (!view.question.id.startsWith('input:')) {
     if (view.question.id === 'exclusions') assert.throws(() => answer(view, [apps[0].workflow]), /included.*excluded/)
-    view = answer(view, values[view.question.id])
+    view = answer(view, view.question.id === 'layer-assessments' ? assessments() : values[view.question.id])
   }
   assert.equal(view.question.id, 'input:built-candidate')
   for (const input of [null, {}, { ...artifact('candidate'), ref: ' ' }, { ...artifact('candidate'), digest: 'unbound' },
@@ -413,11 +417,12 @@ test('public entry declarations describe the serialized interview and initializa
   const declarations = new Map(ast.body.map(x => [x.declaration.id?.name, x.declaration]))
   const view = complete(apps[0], 'feature', 'standard')
   for (const [name, value] of Object.entries({ DesignInterviewView: view,
-    DesignInterview: view.interview, EntryRequirement: view.requirements[0] })) {
+    DesignInterview: view.interview, EntryRequirement: view.requirements[0],
+    LayerDiagnosis: view.diagnosis, LayerAssessment: view.diagnosis.assessments[0] })) {
     const fields = declarations.get(name)?.body?.body
     assert.ok(fields, `${name} is declared`)
     assert.deepEqual(fields.filter(x => !x.optional).map(x => x.key.name).sort(), Object.keys(value).sort(), name)
   }
   for (const name of ['startDesignInterview', 'resumeDesignInterview', 'answerDesignInterview',
-    'proposeDesignScope', 'inspectDesignInitialization']) assert.ok(declarations.has(name), name)
+    'proposeDesignScope', 'reassessDesignLayer', 'inspectDesignInitialization']) assert.ok(declarations.has(name), name)
 })
