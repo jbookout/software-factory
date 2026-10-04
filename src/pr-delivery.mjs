@@ -1,4 +1,6 @@
+import { createConfiguredProductProofIntake } from "./product-proof-intake.mjs"
 import fs from "node:fs/promises"
+import { isDeepStrictEqual } from "node:util"
 import path from "node:path"
 import { createHash, randomUUID } from "node:crypto"
 import { runProcess } from "./process-runner.mjs"
@@ -33,7 +35,7 @@ export async function loadDeliveryConfig(file) {
       if (!validRequiredChecks(local.requiredChecks)) throw new DeliveryError("config repo requiredChecks must name the expected checks", 9)
       if (local.dependencyRevision !== undefined && (typeof local.dependencyRevision !== "string" || !local.dependencyRevision.trim()))
         throw new DeliveryError("config dependencyRevision must be a nonempty owned input pin", 9)
-      return [repo, { ...local, checkout: absolute(local.checkout), worktreeRoot: absolute(local.worktreeRoot) }]
+      return [repo, { ...local, ...(local.productProof ? { productProof: { artifactRoot: absolute(local.productProof.artifactRoot), expectedRoot: absolute(local.productProof.expectedRoot) } } : {}), checkout: absolute(local.checkout), worktreeRoot: absolute(local.worktreeRoot) }]
     })),
     limits: { runsPer24h: 8, slots: 4, timeoutMs: 4500_000, ...value.limits },
     pollMs: value.pollMs ?? 30_000, commandTimeoutMs: value.commandTimeoutMs ?? 120_000,
@@ -59,7 +61,7 @@ function reviews(pr) {
   }).filter(Boolean)
 }
 
-export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
+export function createPrDeliveryAdapter(config, { env = process.env, productProofIntake = createConfiguredProductProofIntake(config) } = {}) {
   const locks = path.join(config.stateDir, "locks"), queueFile = path.join(config.stateDir, "queue.json")
   const prLeases = new Map()
   const getRepo = repo => {
@@ -276,6 +278,20 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     requireOpen(initial)
     const current = await waitChecks(repo, pr, initial.headRefOid, true)
     const local = getRepo(repo), head = current.headRefOid
+    if (local.productProofRequired || local.productProof) {
+      let proof
+      try { proof = await productProofIntake?.({ repo, pr, head }) } catch { /* Unknown proof refuses before spending review budget. */ }
+      if (proof?.gate !== 'pass' || proof.sourceCommit !== head)
+        throw new DeliveryError('PRODUCT-PROOF-REFUSED: supply inspected exact-head browser artifacts', 4)
+      const refreshed = await view(repo, pr)
+      requireOpen(refreshed)
+      if (refreshed.headRefOid !== head || refreshed.headRefName !== current.headRefName)
+        throw new DeliveryError("HEAD MOVED during proof intake; needs fresh proof", 1)
+      const ci = await ciFor(repo, refreshed, head)
+      requireKnownCi(ci)
+      if (ci.state !== current.ci.state || !isDeepStrictEqual(ci.evidence, current.ci.evidence))
+        throw new DeliveryError("CHECKS MOVED during proof intake; observe current checks", 1)
+    }
     await git(local.checkout, "fetch", "-q", "origin", head)
     const attempt = randomUUID()
     const dir = path.join(local.worktreeRoot, `review-${pr}-${head}-${attempt}`)

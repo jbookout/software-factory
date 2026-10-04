@@ -158,3 +158,72 @@ twice, respecting bounded provider delay. They never become CI-red.
 starts separately, and wait events name their cause/reset. Neither count proves
 paid model usage. The audit's weekly reduction targets require matched rollout
 cohorts; these replays do not establish fleet savings or active installation.
+
+## Browser proof capture contract
+
+Repositories with `productProofRequired` or `productProof` enabled refuse review
+before Git/worktree/reviewer effects unless the configured intake inspects an
+exact-head packet. Configure `productProof.artifactRoot` and
+`productProof.expectedRoot` as separate orchestrator-owned stores. Candidate
+packets live at `<artifactRoot>/<owner>--<repo>/<head>/packet.json`; expectations
+live at `<expectedRoot>/<owner>--<repo>/<head>.json`. The CLI
+`bin/browser-product-proof.mjs` takes the artifact store, packet path and an
+independently selected expectation path. Both routes use one qualified policy:
+regular files through pinned directory descriptors, no symlink/path traversal,
+1 MiB initial JSON reads, 64 MiB artifacts, and one 30-second acceptance deadline
+including cancellable decoding. The delivery adapter rechecks open/base/head and
+exact-head CI evidence after intake before creating a review worktree.
+
+The accepted contract is `browser-product-proof.v2`, described by
+`ProductProofPacket` and `ProductProofExpected` in `src/design-verify.d.mts`.
+Version 1 packets are refused. Producers must emit v2 before this policy can be
+used for admission; this change does not update or install a product producer.
+The orchestrator authenticates expectations from its selected source, build and
+workflow execution. Copying a candidate's template or hashes into the expected
+store is not an authentication procedure.
+
+- **Build:** uncompressed regular-file ustar with `artifact-manifest.json`
+  containing `source_commit` and `files` entries `{path, sha256, bytes}`. The
+  verifier authenticates the archive against the independently selected
+  `buildDigest`, checks every payload against the archived manifest and compares
+  `build.json`'s `manifestFiles` and `servedFiles` with that file set. No archive
+  paths are extracted to disk.
+- **Native journeys:** `report-1` from the pinned runtime, clean exact source,
+  selected Chromium/web results with one completed successful attempt, successful
+  steps and no run/attempt/step errors. Required target references resolve to the
+  qualified declaration. Coverage IDs do not infer execution from their names.
+- **Coverage:** every required row has independent `coverageEvidence`. A native
+  row supplies the exact required `testIds`. A continuity row supplies a trusted
+  report reference, `testId` and deciding oracle `{id, expected}`. Its inspected
+  `browser-execution.v1` report contains `binding`, `runner: 'node:test'`,
+  `testId`, `targetId: 'chromium'`, `platform: 'web'`, terminal `status`, one
+  native-shaped `attempts` entry, and `oracle: {id, expected, observed, violation}`.
+  Passing observations equal the intended value and have `violation: null`.
+- **Qualification:** `qualification.broken` and `.repaired` each select a
+  different authenticated execution report and test ID. The broken requirement
+  also names the deciding `oracle.violation`: its attempt and final step fail
+  with an error, its observed value differs, and its violation matches. The
+  repaired attempt/steps succeed and observe the intended value. Coverage's
+  qualification references must equal these independently selected reports.
+- **Persistence:** `persistenceIntent[id]` defines `{subject: {storage, key,
+  operation}, value}`. Each phase capture contains the same `binding`, `id`,
+  `subject`, its `phase` (`write` or `reload`) and intended `value`. The verifier
+  rejects reused capture paths or hashes, including reuse across required IDs.
+- **Recording:** each independently selected `requiredRecordings` row supplies
+  `{id, operation: 'save-reload', provenance: {ref, digest}}`. The authenticated
+  `browser-recording.v1` provenance names `binding`, `id`, the continuity
+  `testId` and execution reference, qualified `targetId`/`platform`, the inspected
+  `attemptId`, `pageId`, `contextId`, and exact video/trace/checkpoint references.
+  `videoStartTime` and `checkpointTime` use the trace's monotonic milliseconds;
+  capture them from the recording clock, not wall time or a guessed offset.
+  Capture trace actions with their actual page/context identities: the trace
+  context declaration carries `contextId`, and deciding `before` actions carry
+  `pageId`, `contextId`, `callId` and `startTime`. Corresponding `after` events
+  carry the same `callId` and `endTime`. The decoder requires one successful save
+  and reload on that page/context, correlated completions without errors, save
+  completion before reload starts, and a matching video frame at the checkpoint
+  time after reload completes. A checkpoint visible only before reload fails.
+
+`test-support/product-proof-store.mjs` builds a complete synthetic v2 packet
+used by the maintained real-decoder CLI/configured-intake/delivery tests. It is a
+contract fixture, not evidence of a product's behavior or producer qualification.
