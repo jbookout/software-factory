@@ -14,6 +14,10 @@ const args = process.argv.slice(2), file = process.env.FAKE_PR;
 const s = JSON.parse(fs.readFileSync(file));
 const save = () => fs.writeFileSync(file, JSON.stringify(s));
 const git = (...a) => cp.execFileSync('git', a, {encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
+const repo='fixture/new-repository';
+const reproduction={argv:['node','-e',"const fs=require('fs'); console.log('property-checked'); process.exit(fs.existsSync('fix.txt')?0:1)"],acknowledgement:'property-checked'};
+const brief=head=>({schema:'factory-delivery-brief/v1',repo,pr:7,head,reviewDigest:'d'.repeat(64),builderId:'builder-7',base:git('--git-dir',s.remote,'rev-parse','refs/heads/main'),environment:process.platform+'-'+process.arch+'-node-'+process.versions.node,
+findings:[{id:'1',ownerRepo:repo,consumer:{repo,head},originalHead:head,contractPin:head,reproduction,ownedPaths:['fix.txt']}]});
 s.headRefOid = git('--git-dir',s.remote,'rev-parse','refs/heads/topic');
 const tool = require('node:path').basename(process.argv[1]);
 if(tool === 'codex') {
@@ -23,10 +27,23 @@ if(tool === 'codex') {
  if(s.hang) { process.on('SIGTERM',()=>{}); setInterval(()=>{},1000); return; }
  if(prompt.includes('REVIEW MODE:')) {
  if(s.reviewerCommit) { fs.writeFileSync('feature.txt','prohibited');git('add','feature.txt');git('commit','-qm','Prohibited reviewer edit'); }
- const body=(s.blockOnce && !s.blocked ? 'REVIEW: BLOCKED' : 'APPROVE')+'\\nReviewed-SHA: '+s.headRefOid+'\\n\\n'+(s.blockOnce && !s.blocked ? '1. fix defect\\nNon-blocking\\nNone' : 'Non-blocking\\nNone');
+ const blocked=s.blockOnce && !s.blocked;
+ const body=(blocked ? 'REVIEW: BLOCKED' : 'APPROVE')+'\\nReviewed-SHA: '+s.headRefOid+'\\n\\n'+(blocked ? '1. fix defect\\nNon-blocking\\nNone\\nDelivery-Brief: '+JSON.stringify(brief(s.headRefOid)) : 'Non-blocking\\nNone');
  s.blocked=true; save(); fs.writeFileSync(args[args.indexOf('--output-last-message')+1], body);
  } else if(!s.noProgress) {
- fs.writeFileSync('fix.txt',String(Date.now())); git('add','fix.txt'); git('commit','-qm','Repair'); git('push','-q','origin','HEAD:topic');
+ const before=s.headRefOid;
+ const repairValue=String(Date.now());fs.writeFileSync('fix.txt',repairValue); git('add','fix.txt'); git('commit','-qm','Repair'); git('push','-q','origin','HEAD:topic');
+ const after=git('rev-parse','HEAD'), prior=s.comments.filter(c=>/^(REVIEW: BLOCKED|CHANGES REQUESTED)/.test(c.body)).at(-1);
+ const b=prior?.body.match(/^Delivery-Brief: (.+)$/m);const task=b?JSON.parse(b[1]):null;
+ const selfReproduction={argv:['node','-e',"const fs=require('fs');console.log('property-checked');process.exit(fs.existsSync('fix.txt')&&fs.readFileSync('fix.txt','utf8')==="+JSON.stringify(repairValue)+"?0:1)"],acknowledgement:'property-checked'};
+ const selfReview={schema:'factory-self-review/v1',role:'builder',builderId:task?.builderId??'builder-7',repo,head:after,base:git('rev-parse','origin/main'),environment:process.platform+'-'+process.arch+'-node-'+process.versions.node,
+ issues:[{id:'seed',repair:'corrected defect',check:'proof'}],checks:[{id:'proof',head:after,...selfReproduction,control:{head:before,argv:selfReproduction.argv}}],
+ checklist:[...'abcdefghijk'].map(id=>({id,status:'checked',checks:['proof']})),requirements:['oracle','consumers','transitions','results','sinks','repository'].map(id=>({id,status:'checked',checks:['proof']})),
+ testContract:{fixtureOwner:repo,resources:['isolated-worktree'],selectionDependencies:['fix.txt'],globalState:false},instructionEval:{status:'na',relevanceTest:'No registered steering surface matches fixture diff'}};
+ const fix=task?{schema:'factory-fix-receipt/v1',role:'builder',builderId:task.builderId,repo,pr:7,priorHead:task.head,head:after,
+ reviewDigest:require('crypto').createHash('sha256').update(prior.body.split(/^Delivery-Brief: /m)[0].trimEnd()).digest('hex'),
+ resolutions:task.findings.map(f=>({id:f.id,ownerRepo:f.ownerRepo,head:after,consumer:{repo:f.consumer.repo,head:f.consumer.repo===f.ownerRepo&&f.consumer.head===f.originalHead?after:f.consumer.head},contractPin:after,changedPaths:['fix.txt'],reproduction:f.reproduction})),dependencies:[]}:null;
+ fs.writeFileSync(args[args.indexOf('--output-last-message')+1],s.receiptOutput??JSON.stringify({fix,selfReview}));
  s.statusCheckRollup=[{status:'COMPLETED',conclusion:'SUCCESS'}]; s.mergeable='MERGEABLE'; s.mergeStateStatus='CLEAN'; save();
  }
  });
@@ -97,7 +114,14 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
  const wrapper=(name,...args)=>launch("sh",[fileURLToPath(new URL(`../deploy/orch/${name}.sh`,import.meta.url)),...args],
    {...env,FACTORY_ROOT:fileURLToPath(new URL("../",import.meta.url)),FACTORY_PR_CONFIG:config})
  const approve=async body=>{
-  if(body) { const s=await read();s.comments.push({body,author:{login:"reviewer"}});await fs.writeFile(env.FAKE_PR,JSON.stringify(s));return }
+  if(body) { const s=await read();
+    if (/^(REVIEW: BLOCKED|CHANGES REQUESTED)/.test(body) && !body.includes("Delivery-Brief:")) {
+      const reproduction={argv:["node","-e","const fs=require('fs'); console.log('property-checked'); process.exit(fs.existsSync('fix.txt')?0:1)"],acknowledgement:"property-checked"}
+      body += "\nDelivery-Brief: "+JSON.stringify({schema:"factory-delivery-brief/v1",repo:"fixture/new-repository",pr:7,head,
+        reviewDigest:"d".repeat(64),builderId:"builder-7",base:g("rev-parse","origin/main"),environment:`${process.platform}-${process.arch}-node-${process.versions.node}`,
+        findings:[{id:"1",ownerRepo:"fixture/new-repository",consumer:{repo:"fixture/new-repository",head},originalHead:head,contractPin:head,reproduction,ownedPaths:["fix.txt"]}]})
+    }
+    s.comments.push({body,author:{login:"reviewer"}});await fs.writeFile(env.FAKE_PR,JSON.stringify(s));return }
   const before=await read(), apiFailure=before.apiFailure, move=before.moveDuringChecks;before.apiFailure=false;before.moveDuringChecks=false;await fs.writeFile(env.FAKE_PR,JSON.stringify(before))
   const r=await run("review-pr","fixture/new-repository","7");assert.equal(r.code,0,JSON.stringify(r))
   const s=await read();s.apiFailure=apiFailure;s.moveDuringChecks=move;s.moveViewCount=0;s.calls=[];s.ghCalls=[];await fs.writeFile(env.FAKE_PR,JSON.stringify(s))
@@ -108,6 +132,139 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
 }
 const repo="fixture/new-repository"
 const ok = r => assert.equal(r.code,0,JSON.stringify(r))
+
+test("confirmation cannot dispatch from a blocked comment and a changed head without resolution proof",async t=>{
+ const f=await fixture(t);await f.approve(`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. functional defect`)
+ const result=await f.wrapper("review-pr",repo,"7")
+ assert.notEqual(result.code,0);assert.equal((await f.read()).calls.length,0)
+ assert.match(result.stderr,/receipt|resolution|finding/i)
+})
+
+test("builder role cannot substitute for independent review provenance",async t=>{
+ const f=await fixture(t);await f.approve()
+ const id=/Factory-Review: ([0-9a-f-]+)/.exec((await f.read()).comments[0].body)[1]
+ const file=path.join(f.stateDir,"reviews",`${id}.json`), receipt=JSON.parse(await fs.readFile(file))
+ receipt.role="builder";await fs.writeFile(file,JSON.stringify(receipt))
+ const result=await f.run("merge-one-core",repo,"7",f.head)
+ assert.equal(result.code,4);assert.equal((await f.read()).state,"OPEN")
+})
+
+test("unchanged head/finding resolution admits one confirmation across concurrent retries",async t=>{
+ const f=await fixture(t,{blockOnce:true});ok(await f.run("pr-loop",repo,"7","-","3"))
+ const before=(await f.read()).calls.length
+ const outcomes=await Promise.all([f.run("review-pr",repo,"7"),f.run("review-pr",repo,"7")])
+ assert.ok(outcomes.every(r=>[2,75].includes(r.code)))
+ assert.equal((await f.read()).calls.length,before)
+ assert.equal((await fs.readdir(path.join(f.stateDir,"confirmations"))).length,1)
+})
+
+test("a resolved correctness receipt cannot suppress a later CI repair",async t=>{
+ const f=await fixture(t,{blockOnce:true});ok(await f.run("pr-loop",repo,"7","-","3"))
+ const before=await f.read();before.statusCheckRollup=[{status:"COMPLETED",conclusion:"FAILURE"}]
+ await fs.writeFile(f.env.FAKE_PR,JSON.stringify(before))
+ const repair=await f.run("ci-fix",repo,"7","-","--no-loop")
+ ok(repair);assert.notEqual((await f.read()).headRefOid,before.headRefOid)
+ assert.equal((await f.read()).calls.length,before.calls.length+1)
+})
+
+test("direct adapter contenders cannot both dispatch unchanged confirmation evidence",async t=>{
+ const f=await fixture(t,{blockOnce:true});ok(await f.run("review-pr",repo,"7"));ok(await f.run("fix-pr",repo,"7","-"))
+ const {loadDeliveryConfig,createPrDeliveryAdapter}=await import("../src/pr-delivery.mjs")
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const results=await Promise.all([adapter.execute("review",{repo,pr:7}),adapter.execute("review",{repo,pr:7})])
+ assert.equal(results.filter(r=>r.status==="pass").length,1)
+ assert.equal(results.filter(r=>r.status==="fail").length,1)
+})
+
+for(const family of ["Undo", "producer pin"]) test(`owned ${family} dependency routes no wrong-repo fixer, wakes on tested owner pin and keeps distinct reviewer`,async t=>{
+ const f=await fixture(t), owner=await fixture(t)
+ const ownerRepo="fixture/owner"
+ owner.g("checkout","topic")
+ const file=family==="Undo"?"consumer.mjs":"producer.mjs"
+ const oldSource=family==="Undo" ? 'export const undoRequest=()=>({operation:"undo"})\n' : 'export const advertised={}\n'
+ const newSource=family==="Undo" ? 'export const undoRequest=()=>({operation:"undo",human_quote:"synthetic intent"})\n' : 'export const advertised={unfinished:true,diagnostic:true}\n'
+ await fs.writeFile(path.join(owner.checkout,file),oldSource);owner.g("add",file);owner.g("commit","-qm","Original owned defect");owner.g("push","-q","origin","topic")
+ const original=owner.g("rev-parse","HEAD")
+ const code=family==="Undo" ? 'const {undoRequest}=await import("./consumer.mjs"); const undo=r=>r.human_quote?"accepted":"quote-required"; if(undo({operation:"undo"})!=="quote-required")throw Error("authority control");console.log("property-checked");process.exit(undo(undoRequest())==="accepted"?0:1)' : 'const {advertised}=await import("./producer.mjs");console.log("property-checked");process.exit(advertised.unfinished===true&&advertised.diagnostic===true?0:1)'
+ const pinCheck='const cp=await import("node:child_process");if(cp.execFileSync("git",["-C",process.env.FACTORY_CONSUMER_WORKTREE,"rev-parse","HEAD"],{encoding:"utf8"}).trim()!==process.env.FACTORY_CONSUMER_HEAD)throw Error("consumer pin");'
+ const reproduction={argv:["node","--input-type=module","-e",pinCheck+code],acknowledgement:"property-checked"}
+ const body=`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. owned ${family} request incompatible`
+ const brief={schema:"factory-delivery-brief/v1",repo,pr:7,head:f.head,reviewDigest:"d".repeat(64),builderId:"builder-7",base:f.g("rev-parse","origin/main"),environment:`${process.platform}-${process.arch}-node-${process.versions.node}`,
+   findings:[{id:"1",ownerRepo,consumer:{repo,head:f.head},originalHead:original,contractPin:original,reproduction,ownedPaths:[file]}]}
+ await f.approve(body+"\nDelivery-Brief: "+JSON.stringify(brief))
+ f.cfg.repos[ownerRepo]={...owner.cfg.repos[repo]};await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ for(let i=0;i<3;i++) assert.equal((await f.wrapper("fix-pr",repo,"7","-")).code,2)
+ assert.equal((await f.read()).calls.length,0)
+ const proofFile=path.join(f.stateDir,"fixes",`${encodeURIComponent(repo)}-7.json`)
+ const pending=JSON.parse(await fs.readFile(proofFile));assert.equal(pending.dependencies[0].ownerRepo,ownerRepo)
+ assert.equal(pending.dependencies[0].contractPin,original)
+ const events=(await fs.readFile(path.join(f.stateDir,"delivery.jsonl"),"utf8")).trim().split("\n").map(JSON.parse)
+ assert.equal(events.filter(e=>e.status==="suspended").length,1)
+ // A close/reopen cannot turn unresolved dependency evidence into confirmation.
+ const closed=await f.read();closed.state="CLOSED";await fs.writeFile(f.env.FAKE_PR,JSON.stringify(closed))
+ assert.equal((await f.run("review-pr",repo,"7")).code,8)
+ closed.state="OPEN";await fs.writeFile(f.env.FAKE_PR,JSON.stringify(closed));assert.equal((await f.run("review-pr",repo,"7")).code,2)
+ await fs.writeFile(path.join(owner.checkout,file),newSource);owner.g("add",file);owner.g("commit","-qm","Functional owner repair");owner.g("push","-q","origin","topic")
+ const repaired=owner.g("rev-parse","HEAD")
+ const receipt={schema:"factory-fix-receipt/v1",role:"builder",builderId:brief.builderId,repo,pr:7,priorHead:f.head,head:f.head,
+   reviewDigest:(await import("../src/pr-delivery-receipts.mjs")).deliveryDigest(body),dependencies:[],
+   resolutions:[{id:"1",ownerRepo,head:repaired,consumer:brief.findings[0].consumer,contractPin:repaired,changedPaths:[file],reproduction}]}
+ const input=path.join(f.root,"resolution.json");await fs.writeFile(input,JSON.stringify(receipt))
+ ok(await f.run("resolve-findings",repo,"7",input))
+ ok(await f.wrapper("unstick","--once"))
+ const result=await f.read();assert.equal(result.calls.length,1);assert.match(result.calls[0].prompt,/REVIEW MODE: confirm/)
+ assert.ok(result.calls[0].prompt.includes(repaired))
+ const id=/Factory-Review: ([0-9a-f-]+)/.exec(result.comments.at(-1).body)[1]
+ const review=JSON.parse(await fs.readFile(path.join(f.stateDir,"reviews",`${id}.json`)))
+ assert.equal(review.role,"independent-reviewer");assert.notEqual(review.executorId,brief.builderId)
+ assert.deepEqual(await fs.readdir(owner.cfg.repos[repo].worktreeRoot),[],"proof worktrees disposed")
+ assert.equal((await f.run("review-pr",repo,"7")).code,2);assert.equal((await f.read()).calls.length,1)
+ // Rewording the description and resealing equivalent receipt JSON cannot
+ // mint another confirmation while the finding/source/pins stay unchanged.
+ const edited=await f.read();edited.comments[0].body=edited.comments[0].body.replace("request incompatible","request remains the same (description clarified)")
+ await fs.writeFile(f.env.FAKE_PR,JSON.stringify(edited))
+ receipt.reviewDigest=(await import("../src/pr-delivery-receipts.mjs")).deliveryDigest(edited.comments[0].body.split(/^Delivery-Brief: /m)[0].trimEnd())
+ await fs.writeFile(input,JSON.stringify(Object.fromEntries(Object.entries(receipt).reverse())))
+ ok(await f.run("resolve-findings",repo,"7",input))
+ assert.equal((await f.run("review-pr",repo,"7")).code,2);assert.equal((await f.read()).calls.length,1)
+})
+
+test("pre-PR self-review admission runs real checks, catches a seeded defect and persists no canaries",async t=>{
+ const f=await fixture(t)
+ const acknowledgement="property-checked", argv=["node","-e","const fs=require('fs');console.log('property-checked');process.exit(fs.readFileSync('feature.txt','utf8').trim()==='repaired'?0:1)"]
+ const receipt={schema:"factory-self-review/v1",role:"builder",builderId:"builder-7",repo,head:f.head,base:f.g("rev-parse","origin/main"),environment:`${process.platform}-${process.arch}-node-${process.versions.node}`,
+   issues:[{id:"seed",repair:"CANARY_CLIENT CANARY_SECRET",check:"seed"}],checks:[{id:"seed",head:f.head,argv,acknowledgement,control:{head:f.g("rev-parse","origin/main"),argv}}],
+   checklist:[..."abcdefghijk"].map(id=>({id,status:"checked",checks:["seed"]})),requirements:["oracle","consumers","transitions","results","sinks","repository"].map(id=>({id,status:"checked",checks:["seed"]})),
+   testContract:{fixtureOwner:repo,resources:["isolated-worktree"],selectionDependencies:["feature.txt"],globalState:false},instructionEval:{status:"na",relevanceTest:"No registered steering surfaces match fixture paths"}}
+ // Original base lacks feature.txt, so the original control also needs to emit
+ // its acknowledgement and a definite property failure rather than an exception.
+ argv[2]="const fs=require('fs');console.error('CANARY_CLIENT CANARY_SECRET');console.log('property-checked');process.exit(fs.existsSync('feature.txt')&&fs.readFileSync('feature.txt','utf8').trim()==='repaired'?0:1)"
+ const file=path.join(f.root,"self.json");await fs.writeFile(file,JSON.stringify(receipt))
+ assert.equal((await f.run("builder-preflight",repo,file)).code,2,"still-broken repair is rejected")
+ f.g("checkout","topic");await fs.writeFile(path.join(f.checkout,"feature.txt"),"repaired");f.g("add","feature.txt");f.g("commit","-qm","Repair seeded property");f.g("push","-q","origin","topic")
+ receipt.head=f.g("rev-parse","HEAD");receipt.checks[0].head=receipt.head;await fs.writeFile(file,JSON.stringify(receipt))
+ ok(await f.run("builder-preflight",repo,file))
+ const raw=await fs.readFile(path.join(f.stateDir,"builders",`${repo.replaceAll("/","--")}-${receipt.head}.json`),"utf8")
+ assert.doesNotMatch(raw,/CANARY/);assert.equal(JSON.parse(raw).role,"builder")
+ assert.equal((await f.read()).comments.length,0,"self-review never posts or creates independent review")
+ f.cfg.repos[repo].instructionSurfaces=["feature.txt"];await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ assert.equal((await f.run("builder-preflight",repo,file)).code,2,"registered steering cannot skip instruction eval")
+ receipt.instructionEval={status:"checked",checks:["seed"]};await fs.writeFile(file,JSON.stringify(receipt))
+ ok(await f.run("builder-preflight",repo,file))
+ receipt.checklist[0].checks=[];await fs.writeFile(file,JSON.stringify(receipt))
+ assert.equal((await f.run("builder-preflight",repo,file)).code,2,"unchecked headings fail")
+ for(const name of await fs.readdir(f.stateDir,{recursive:true})) {
+   const saved=path.join(f.stateDir,name)
+   if((await fs.stat(saved)).isFile()) assert.doesNotMatch(await fs.readFile(saved,"utf8"),/CANARY/)
+ }
+})
+
+for(const action of ["builder-preflight","resolve-findings"]) test(`malformed ${action} receipt cannot echo canaries through JSON parser errors`,async t=>{
+ const f=await fixture(t), file=path.join(f.root,"malformed-receipt.json")
+ await fs.writeFile(file,'CANARY_CLIENT CANARY_SECRET')
+ const result=await f.run(action,repo,...(action==="resolve-findings"?["7",file]:[file]))
+ assert.notEqual(result.code,0);assert.doesNotMatch(result.stdout+result.stderr,/CANARY/)
+})
 
 test("approve -> enqueue -> serial squash merge verifies main",async t=>{
  const f=await fixture(t);ok(await f.run("review-pr",repo,"7"));const s=await f.read()
@@ -446,7 +603,7 @@ test("app refusal replay: nine launches across deployed recovery writers preserv
  assert.ok(results.some(r=>r.code===0),JSON.stringify(results))
  assert.equal((await f.read()).calls.length,1,"budget reopening permits exactly one review")
 })
-test("named actionable dependency and new head each allow one start after no progress",async t=>{
+test("named input permits one new fix but changed head alone cannot confirm unresolved findings",async t=>{
  const f=await fixture(t,{noProgress:true});await f.approve("REVIEW: BLOCKED\nReviewed-SHA: "+f.head+"\n1. defect")
  assert.equal((await f.wrapper("pr-loop",repo,"7","-","3")).code,2)
  f.cfg.repos[repo].dependencyRevision="tested-contract-revision-two";await fs.writeFile(f.config,JSON.stringify(f.cfg))
@@ -456,9 +613,9 @@ test("named actionable dependency and new head each allow one start after no pro
  const wt=path.join(f.root,"worktrees","fix-7")
  await fs.writeFile(path.join(wt,"feature.txt"),"changed\n")
  for(const args of [["add","feature.txt"],["commit","-qm","New actionable head"],["push","-q","origin","topic"]]) execFileSync("git",args,{cwd:wt,env:f.env,stdio:"ignore"})
- ok(await f.wrapper("unstick","--once"))
- ok(await f.wrapper("stall-watch","--once"))
- assert.equal((await f.read()).calls.length,3,"stale blocking evidence starts only a fresh review")
+ assert.equal((await f.wrapper("unstick","--once")).code,2)
+ assert.equal((await f.wrapper("stall-watch","--once")).code,2)
+ assert.equal((await f.read()).calls.length,2,"head movement is not a resolution receipt")
 })
 for(const code of [75,17]) test(`deployed review and fix wrappers preserve child exit ${code}`,async t=>{
  const f=await fixture(t,{childCode:code})

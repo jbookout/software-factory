@@ -2,15 +2,20 @@
 import { loadDeliveryConfig, createPrDeliveryAdapter } from "../src/pr-delivery.mjs"
 import { runPrDelivery } from "../src/operating-loop.mjs"
 import { pause } from "../src/pr-delivery-state.mjs"
+import fs from "node:fs/promises"
 
 const [configPath, action, ...args] = process.argv.slice(2)
+const receiptFrom = async file => {
+  try { return JSON.parse(await fs.readFile(file, "utf8")) }
+  catch { throw Object.assign(new Error("receipt input unavailable or invalid JSON"), { code: 2 }) }
+}
 try {
   if (!configPath || !action) throw new Error("usage: node bin/pr-delivery.mjs <config.json> <action> [args]")
   const adapter = createPrDeliveryAdapter(await loadDeliveryConfig(configPath))
   const [repo, number, extra, fourth] = args
   const once = args.includes("--once"), pr = Number(number)
   const daemons = ["merge-queue", "auto-enqueue", "recover"]
-  if (!daemons.includes(action) && !["branch-wt", "import-legacy"].includes(action) && (!Number.isSafeInteger(pr) || pr <= 0)) throw new Error("PR number must be a positive integer")
+  if (!daemons.includes(action) && !["branch-wt", "import-legacy", "builder-preflight"].includes(action) && (!Number.isSafeInteger(pr) || pr <= 0)) throw new Error("PR number must be a positive integer")
   const request = { repo, pr }
   const loop = () => runPrDelivery({ ...request, worktree: extra, rounds: Number(fourth ?? 3) }, adapter)
   const report = result => {
@@ -19,7 +24,10 @@ try {
     process.stdout.write(`${data.message ?? data.worktree ?? JSON.stringify(data)}\n`)
     process.exitCode = data.code ?? (result.status === "fail" ? 1 : 0)
   }
-  if (action === "pr-loop") report(await adapter.exclusive(repo, pr, loop))
+  if (action === "builder-preflight") report(await adapter.execute("builder:preflight", { repo, receipt: await receiptFrom(number) }))
+  else if (action === "resolve-findings") report(await adapter.exclusive(repo, pr, async () => adapter.execute(action,
+    { ...request, receipt: await receiptFrom(extra) })))
+  else if (action === "pr-loop") report(await adapter.exclusive(repo, pr, loop))
   else if (action === "recover") {
     do {
       for (const candidate of await adapter.recoveryCandidates()) {

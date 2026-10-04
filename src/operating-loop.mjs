@@ -353,7 +353,7 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
 }
 
 // The PR lifecycle crosses the same execute(step, request) seam as build jobs.
-// Progress is the remote head, not the agent's claimed completion or findings.
+// Progress is a changed remote head or a tested executor resolution receipt.
 export async function runPrDelivery(job, adapter) {
   const { rounds = 3, ...request } = job
   if (!Number.isSafeInteger(rounds) || rounds <= 0) throw new Error("rounds must be a positive integer")
@@ -376,7 +376,9 @@ export async function runPrDelivery(job, adapter) {
     if (inspect.data.approved || inspect.data.blocked) {
       const repair = await execute(inspect.data.approved ? "ci-fix" : "fix")
       if (repair.status !== "pass") return stopped(repair)
-      if (repair.data.head === inspect.data.head) {
+      // A tested owner pin can resolve a foreign finding without changing this
+      // repository's head. Confirmation rechecks the bound receipt independently.
+      if (repair.data.head === inspect.data.head && repair.data.resolution?.status !== "resolved") {
         const stop = { cause: "source-no-progress", code: 2, message: "NO-PROGRESS: fix pushed nothing", resetAt: null }
         const saved = await adapter.execute("pr:suspend", { ...request, head: inspect.data.head, stop })
         if (saved.status !== "pass") return stopped(saved)

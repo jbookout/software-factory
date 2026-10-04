@@ -71,7 +71,7 @@ Queue comments say `DELIVERY VERIFIED` and are outside the review protocol.
 
 Stops are observable in CLI output; process and adapter outcomes also enter
 private `delivery.jsonl`. An unchanged
-repair head exits 2 (`NO-PROGRESS`), exhausted usage/slots exits 75, timeout exits
+repair head without a tested finding-resolution receipt exits 2 (`NO-PROGRESS`), exhausted usage/slots exits 75, timeout exits
 142, unknown repo exits 9. Failed merge outcomes remain in `queue.json`;
 transient API errors retry three times after the initial attempt.
 Automatic scanning can enqueue a recovered failed head again, preserving prior
@@ -149,3 +149,59 @@ twice, respecting bounded provider delay. They never become CI-red.
 starts separately, and wait events name their cause/reset. Neither count proves
 paid model usage. The audit's weekly reduction targets require matched rollout
 cohorts; these replays do not establish fleet savings or active installation.
+
+## Finding receipts and builder preflight
+
+All builder and review entry points share
+[the receipt schema](../schemas/pr-delivery.schema.json). A blocking review
+includes a one-line `Delivery-Brief` manifest whose IDs match every numbered
+finding. It binds the original reproduction, owning repository/paths, consumer
+revision, contract pin, reviewed head and review bytes. Legacy blocking comments
+without that manifest refuse dispatch until the orchestrator supplies the
+missing binding; the factory never guesses an owner from prose.
+
+Fix workers return `{fix, selfReview}` JSON. The adapter replays each original
+command on its original and repaired sources in disposable detached worktrees,
+verifies claimed changed paths against Git, and pins the consumer worktree too.
+Commands receive `FACTORY_PROOF_HEAD`, `FACTORY_CONTRACT_PIN`,
+`FACTORY_CONSUMER_HEAD` and `FACTORY_CONSUMER_WORKTREE`. Each reproduction prints
+its exact acknowledgement after checking the property, exits 1 for the failing
+control and 0 for the repair. Empty, partial, refused, timed-out or exceptional
+results never count. A reseal or main merge with the same defect cannot pass.
+Modified proof source is retained for diagnosis rather than discarded.
+
+Foreign findings create one owned wait with the finding ID, original head/pin,
+deadline and `owner-tested-pin-receipt` next action. They launch no wrong-repo
+fixer. Configure the owning and consuming repos, then use
+`node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" resolve-findings "$R" "$N" "$RECEIPT"`
+to replay the executor's tested pin receipt. Confirmation requires every finding
+resolved at the current PR head. Unchanged head/finding/evidence admits one
+confirmation attempt; a tested foreign owner pin wakes the recovery loop even
+when the local PR head stays unchanged. A distinct reviewer still checks the
+repair and CI.
+
+Before creating a PR, the external builder calls
+`node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" builder-preflight "$R" "$RECEIPT"`.
+This command validates and replays a `factory-self-review/v1` receipt against
+the pushed head, current `origin/main` and actual Node/platform environment.
+It does not create a PR or a review comment. The builder remains responsible
+for calling it before PR creation; the factory does not intercept arbitrary
+`gh pr create` calls. Repair workers invoke the same admission automatically.
+The local pass uses the identical full-review checklist without its posting
+instruction. Each heading references executed checks; each N/A gives its failed
+relevance test. Repairs reference the same failing/repaired reproduction.
+Fixture ownership, resources, selection dependencies and the six builder
+requirements are mandatory. Product-owned `instructionSurfaces` may list
+registered steering file paths in repo config; an intersecting diff must carry
+executed instruction-eval checks.
+
+New proof records persist command/output/issue digests and execution results,
+not raw subprocess diagnostics or repair narrative. They include replay time,
+check and repaired-issue counts; unreported model tokens remain unknown.
+Rollout comparison must still measure paired defect detection, false blockers,
+first-review findings and total model usage. Builder proof has role `builder`;
+only a fresh factory reviewer execution with role `independent-reviewer` can
+satisfy approval provenance. Earlier reviewer receipts without that role require
+a new independent review. These are source capabilities and replay evidence;
+installation into the active orchestration directory remains the orchestrator's
+cutover operation.
