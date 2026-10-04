@@ -30,6 +30,9 @@ export async function runProofReplay(argv, { cwd, consumerDir = cwd, pins, timeo
       isolated.push('--ro-bind', path.dirname(process.execPath), path.dirname(process.execPath))
     for (const root of roots) isolated.push('--bind', root, root)
     for (const [key, value] of Object.entries(env)) isolated.push('--setenv', key, value)
+    // Auto-created parent directories are private, but must not become extra
+    // writable scratch. Remounts leave the nested proof bind mounts writable.
+    isolated.push('--remount-ro', '/tmp', '--remount-ro', '/')
     isolated.push('--chdir', cwd, '--', ...command)
   } else throw new DeliveryError('proof replay isolation unavailable on this platform', 2)
   try { return await runProcess(isolated, { cwd, env, timeoutMs }) }
