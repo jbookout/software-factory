@@ -228,8 +228,12 @@ provenance, even for allowlisted users.
 
 All receipt replay uses a clean environment and a platform sandbox:
 macOS Seatbelt (`/usr/bin/sandbox-exec`) or Linux Bubblewrap (`bwrap` with working
-unprivileged user namespaces). CI installs Bubblewrap. Unsupported or unavailable
-isolation refuses proof. Replay can read system tooling and its pinned producer
+unprivileged user namespaces, including private network setup). CI installs
+Bubblewrap on the pinned Ubuntu 22.04 image and runs startup and host-network
+isolation smoke tests before the full suite. Ubuntu 24 runner policy refused
+private-loopback setup in the tested image; other Linux hosts must provide a
+compatible sandbox policy. Unsupported or unavailable isolation refuses proof.
+Replay can read system tooling and its pinned producer
 and consumer worktrees, and write only in those disposable trees. It cannot read
 the worker's home or shared Git metadata, inherit its credential environment, or
 use the network. Checks must use source files and `FACTORY_PROOF_HEAD`,
