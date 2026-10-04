@@ -36,7 +36,7 @@ export function resolveDesignSettings(profile) {
     }
   }
   const snapshot = structuredClone(profile)
-  return deepFreeze({ profile: snapshot, digest: `sha256:${canonicalDigest(snapshot)}` })
+  return deepFreeze({ profile: snapshot, digest: `sha256:${canonicalDigest(snapshot, { integerKeysFirst: true })}` })
 }
 
 export async function loadDesignSettings(file = join(homedir(), '.config/software-factory/design-manager/settings.json')) {

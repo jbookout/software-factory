@@ -22,6 +22,17 @@ test("deepFreeze freezes nested objects and arrays", () => {
   assert.throws(() => { value.list.push(1) }, TypeError)
 })
 
+test("numeric keys preserve both JSON settings ordering and lexical signature ordering", () => {
+  const value = { rows: [{ '2': 'two', '10': 'ten', '01': 'leading', '4294967295': 'non-index' }] }
+  const lexical = '{"rows":[{"01":"leading","10":"ten","2":"two","4294967295":"non-index"}]}'
+  const json = '{"rows":[{"2":"two","10":"ten","01":"leading","4294967295":"non-index"}]}'
+  assert.equal(canonicalJson(value), lexical)
+  assert.equal(canonicalJson(value, { integerKeysFirst: true }), json)
+  assert.notEqual(canonicalDigest(value), canonicalDigest(value, { integerKeysFirst: true }))
+  assert.equal(hmacSignature({ '2': 'two', '10': 'ten' }, 'k'.repeat(32)),
+    'hmac-sha256:0e483b1e44e9bed8c0d87f41da0f593df99b3762ae27274aa7f6bcde716033ec')
+})
+
 test("design settings digest the profile with the shared canonical rule", async () => {
   const profile = JSON.parse(await readFile(new URL("../config/design-manager/joe.example.json", import.meta.url)))
   assert.equal(resolveDesignSettings(profile).digest, `sha256:${canonicalDigest(profile)}`)
