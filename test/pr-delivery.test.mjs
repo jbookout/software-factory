@@ -343,21 +343,6 @@ test("concurrent recovery writers cannot redispatch an unchanged deterministic s
  assert.ok(results.every(r=>[2,75].includes(r.code)))
  assert.equal((await f.read()).calls.length,1)
 })
-test("nine automatic redispatches on one refused head record one wait and no new attempts",async t=>{
- const f=await fixture(t,{noProgress:true});await f.approve("REVIEW: BLOCKED\nReviewed-SHA: "+f.head+"\n1. defect")
- assert.equal((await f.run("pr-loop",repo,"7","-","3")).code,2)
- for(let i=0;i<9;i++) assert.equal((await f.run("pr-loop",repo,"7","-","3")).code,2)
- assert.equal((await f.read()).calls.length,1)
- const events=(await fs.readFile(path.join(f.stateDir,"delivery.jsonl"),"utf8")).trim().split("\n").map(JSON.parse)
- assert.equal(events.filter(e=>e.status==="suspended").length,1)
-})
-test("concurrent recovery writers cannot redispatch an unchanged deterministic stop",async t=>{
- const f=await fixture(t,{noProgress:true});await f.approve("REVIEW: BLOCKED\nReviewed-SHA: "+f.head+"\n1. defect")
- assert.equal((await f.run("pr-loop",repo,"7","-","3")).code,2)
- const results=await Promise.all([f.run("pr-loop",repo,"7","-","3"),f.run("pr-loop",repo,"7","-","3")])
- assert.ok(results.every(r=>[2,75].includes(r.code)))
- assert.equal((await f.read()).calls.length,1)
-})
 test("CHANGES REQUESTED starts a repair round before re-review",async t=>{
  const f=await fixture(t,{noProgress:true});await f.approve(`CHANGES REQUESTED\nReviewed-SHA: ${f.head}\n1. fix defect`)
  const r=await f.run("pr-loop",repo,"7","-","1")
@@ -811,9 +796,10 @@ for(const phase of ['fixes','confirmations','reviews']) test(`blocking 7: malfor
  assert.doesNotMatch(await fs.readFile(path.join(f.stateDir,'delivery.jsonl'),'utf8'),/CANARY/)
 })
 
-test('blocking 8: optional numbered notes and indented reproduction steps are outside the finding set',async t=>{
- const f=await fixture(t);await f.approve(`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. blocking defect\n   1. reproduce it\n## Non-blocking\n1. optional improvement`)
+for(const heading of ['Non-blocking','Follow-ups (non-blocking)']) test(`blocking 8: ${heading} notes and indented reproduction steps are outside the finding set`,async t=>{
+ const f=await fixture(t);await f.approve(`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. blocking defect\n   1. reproduce it\n## ${heading}\n1. optional improvement`)
  ok(await f.run('fix-pr',repo,'7','-'))
+ assert.equal((await f.read()).calls.length,1)
 })
 
 test('foreign-owner proof exercises the advanced PR consumer, including a broken current consumer',async t=>{

@@ -296,7 +296,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     try { brief = JSON.parse(line[1]) } catch { throw new DeliveryError("invalid finding brief JSON", 2) }
     brief.reviewDigest = deliveryDigest(prior.body.split(/^Delivery-Brief: /m)[0].trimEnd())
     validateDeliveryReceipt("brief", brief)
-    const blocking = prior.body.split(/^Delivery-Brief: /m)[0].split(/^(?:#{1,6}\s*)?(?:Non-blocking|Follow-ups\s*\(non-blocking\))\b.*$/mi)[0]
+    const blocking = prior.body.split(/^Delivery-Brief: /m)[0].split(/^(?:#{1,6}\s*)?(?:Non-blocking\b|Follow-ups\s*\(non-blocking\)(?=\s|$)).*$/mi)[0]
     const numbered = [...blocking.matchAll(/^(\d+)\.\s/gm)].map(m => m[1])
     if (brief.repo !== repo || brief.pr !== pr || brief.head !== prior.sha ||
         numbered.length !== brief.findings.length || new Set(numbered).size !== numbered.length ||
