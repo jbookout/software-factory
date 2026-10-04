@@ -1,6 +1,9 @@
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
+import subprocess
+import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -94,6 +97,44 @@ class PracticeAudit(unittest.TestCase):
         second = self.run_audit(bad)
         self.assertEqual([f['response']['id'] for f in first['properties'] if f['status'] == 'breach'],
                          [f['response']['id'] for f in second['properties'] if f['status'] == 'breach'])
+
+    def test_review_9_malformed_present_nodes_never_pass(self):
+        cases = [CLEAN.replace('    runs-on:', '    if: [false]\n    runs-on:'),
+                 CLEAN.split('    steps:')[0], CLEAN.replace('    steps:', '    steps: {}\n    unused:'),
+                 CLEAN.replace('on: [pull_request, push]', 'on:\n  pull_request: [not-valid]'),
+                 CLEAN.replace('on: [pull_request, push]', 'on: [{pull_request: null}]'),
+                 CLEAN.replace('    steps:', '    steps: []\n    unused:'),
+                 CLEAN.replace('    runs-on: ubuntu-latest', '    runs-on: {}'),
+                 CLEAN.replace('    runs-on: ubuntu-latest', '    runs-on: true'),
+                 CLEAN.replace('      - run: echo test', '      - run: null'),
+                 CLEAN.replace('      - run: echo test', '      - run: true'),
+                 CLEAN.replace('      - run: echo test', '      - run: [echo, test]')]
+        for text in cases:
+            with self.subTest(text=text):
+                report = self.run_audit(text)
+                self.assertNotEqual(report['status'], 'pass')
+                self.assertFalse(any(p['property'] == 'required-unconditional' and p['status'] == 'pass'
+                                     for p in report['properties']))
+
+    def test_review_10_equivalent_always_wrappers(self):
+        for condition in ['always()', '${{always()}}', '${{ always() }}', '${{  always()  }}']:
+            with self.subTest(condition=condition):
+                text = CLEAN.replace('    runs-on:', f'    needs: build\n    if: {condition}\n    runs-on:')
+                text += '  build:\n    timeout-minutes: 15\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo build\n'
+                report = self.run_audit(text)
+                self.assertEqual(report['status'], 'pass')
+
+    def test_review_11_deep_yaml_cli_is_structured_and_redacted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / '.github/workflows/ci.yml'
+            path.parent.mkdir(parents=True)
+            path.write_text('jobs: ' + '[' * 700 + 'SECRET-CANARY' + ']' * 700)
+            result = subprocess.run([sys.executable, str(ROOT / 'scripts/orch/audit-workflows.py'), directory],
+                                    capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(json.loads(result.stdout)['status'], 'unknown')
+        self.assertEqual(result.stderr, '')
+        self.assertNotIn('SECRET-CANARY', result.stdout)
 
 
 if __name__ == '__main__':

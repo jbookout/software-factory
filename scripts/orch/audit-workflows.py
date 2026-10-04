@@ -11,6 +11,24 @@ import yaml
 from yaml.nodes import MappingNode, ScalarNode, SequenceNode
 
 
+class BoundedLoader(yaml.SafeLoader):
+    """Enforce parse budgets before PyYAML recursively constructs a node graph."""
+    def __init__(self, stream):
+        super().__init__(stream)
+        self.node_depth = 0
+        self.nodes_remaining = 10000
+
+    def compose_node(self, parent, index):
+        self.node_depth += 1
+        self.nodes_remaining -= 1
+        try:
+            if self.node_depth > 64 or self.nodes_remaining < 0:
+                raise ValueError('YAML parse budget exceeded')
+            return super().compose_node(parent, index)
+        finally:
+            self.node_depth -= 1
+
+
 def mapping(node):
     if not isinstance(node, MappingNode):
         raise ValueError('expected mapping')
@@ -24,6 +42,87 @@ def mapping(node):
 
 def scalar(node):
     return node.value if isinstance(node, ScalarNode) else None
+
+
+def expression(node):
+    value = scalar(node)
+    if value is None:
+        return None
+    value = value.strip()
+    if value.startswith('${{') and value.endswith('}}'):
+        value = value[3:-2].strip()
+    return value
+
+
+def scalar_list(node):
+    return isinstance(node, SequenceNode) and bool(node.value) and all(isinstance(n, ScalarNode) for n in node.value)
+
+
+def text_scalar(node):
+    return isinstance(node, ScalarNode) and node.tag == 'tag:yaml.org,2002:str' and bool(node.value.strip())
+
+
+def workflow_shape(node):
+    """Validate the nodes consumed by property checks before emitting any pass."""
+    workflow = mapping(node)
+    jobs = mapping(workflow['jobs'])
+    if not jobs:
+        raise ValueError('workflow needs jobs')
+    on = workflow.get('on')
+    if isinstance(on, MappingNode):
+        triggers = mapping(on)
+        for name, trigger in triggers.items():
+            if isinstance(trigger, ScalarNode) and trigger.tag == 'tag:yaml.org,2002:null':
+                continue
+            if name == 'schedule':
+                if not isinstance(trigger, SequenceNode) or not trigger.value:
+                    raise ValueError('invalid schedule')
+                for entry in trigger.value:
+                    if not isinstance(mapping(entry).get('cron'), ScalarNode):
+                        raise ValueError('invalid cron')
+                continue
+            filters = mapping(trigger)
+            for key in ('types', 'paths', 'paths-ignore', 'branches', 'branches-ignore', 'tags', 'tags-ignore', 'workflows'):
+                if key in filters and not scalar_list(filters[key]):
+                    raise ValueError('invalid trigger filter')
+    elif scalar_list(on):
+        triggers = {n.value: None for n in on.value}
+    elif isinstance(on, ScalarNode) and on.tag == 'tag:yaml.org,2002:str' and on.value:
+        triggers = {on.value: None}
+    else:
+        raise ValueError('invalid workflow trigger')
+    if not triggers:
+        raise ValueError('missing workflow trigger')
+    for job_node in jobs.values():
+        job = mapping(job_node)
+        for key in ('if', 'uses', 'timeout-minutes'):
+            if key in job and not isinstance(job[key], ScalarNode):
+                raise ValueError('invalid scalar job field')
+        if 'needs' in job and not (isinstance(job['needs'], ScalarNode) or scalar_list(job['needs'])):
+            raise ValueError('invalid job dependencies')
+        if 'uses' in job:
+            if not text_scalar(job['uses']) or 'steps' in job or 'runs-on' in job:
+                raise ValueError('reusable job has execution fields')
+            continue
+        runner = job.get('runs-on')
+        runner_group = mapping(runner) if isinstance(runner, MappingNode) else {}
+        if not (text_scalar(runner) or scalar_list(runner) and all(text_scalar(n) for n in runner.value) or
+                runner_group and set(runner_group) <= {'group', 'labels'} and all(
+                    text_scalar(v) or scalar_list(v) and all(text_scalar(n) for n in v.value) for v in runner_group.values())):
+            raise ValueError('missing or invalid runner')
+        steps = job.get('steps')
+        if not isinstance(steps, SequenceNode) or not steps.value:
+            raise ValueError('normal job needs steps')
+        for step_node in steps.value:
+            step = mapping(step_node)
+            if ('run' in step) == ('uses' in step):
+                raise ValueError('step needs exactly one execution form')
+            for key in ('run', 'uses'):
+                if key in step and not text_scalar(step[key]):
+                    raise ValueError('invalid scalar step field')
+            if 'if' in step and not isinstance(step['if'], ScalarNode):
+                raise ValueError('invalid step condition')
+    return workflow, jobs, triggers
 
 
 def valid_graph(node, ancestors=(), depth=0, budget=None):
@@ -89,20 +188,11 @@ def audit(root, required=(), owner='orchestrator-maintainer'):
             text = path.read_text()
             if len(text) > 1024 * 1024:
                 raise ValueError('workflow too large')
-            node = yaml.compose(text, Loader=yaml.SafeLoader)
+            node = yaml.compose(text, Loader=BoundedLoader)
             valid_graph(node)
-            workflow = mapping(node)
-            jobs = mapping(workflow['jobs'])
+            workflow, jobs, triggers = workflow_shape(node)
             on = workflow.get('on')
-            if isinstance(on, MappingNode):
-                triggers = mapping(on)
-            elif isinstance(on, SequenceNode):
-                triggers = {scalar(n): None for n in on.value}
-            elif isinstance(on, ScalarNode):
-                triggers = {on.value: None}
-            else:
-                raise ValueError('missing workflow trigger')
-        except (OSError, ValueError, KeyError, yaml.YAMLError):
+        except (OSError, ValueError, KeyError, yaml.YAMLError, RecursionError):
             record(file, '*', 'syntax', 'unknown', None, 'Workflow missing, unreadable, ambiguous or invalid; raw parser diagnostics withheld')
             continue
         record(file, '*', 'syntax', 'pass', node, 'Parsed YAML with unique keys and bounded nonrecursive structure')
@@ -111,11 +201,7 @@ def audit(root, required=(), owner='orchestrator-maintainer'):
         for missing in sorted(targets.get(file, set()) - set(jobs)):
             record(file, missing, 'required-trigger', 'breach', workflow['jobs'], 'Required job absent from workflow')
         for job_name, job_node in jobs.items():
-            try:
-                job = mapping(job_node)
-            except ValueError:
-                record(file, job_name, 'syntax', 'unknown', job_node, 'Job is not a mapping')
-                continue
+            job = mapping(job_node)
             timeout = scalar(job.get('timeout-minutes'))
             if 'uses' in job:
                 record(file, job_name, 'job-timeout', 'unknown', job_node, 'Reusable workflow: inspect the pinned called workflow for effective timeouts')
@@ -132,9 +218,9 @@ def audit(root, required=(), owner='orchestrator-maintainer'):
             record(file, job_name, 'permissions', status, effective_permissions or job_node,
                    'Read-only explicit permissions' if status == 'pass' else 'Missing permissions or write permissions need trust review')
             if job_name in targets.get(file, set()):
-                condition = scalar(job.get('if'))
-                always = condition in ('always()', '${{ always() }}')
-                unconditional = always or ('needs' not in job and condition in (None, 'true', '${{ true }}'))
+                condition = expression(job.get('if'))
+                always = condition == 'always()'
+                unconditional = always or ('needs' not in job and condition in (None, 'true'))
                 record(file, job_name, 'required-unconditional', 'pass' if unconditional else 'breach',
                        job.get('if', job_node), 'Required gate must report even after upstream failure; any conditional selection needs an always-reporting gate')
                 trigger = triggers.get('pull_request')
@@ -149,11 +235,7 @@ def audit(root, required=(), owner='orchestrator-maintainer'):
             pin_nodes = [job['uses']] if 'uses' in job else []
             found_untrusted = False
             for step_node in steps:
-                try:
-                    step = mapping(step_node)
-                except ValueError:
-                    record(file, job_name, 'syntax', 'unknown', step_node, 'Step is not a mapping')
-                    continue
+                step = mapping(step_node)
                 if 'uses' in step:
                     pin_nodes.append(step['uses'])
                 uses = scalar(step.get('uses')) or ''
@@ -200,7 +282,7 @@ def main():
         report = audit(args.root, required, args.owner)
         print(json.dumps(report, sort_keys=True))
         return 1 if report['status'] == 'breach' else 2 if report['status'] == 'unknown' else 0
-    except (OSError, ValueError, TypeError, KeyError):
+    except (OSError, ValueError, TypeError, KeyError, RecursionError, OverflowError):
         print(json.dumps({'schema': 'workflow-audit/v1', 'status': 'unknown', 'error': 'invalid or unreadable audit inputs'}))
         return 2
 

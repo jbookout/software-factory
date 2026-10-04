@@ -6,6 +6,7 @@ from collections import Counter, defaultdict
 import copy
 from datetime import datetime, timezone
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -15,6 +16,15 @@ import statistics
 import sys
 import tempfile
 import zlib
+
+from jsonschema import Draft202012Validator
+
+ROOT = Path(__file__).resolve().parents[2]
+BUILD_VALIDATOR = Draft202012Validator(json.loads((ROOT / 'schemas/factory-build-result.schema.json').read_text()))
+_reader_spec = importlib.util.spec_from_file_location('artifact_reader', ROOT / 'src/read-artifact.py')
+_reader = importlib.util.module_from_spec(_reader_spec)
+_reader_spec.loader.exec_module(_reader)
+MAX_BYTES = 10 * 1024 * 1024
 
 KINDS = {'offered', 'enqueued', 'dependency_ready', 'admitted', 'started', 'setup_finished',
          'tests', 'usage', 'completed', 'cleanup', 'ci', 'api_unknown', 'refused',
@@ -45,7 +55,10 @@ def timestamp(value):
 
 
 def number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+    try:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+    except OverflowError:
+        return False
 
 
 def distribution(values, expected):
@@ -80,35 +93,25 @@ def save_immutable(path, value):
 
 
 def read_artifact_bytes(root, artifact):
-    """Descriptor-relative no-follow reads; no workspace/secret-path fallback."""
+    """Reuse the evidence store's bounded, component-level no-follow reader."""
     if not root or not isinstance(artifact, dict):
         return None
     ref = artifact.get('ref')
-    if not isinstance(ref, str) or '\\' in ref or ref.startswith('/'):
+    if not isinstance(ref, str):
         return None
-    parts = ref.split('/')
-    if any(p in ('', '.', '..') for p in parts):
-        return None
-    descriptors = []
     try:
-        descriptors.append(os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW))
-        for part in parts[:-1]:
-            descriptors.append(os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                                       dir_fd=descriptors[-1]))
-        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptors[-1])
-        with os.fdopen(fd, 'rb') as source:
-            import stat
-            if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
-                return None
-            data = source.read(10 * 1024 * 1024 + 1)
-        if len(data) > 10 * 1024 * 1024 or hashlib.sha256(data).hexdigest() != artifact.get('digest'):
+        root = os.path.abspath(root)  # Do not resolve symlinks; the shared reader refuses them.
+        identity = os.stat(root)
+        encoded = _reader.read_artifact({'root': root, 'device': identity.st_dev, 'inode': identity.st_ino,
+                                         'ref': ref, 'max_bytes': MAX_BYTES})
+        if encoded is None:
+            return None
+        data = base64.b64decode(encoded, validate=True)
+        if hashlib.sha256(data).hexdigest() != artifact.get('digest'):
             return None
         return data
     except (OSError, ValueError):
         return None
-    finally:
-        for fd in reversed(descriptors):
-            os.close(fd)
 
 
 def read_artifact(root, artifact):
@@ -116,7 +119,7 @@ def read_artifact(root, artifact):
     try:
         result = json.loads(data) if data is not None else None
         return result if isinstance(result, dict) else None
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
 
 
@@ -150,9 +153,17 @@ def historical(audit, bugs=None):
 
 
 def decode_audit(path):
-    text = Path(path).read_text()
+    with Path(path).open('rb') as source:
+        data = source.read(MAX_BYTES + 1)
+    if len(data) > MAX_BYTES:
+        raise ValueError('audit too large')
+    text = data.decode()
     payload = text.rsplit('<!-- FAILURE_AUDIT_EVIDENCE_START -->', 1)[1].split('```text\n')[1].split('\n```')[0]
-    return json.loads(zlib.decompress(base64.b64decode(payload, validate=True)))
+    decoder = zlib.decompressobj()
+    decoded = decoder.decompress(base64.b64decode(payload, validate=True), MAX_BYTES + 1)
+    if len(decoded) > MAX_BYTES or not decoder.eof or decoder.unused_data:
+        raise ValueError('invalid or oversized compressed audit')
+    return json.loads(decoded)
 
 
 def read_bug_counts(path):
@@ -168,8 +179,12 @@ def read_bug_counts(path):
             'findings_by_class': counts, 'cutoff': cutoff}
 
 
-def measure(records, artifact_root=None, stratify=True):
+def measure(records, artifact_root=None, stratify=True, window=None):
     """Join only bound normalized events. Legacy delivery lines are disclosed as unjoinable."""
+    if window is not None and stratify:
+        # Validate the journal before censoring; outside-window contradictions stay invalid.
+        records = list(records)
+        measure(records, artifact_root, stratify=False)
     attempts = defaultdict(list)
     seen = {}
     unjoinable = 0
@@ -203,15 +218,29 @@ def measure(records, artifact_root=None, stratify=True):
     candidates = defaultdict(lambda: {'ci': [], 'merged': [], 'delivered': []})
     normalized_attempts = []
     totals = {'tokens': [], 'dollars': []}
+    usage_complete = {'tokens': set(), 'dollars': set()}
+    executions = set()
+    complete_tests = set()
     work = []
     tests = []
     performance = []
     artifacts = []
     started_count = 0
+    censored_count = 0
     job_rows = defaultdict(list)
     unbound_jobs = 0
     for identity, rows in sorted(attempts.items()):
         rows.sort(key=lambda r: (timestamp(r['at']), r['id']))
+        visible = rows if window is None else [r for r in rows if window[0] <= timestamp(r['at']) <= window[1]]
+        start_row = next((r for r in rows if r['kind'] == 'started'), None)
+        end_row = next((r for r in rows if r['kind'] in ('completed', 'cancelled', 'superseded')), None)
+        spans_window = window is not None and start_row is not None and timestamp(start_row['at']) <= window[1] and (
+            end_row is None or timestamp(end_row['at']) >= window[0])
+        if not visible and not spans_window:
+            continue
+        censored = window is not None and len(visible) != len(rows)
+        # Pre-window phases are context; future phases cannot settle current ownership/outcome.
+        rows = rows if window is None else [r for r in rows if timestamp(r['at']) <= window[1]]
         heads = {r['head'] for r in rows}
         if len(heads) != 1 or any(len({r[f] for r in rows if r.get(f)}) > 1 for f in ('base', 'tree')):
             raise ValueError('attempt crossed source bindings')
@@ -233,9 +262,18 @@ def measure(records, artifact_root=None, stratify=True):
                 raise ValueError('duplicate lifecycle phase in an attempt')
         times = {k: timestamp(v[0]['at']) for k, v in by_kind.items() if v}
         started = 'started' in times
-        if by_kind['refused'] and (started or by_kind['usage'] or by_kind['tests'] or by_kind['performance']):
+        terminals = [k for k in ('completed', 'refused', 'cancelled', 'superseded') if by_kind[k]]
+        if len(terminals) > 1:
+            raise ValueError('contradictory terminal phases')
+        if started and any(times[k] < times['started'] for k in ('completed', 'cancelled', 'superseded') if k in times):
+            raise ValueError('terminal phase predates execution')
+        if by_kind['refused'] and (started or by_kind['usage'] or by_kind['tests'] or by_kind['performance'] or by_kind['setup_finished'] or by_kind['cleanup']):
             raise ValueError('refused attempt cannot have execution evidence')
-        started_count += int(started)
+        execution = any(by_kind[k] for k in ('started', 'setup_finished', 'completed', 'cleanup', 'usage', 'tests', 'performance'))
+        if execution:
+            executions.add(identity)
+            censored_count += int(censored)
+        started_count += int(started and (window is None or window[0] <= times['started'] <= window[1]))
         duration = {}
         for name, first, last in [('waiting_seconds', 'enqueued', 'started'),
                                   ('dependency_wait_seconds', 'enqueued', 'dependency_ready'),
@@ -249,8 +287,11 @@ def measure(records, artifact_root=None, stratify=True):
                 delta = times[last] - times[first]
                 if delta < 0:
                     raise ValueError('inverted phase timestamps')
-                duration[name] = delta
-                timings[name].append(delta)
+                if not censored:
+                    duration[name] = delta
+                    timings[name].append(delta)
+        if execution and 'started' not in times and 'completed' not in times:
+            timing_expected['compute_seconds'] += 1
         outcome = by_kind['completed'][0].get('outcome') if by_kind['completed'] else None
         if outcome is not None and outcome not in ('passed', 'failed', 'unknown', 'timeout'):
             raise ValueError('invalid terminal outcome')
@@ -263,8 +304,13 @@ def measure(records, artifact_root=None, stratify=True):
         if by_kind['superseded'] or by_kind['cancelled']:
             rounds['superseded'] += 1
         ci_verdicts = []
+        required_contract = None
         for ci in by_kind['ci']:
             required, checks = ci.get('required'), ci.get('checks')
+            contract = sorted(required) if isinstance(required, list) and all(isinstance(n, str) for n in required) else None
+            if ci_verdicts and contract != required_contract:
+                raise ValueError('CI attempt changed required-context contract')
+            required_contract = contract
             verdict = 'unknown'
             if isinstance(required, list) and required and all(isinstance(n, str) for n in required) and isinstance(checks, list):
                 mapping = {c.get('name'): c.get('conclusion') for c in checks if isinstance(c, dict)}
@@ -276,9 +322,10 @@ def measure(records, artifact_root=None, stratify=True):
             terminal = {v for v in ci_verdicts if v != 'unknown'}
             if len(terminal) > 1:
                 raise ValueError('CI attempt has conflicting terminal verdicts')
-            candidate['ci'].append((times.get('started', times.get('enqueued', times['ci'])), lane, attempt, ci_verdicts[-1]))
+            verdict = next(iter(terminal), 'unknown') if not censored else 'unknown'
+            candidate['ci'].append((times.get('started', times.get('enqueued', times['ci'])), lane, attempt, verdict))
         # A failed required CI observation is one round per run/attempt, not per leaf job.
-        if ci_verdicts and ci_verdicts[-1] == 'failed' and outcome not in ('failed', 'timeout'):
+        if ci_verdicts and verdict == 'failed' and outcome not in ('failed', 'timeout'):
             rounds['failed'] += 1
         if by_kind['merged']:
             candidate['merged'].append(times['merged'])
@@ -289,10 +336,13 @@ def measure(records, artifact_root=None, stratify=True):
                 candidate['delivered'].append(times['delivered'])
         for metric in totals:
             observed = [r.get(metric) for r in by_kind['usage']]
-            if observed and all(number(v) for v in observed):
-                totals[metric].append(sum(observed))
-            elif any(v is not None and not number(v) for v in observed):
+            if any(v is not None and not number(v) for v in observed):
                 raise ValueError('invalid usage')
+            values = [r[metric] for r in visible if r['kind'] == 'usage' and number(r.get(metric))]
+            if values:
+                totals[metric].append(sum(values))
+            if started and not censored and observed and all(number(v) for v in observed):
+                usage_complete[metric].add(identity)
         for row in rows:
             if row.get('diagnostic'):
                 if not isinstance(row['diagnostic'], dict) or not re.fullmatch(r'[0-9a-f]{64}', row['diagnostic'].get('digest', '')):
@@ -305,8 +355,8 @@ def measure(records, artifact_root=None, stratify=True):
         for row in by_kind['performance']:
             receipt = read_artifact(artifact_root, row.get('artifact'))
             inventory = receipt.get('measurements') if receipt else None
-            bound = receipt and receipt.get('status') in ('pass', 'fail') and receipt.get('data', {}).get('candidateRevision') == head
-            if bound and isinstance(inventory, dict) and all(number(inventory.get(f)) or inventory.get(f) is None for f in ('testsRun', 'testsPassed', 'durationMs')):
+            bound = receipt and BUILD_VALIDATOR.is_valid(receipt) and receipt['data']['candidateRevision'] == head
+            if bound:
                 if inventory.get('testsRun') is not None and inventory.get('testsPassed') is not None and inventory['testsPassed'] > inventory['testsRun']:
                     raise ValueError('invalid performance test inventory')
                 performance.append({'repo': repo, 'pr': pr, 'head': head, 'attempt': attempt,
@@ -322,13 +372,16 @@ def measure(records, artifact_root=None, stratify=True):
             r = observed_tests[0]
             if type(r.get('tests_run')) is not int or type(r.get('tests_passed')) is not int or not 0 <= r['tests_passed'] <= r['tests_run']:
                 raise ValueError('invalid test inventory')
-            tests.append(r['tests_run'])
-        if started:
+            if not censored:
+                tests.append(r['tests_run'])
+                complete_tests.add(identity)
+        if execution:
             work.append(duration.get('compute_seconds'))
         normalized_attempts.append({'repo': repo, 'pr': pr, 'head': head, 'lane': lane, 'attempt': attempt,
                                     'outcome': outcome or ('refused' if by_kind['refused'] else 'unknown'),
                                     'phases': sorted(times), 'durations': duration,
                                     'base': rows[0].get('base'), 'tree': rows[0].get('tree'),
+                                    'censored': censored,
                                     'interventions': sorted({r['intervention'] for r in rows if
                                        isinstance(r.get('intervention'), str) and IDENTIFIER.fullmatch(r['intervention'])})})
 
@@ -357,7 +410,9 @@ def measure(records, artifact_root=None, stratify=True):
                                'merged': bool(observations['merged']),
                                'delivery': 'verified' if observations['delivered'] else 'unknown'})
     total_work = sum(work) if work and all(number(v) for v in work) else None
-    total_tests = sum(tests) if started_count and len(tests) == started_count else None
+    total_tests = sum(tests) if executions and complete_tests == executions and not unjoinable else None
+    if unjoinable:
+        total_work = None
     conservation = Counter(offered=0, pending=0, owned=0, terminal=0, unoffered=0)
     job_responses = []
     for (repo, job), rows in sorted(job_rows.items()):
@@ -365,6 +420,7 @@ def measure(records, artifact_root=None, stratify=True):
         offered = any(r['kind'] == 'offered' for r in rows)
         active = set()
         duplicate = False
+        unreconciled = False
         state = 'pending'
         for row in rows:
             key = (row['lane'], row['attempt'])
@@ -376,13 +432,15 @@ def measure(records, artifact_root=None, stratify=True):
                 active.discard(key)
                 state = 'owned' if active else 'pending'
             elif row['kind'] == 'job_terminal':
-                state = 'terminal'
+                unreconciled |= bool(active)
+                state = 'owned' if active else 'terminal'
             elif row['kind'] == 'job_reopened':
-                state = 'pending'
+                unreconciled |= bool(active)
+                state = 'owned' if active else 'pending'
         conservation['offered' if offered else 'unoffered'] += 1
         if offered:
             conservation[state] += 1
-        if not offered or duplicate:
+        if not offered or duplicate or unreconciled:
             job_responses.append({'id': 'job-' + hashlib.sha256(f'{repo}:{job}'.encode()).hexdigest()[:20],
                                   'owner': 'orchestrator-maintainer', 'repo': repo, 'job': job,
                                   'remediation': 'Reconcile offered/owned/terminal job evidence and remove duplicate ownership before dispatch',
@@ -399,16 +457,17 @@ def measure(records, artifact_root=None, stratify=True):
             'pr_rates': {'eligible': eligible_prs, 'unresolved': pr_verdicts.count('unknown'),
                          'first_required_ci_failed_fraction': pr_verdicts.count('failed') / eligible_prs if eligible_prs else None,
                          'status': 'complete' if eligible_prs and 'unknown' not in pr_verdicts and not unjoinable else 'unknown'},
-            'candidates': candidate_rows, 'started_executions': started_count,
+            'candidates': candidate_rows, 'started_executions': started_count, 'censored_executions': censored_count,
+            'execution_evidence_attempts': len(executions),
             'ci_rounds': ci_rounds, 'same_head_ci_reruns': sum(max(0, len(c['ci']) - 1) for c in candidates.values()),
-            'attempts_per_candidate': len(attempts) / len(candidates) if candidates else None,
+            'attempts_per_candidate': len(normalized_attempts) / len(candidates) if candidates else None,
             'verified_deliveries': delivered, 'unjoinable_records': unjoinable,
             'timings': {m: distribution(timings[m], timing_expected[m]) for m in METRICS},
             'work': {'total_compute_seconds': total_work, 'observed_tests': total_tests,
                      'compute_seconds_per_test': total_work / total_tests if total_work is not None and total_tests else None,
                      'compute_seconds_per_verified_delivery': total_work / delivered if total_work is not None and delivered else None},
             'usage': {m: {'observed': sum(v) if v else None, 'samples': len(v),
-                         'total': sum(v) if started_count and len(v) == started_count else None} for m, v in totals.items()},
+                         'total': sum(v) if executions and usage_complete[m] == executions and not unjoinable else None} for m, v in totals.items()},
             'conservation': dict(conservation), 'conservation_status': 'unknown' if unbound_jobs or unjoinable or not job_rows else 'breach' if job_responses else 'complete',
             'unbound_job_attempts': unbound_jobs, 'job_responses': job_responses,
             'performance_receipts': performance, 'diagnostics': artifacts,
@@ -417,16 +476,20 @@ def measure(records, artifact_root=None, stratify=True):
                           'consumption': 'unknown unless independently collected; no unused-artifact inference'}}
     if stratify:
         partitions = defaultdict(list)
-        for rows in attempts.values():
+        selected = {(a['repo'], a['pr'], a['lane'], a['attempt']) for a in normalized_attempts}
+        for identity, rows in attempts.items():
+            if identity not in selected:
+                continue
             interventions = {r['intervention'] for r in rows if r.get('intervention') is not None}
             if len(interventions) > 1 or any(not isinstance(i, str) or not IDENTIFIER.fullmatch(i) for i in interventions):
                 raise ValueError('invalid intervention identifier')
             intervention = next(iter(interventions), None)
-            for row in rows:
-                day = datetime.fromtimestamp(timestamp(row['at']), timezone.utc).date().isoformat()
-                partitions[(row['repo'], row['lane'], intervention, day)].append(row)
+            anchor = next((r for r in rows if r['kind'] == 'started'), rows[0])
+            day = datetime.fromtimestamp(timestamp(anchor['at']), timezone.utc).date().isoformat()
+            partitions[(anchor['repo'], anchor['lane'], intervention, day)].extend(rows)
         report['strata'] = [{'repo': k[0], 'lane': k[1], 'intervention': k[2], 'utc_day': k[3],
-                             'measurement': measure(v, artifact_root, stratify=False)} for k, v in sorted(partitions.items(), key=lambda p: str(p[0]))]
+                             'measurement': measure(v, artifact_root, stratify=False, window=window)} for k, v in sorted(partitions.items(), key=lambda p: str(p[0]))]
+        report['strata_attribution'] = 'whole attempt to execution-start UTC day, or first observation if no start'
     return report
 
 
@@ -435,13 +498,14 @@ def compare(baseline, current):
     def fields(report):
         return {**{k: report['work'].get(k) for k in ('total_compute_seconds', 'observed_tests',
                                                        'compute_seconds_per_test', 'compute_seconds_per_verified_delivery')},
-                'first_ci_failed_fraction': report['candidate_rates']['first_ci_failed_fraction'],
+                'first_ci_failed_fraction': report['candidate_rates']['first_ci_failed_fraction'] if report['candidate_rates']['status'] == 'complete' else None,
                 **{f'{m}.p95': report['timings'][m]['p95'] if report['timings'][m]['status'] == 'complete' else None for m in METRICS}}
     before, after = fields(baseline), fields(current)
     deltas = {k: {'before': before[k], 'after': after[k],
                   'delta': after[k] - before[k] if number(before[k]) and number(after[k]) else None} for k in before}
     return {'status': 'observed' if all(v['delta'] is not None for v in deltas.values()) else 'unknown',
-            'metrics': deltas, 'causal_savings': 'unknown; require matched workload, environment and intervention evidence'}
+            'metrics': deltas, 'candidate_rates': {'baseline': baseline['candidate_rates'], 'current': current['candidate_rates']},
+            'causal_savings': 'unknown; require matched workload, environment and intervention evidence'}
 
 
 def respond(report, policies, prior, window_id):
@@ -467,6 +531,8 @@ def respond(report, policies, prior, window_id):
             raise ValueError('unsupported policy metric')
         sample = report['timings'][parts[1]]
         response = state['responses'].get(policy['id'])
+        if response and any(response.get(k) != v for k, v in policy.items()):
+            raise ValueError('policy definition changed; use a new policy identity')
         if sample['status'] != 'complete' or report['unjoinable_records'] or sample['samples'] < policy['min_samples']:
             if response:
                 response['clean_windows'] = 0
@@ -512,12 +578,13 @@ def main():
         records = read_records(args.events)
         if bool(args.start) != bool(args.cutoff):
             raise ValueError('both window bounds are required')
+        window = None
         if args.start:
             start, cutoff = timestamp(args.start), timestamp(args.cutoff)
             if start > cutoff:
                 raise ValueError('invalid window')
-            records = [r for r in records if not isinstance(r, dict) or not r.get('at') or start <= timestamp(r['at']) <= cutoff]
-        report = measure(records, args.artifact_root)
+            window = (start, cutoff)
+        report = measure(records, args.artifact_root, window=window)
         report['window'] = {'start': args.start, 'cutoff': args.cutoff, 'baseline': 'unestablished; disclose interventions and incomplete days'}
         if args.failure_audit:
             path = Path(args.failure_audit)
@@ -537,7 +604,7 @@ def main():
             save_immutable(args.output, report)
         print(json.dumps(report, sort_keys=True, allow_nan=False))
         return 0
-    except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError):
+    except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError, OverflowError, RecursionError, zlib.error):
         # Do not serialize raw input, error messages, receipt paths or subprocess stderr.
         print(json.dumps({'schema': 'orch-measurement/v1', 'status': 'unknown', 'error': 'invalid or unreadable evidence'}))
         return 2
