@@ -2,7 +2,7 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 
-import { createFactory, createScriptAdapter, createPinnedBuildContext,
+import { createArtifactReader, createFactory, createScriptAdapter, createPinnedBuildContext,
   readPinnedContract, routeDoctorCreBuild, selectOptionalBuildContext,
   authenticateEvaluationBundle } from "../src/index.mjs"
 
@@ -57,7 +57,9 @@ if (!jobPath || !profilePath) {
     return { ...route, qualification_evidence: evidence,
       context_selection: contextSelection, build_context: buildContext }
   } : null
-  const result = await createFactory({ modelRoomAdvisor }).run(job, adapter)
+  const readArtifact = profile.evidenceRoot
+    ? createArtifactReader(path.resolve(path.dirname(profilePath), profile.evidenceRoot)) : null
+  const result = await createFactory({ modelRoomAdvisor, readArtifact }).run(job, adapter)
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
   if (result.outcome !== "complete") process.exitCode = 1
 }

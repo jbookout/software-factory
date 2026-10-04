@@ -21,10 +21,12 @@
     "data": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["sourceChanged", "checksComplete"],
+      "required": ["sourceChanged", "checksComplete", "candidateRevision", "buildDigest"],
       "properties": {
         "sourceChanged": { "type": ["boolean", "null"] },
-        "checksComplete": { "type": ["boolean", "null"] }
+        "checksComplete": { "type": ["boolean", "null"] },
+        "candidateRevision": { "type": ["string", "null"], "pattern": "^[a-f0-9]{40}$" },
+        "buildDigest": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" }
       }
     }
   },

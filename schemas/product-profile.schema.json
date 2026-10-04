@@ -9,6 +9,7 @@
     "root": { "type": "string" },
     "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 3600000 },
     "maxOutputBytes": { "type": "integer", "minimum": 1024, "maximum": 100000000 },
+    "evidenceRoot": { "type": "string", "minLength": 1 },
     "modelRoom": {
       "type": "object",
       "additionalProperties": false,

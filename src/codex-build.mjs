@@ -25,6 +25,7 @@ export function createCodexBuildPrompt(request) {
     `SOURCE REVISION: ${request.sourceRevision}`,
     "Use the exact pinned contracts below as required context. Inspect the repository, make the bounded source change, and run relevant checks. Do not deploy or publish.",
     ...contracts,
+    "On success, commit the bounded source change and return its full Git SHA as data.candidateRevision. Return data.buildDigest as the SHA-256 hex digest of the exact built artifact (or deterministic build manifest including source/configuration/fixture digests). These identify the completed build, not the source baseline. If no completed build exists, return null for both and status fail. Never invent an identity.",
     "Return only the required JSON result. status is pass only when the requested source work and checks completed; otherwise use fail and explain findings without secrets.",
   ].join("\n\n")
 }

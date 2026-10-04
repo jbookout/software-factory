@@ -5,7 +5,9 @@ Joe-approved direction, 2026-10-01. TASK AE revised the plan after slice 1
 TASK AW applies Joe's 2026-10-02 design sources after slice 2 (PR 24) merged.
 The slice-2 entry diagnosis follow-up is implemented at the pure interview
 interface and tested by `test/acceptance/design-layer-diagnosis.test.mjs` (AW-2).
-Later slices remain planned; none is qualified by this text or pure replay.
+Slice 3 now has [settings and an offline-tested cloud qualification harness](settings-cloud.md).
+Its live account/background-runtime qualification remains incomplete. Later
+slices remain planned; none is qualified by this text or pure replay.
 
 ## Purpose and ownership
 
