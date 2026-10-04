@@ -6,6 +6,41 @@ import path from 'node:path'
 import { fakeClock, never } from './helpers/deadline-and-process.mjs'
 import { Deadline, waitForCondition } from '../src/deadline.mjs'
 
+test('admission scans stop at their queue deadline and dispose partial claims',async t=>{
+ const {reserveCompute}=await import('../src/process-capacity.mjs')
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-election-deadline-'));t.after(()=>fs.rm(root,{recursive:true,force:true}))
+ const config={stateDir:root,resources:{capacity:250,browserConcurrency:1},pollMs:5}
+ let release,observed=false
+ try {
+  await assert.rejects(async()=>{release=await reserveCompute(config,1,new Deadline(50,{phase:'queue'}),{snapshot:async()=>{observed=true;return []}})},{code:142})
+  assert.equal(observed,false,'expired scans must not reach the process observation')
+ } finally {if(release) await release()}
+ for(const dir of await fs.readdir(path.join(root,'locks'))) assert.deepEqual(await fs.readdir(path.join(root,'locks',dir)),[])
+ const healthy=await reserveCompute({...config,resources:{capacity:1,browserConcurrency:1}},1,new Deadline(500),{snapshot:async()=>[]});await healthy()
+})
+
+test('an observation that expires the budget cannot return a reserved slot',async t=>{
+ const {reserveCompute}=await import('../src/process-capacity.mjs')
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-observation-deadline-'));t.after(()=>fs.rm(root,{recursive:true,force:true}))
+ const config={stateDir:root,resources:{capacity:1,browserConcurrency:1},pollMs:5},clock=fakeClock()
+ let release
+ try {await assert.rejects(async()=>{release=await reserveCompute(config,1,new Deadline(50,{clock}),{snapshot:async()=>{clock.advance(50);return []}})},{code:142})}
+ finally {if(release) await release()}
+ assert.deepEqual(await fs.readdir(path.join(root,'locks','compute-0.claims')),[])
+})
+
+test('standard macOS browser executable paths containing spaces consume capacity',async t=>{
+ const {reserveCompute}=await import('../src/process-capacity.mjs')
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-spaced-browser-'));t.after(()=>fs.rm(root,{recursive:true,force:true}))
+ const config={stateDir:root,resources:{capacity:1,browserConcurrency:1},pollMs:5}
+ let release
+ const rows=[{pid:12,ppid:1,command:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --headless'},
+ {pid:13,ppid:12,command:'/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Helper --type=renderer'}]
+ try {await assert.rejects(async()=>{release=await reserveCompute(config,1,new Deadline(80),{snapshot:async()=>rows})},{code:142})}
+ finally {if(release) await release()}
+ const healthy=await reserveCompute(config,1,new Deadline(500),{snapshot:async()=>[]});await healthy()
+})
+
 test('never-settling predicate/fetch/body share one monotonic total budget', async () => {
  for (const name of ['predicate','fetch','body']) {
   const clock=fakeClock(), total=new Deadline(100,{clock})

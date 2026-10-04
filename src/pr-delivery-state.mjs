@@ -27,6 +27,7 @@ const alive = pid => { try { process.kill(pid, 0); return true } catch (e) { ret
 // successor's lock. A bounded bakery election retains its claim while peers
 // choose tickets, so simultaneous callers cannot both withdraw before election.
 export async function acquireLease(root, name, { budget } = {}) {
+  budget?.check()
   const dir = path.join(root, `${name}.claims`)
   await fs.mkdir(dir, { recursive: true, mode: 0o700 })
   const token = randomUUID(), file = path.join(dir, `${token}.json`)
@@ -35,6 +36,7 @@ export async function acquireLease(root, name, { budget } = {}) {
   const peers = async () => {
     const result = []
     for (const entry of await fs.readdir(dir)) {
+      budget?.check()
       if (!entry.endsWith(".json") || entry === `${token}.json`) continue
       const peer = await readJson(path.join(dir, entry), null)
       if (!peer) continue

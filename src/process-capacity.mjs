@@ -31,7 +31,8 @@ function unmanagedUnits(rows, owned, browserConcurrency) {
   const parents = new Map(rows.map(row => [row.pid, row.ppid]))
   const tests = rows.filter(row => /^(?:\S*\/)?node\s+(?:(?:--[\w-]+(?:=[^ ]+)?|-r\s+[^ ]+)\s+)*--test(?:\s|=|$)/.test(row.command))
   const testRoots = new Set(tests.map(row => row.pid))
-  const browsers = rows.filter(row => /(?:chrome|chromium|firefox|webkit|playwright)/i.test(row.command.split(" ")[0]))
+  const browsers = rows.filter(row => /(?:chrome|chromium|firefox|webkit|playwright)/i.test(row.command.split(" ")[0]) ||
+    /^\/(?:Users\/[^/]+\/)?Applications\/[^/]*(?:chrome|chromium|firefox|webkit|playwright)[^/]*\.app\/Contents\/MacOS\//i.test(row.command))
   const browserRoots = new Set(browsers.map(row => row.pid))
   let units = 0
   for (const row of tests) {
@@ -89,6 +90,7 @@ export async function reserveCompute(config, units, budget, { snapshot = process
           if ([142, 130].includes(error.code)) throw error
           throw new Error('resource observation unavailable')
         }
+        budget.check()
         const parents = new Map(rows.map(row => [row.pid, row.ppid]))
         for (const [group, reservation] of managed) {
           const actual = unmanagedUnits(rows.filter(row => descends(row.pid, new Set([group]), parents)), new Set(), browserConcurrency) + reservation.agents
@@ -101,7 +103,10 @@ export async function reserveCompute(config, units, budget, { snapshot = process
         return release
       } finally { await Promise.all(releases.map(fn => fn())) }
     }, { waitMs: Math.ceil(budget.remaining()), pollMs: config.pollMs, budget })
-    if (reservation) return reservation
+    if (reservation) {
+      try { budget.check(); return reservation }
+      catch (error) { await reservation(); throw error }
+    }
     await budget.sleep(config.pollMs)
   }
 }
