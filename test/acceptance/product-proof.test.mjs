@@ -1,16 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
 import * as verify from '../../src/design-verify.mjs'
-const sha = bytes => createHash('sha256').update(bytes).digest('hex')
-function world() {
-  const store = new Map()
-  const put = (ref, value) => { const bytes=Buffer.from(typeof value==='string'?value:JSON.stringify(value)); store.set(ref,bytes); return {ref,digest:sha(bytes)} }
-  const identity = {repo:'jbookout/doctorcre-app',sourceCommit:'a'.repeat(40),buildDigest:sha('build'),buildConfigDigest:sha('config'),fixtureDigest:sha('fixture'),runtime:{e2e:'0.16.0',web:'0.11.2',playwright:'1.63.0',node:'22.12.0',browser:'chromium'}}
-  const binding = {...identity,runId:'run-1',attempt:1}
-  const packet = {schema:'browser-product-proof.v1',binding,coverage:put('coverage.json',{binding,rows:[{id:'draft-reload',status:'passed',attempts:1}],qualification:{broken:'failed',repaired:'passed'}}),build:put('build.json',{binding,manifestFiles:[{path:'index.html',sha256:sha('page')}],servedFiles:[{path:'index.html',sha256:sha('page')}]}),buildArchive:put('build.tar','build'),nativeReport:put('report.json',{schemaVersion:'report-1',run:{id:'run-1',environment:{runtime:'node v22.12.0'},targets:[{id:'chromium',engine:{name:'web',version:'0.11.2'}}],runner:{version:'0.16.0'},vcs:{commit:identity.sourceCommit,dirty:false},exitCode:0,status:'passed',results:[{testId:'test-1',selected:true,status:'passed',attempts:[{}]}]}}),persistence:[{id:'draft-reload',written:put('written.json',{binding,phase:'write',value:'Demo draft'}),readback:put('readback.json',{binding,phase:'reload',value:'Demo draft'})}],recordings:[{id:'draft-reload',video:put('video.webm','video bytes'),trace:put('trace.zip','trace bytes'),checkpoint:put('checkpoint.png','image bytes'),operation:'save-reload'}],links:{run:'https://github.com/jbookout/doctorcre-app/actions/runs/123',artifacts:'https://github.com/jbookout/doctorcre-app/actions/runs/123/artifacts/456'},metrics:{firstReviewUiFindings:null,reproductionMinutes:null}}
-  return {packet,expected:{...identity,runId:'run-1',attempt:1,requiredNativeTests:['test-1'],requiredCoverage:['draft-reload'],requiredPersistence:['draft-reload'],requiredRecordings:[{id:'draft-reload',operation:'save-reload'}]},readArtifact:async ref=>store.get(ref),inspectRecording:async()=>({decoded:true,operationPresent:true}),put,store}
-}
+import { world,sha } from '../../test-support/browser-proof.mjs'
 const evaluate = (w) => verify.evaluateProductProofPacket(w)
 test('exact candidate packet passes only after artifact inspection',async()=>{const w=world();assert.equal((await evaluate(w)).gate,'pass')})
 for(const [name,mutate] of [
@@ -55,3 +46,45 @@ test('raw refusal never echoes malformed expected identity or reader errors',asy
 for(const invalid of [{},null,42]) test(`malformed native report result ${JSON.stringify(invalid)} refuses`,async()=>{const w=world();w.packet.nativeReport=w.put('report.json',{schemaVersion:'report-1',run:{results:invalid,targets:invalid}});assert.notEqual((await evaluate(w)).gate,'pass')})
 
 test('native report from another same-head run refuses',async()=>{const w=world();const report=JSON.parse(w.store.get('report.json'));report.run.id='run-2';w.packet.nativeReport=w.put('report.json',report);assert.equal((await evaluate(w)).gate,'fail')})
+
+// Blocking review reproductions: each mutation changes inspected bytes and its
+// candidate digest, preserving the independently selected expected identity.
+const artifactJson=(w,key,mutate)=>{const ref=w.packet[key].ref,value=JSON.parse(w.store.get(ref));mutate(value);w.packet[key]=w.put(ref,value)}
+for(const [finding,name,mutate] of [
+ [1,'null served manifest',w=>artifactJson(w,'build',b=>b.manifestFiles=b.servedFiles=[null])],
+ [1,'equal invented served manifest',w=>artifactJson(w,'build',b=>b.manifestFiles=b.servedFiles=[{path:'unarchived.html',sha256:sha('invented')}])],
+ [2,'failed terminal attempt',w=>artifactJson(w,'nativeReport',r=>r.run.results[0].attempts=[{status:'failed',error:{message:'failure'}}])],
+ [2,'array-like attempts',w=>artifactJson(w,'nativeReport',r=>r.run.results[0].attempts={length:1})],
+ [2,'failed nested step',w=>artifactJson(w,'nativeReport',r=>r.run.results[0].attempts=[{status:'passed',steps:[{status:'failed',error:{message:'failure'}}]}])],
+ [2,'missing binding and VCS',w=>{delete w.packet.binding.sourceCommit;artifactJson(w,'nativeReport',r=>delete r.run.vcs)}],
+ [3,'unqualified selected target',w=>artifactJson(w,'nativeReport',r=>r.run.results[0].targetId='firefox')],
+ [3,'contradictory target',w=>artifactJson(w,'nativeReport',r=>r.run.targets.push({id:'chromium',platform:'mobile',engine:{name:'web',version:'0.11.2'}}))],
+ [4,'continuity label without execution',w=>{w.expected.requiredCoverage.push('continuity-320-reduce');artifactJson(w,'coverage',c=>c.rows.push({id:'continuity-320-reduce',status:'passed',attempts:1}))}],
+ [4,'qualification labels without execution',w=>artifactJson(w,'coverage',c=>c.qualification={broken:'failed',repaired:'passed'})],
+ [5,'equal null persistence',w=>{for(const key of ['written','readback']) {const ref=w.packet.persistence[0][key].ref;const value=JSON.parse(w.store.get(ref));value.value=null;w.packet.persistence[0][key]=w.put(ref,value)}}],
+ [5,'reused persistence observations',w=>{w.expected.requiredPersistence.push('second-save');w.expected.persistenceIntent['second-save']=structuredClone(w.expected.persistenceIntent['draft-reload']);w.packet.persistence.push({...w.packet.persistence[0],id:'second-save'})}],
+ [6,'new run with old recording bytes',w=>{w.expected.runId=w.packet.binding.runId='run-2';for(const key of ['build','coverage'])artifactJson(w,key,b=>b.binding=w.packet.binding);artifactJson(w,'nativeReport',r=>r.run.id='run-2');for(const row of w.packet.persistence)for(const key of ['written','readback']){const v=JSON.parse(w.store.get(row[key].ref));v.binding=w.packet.binding;row[key]=w.put(row[key].ref,v)}}],
+]) test(`review ${finding}: refuses ${name}`,async()=>{const w=world();mutate(w);assert.equal((await evaluate(w)).gate,'fail')})
+test('review 10: a late inspector result cannot pass',async()=>{const w=world();w.limits={timeoutMs:20};w.inspectRecording=async()=>{await new Promise(r=>setTimeout(r,60));return {decoded:true,operationPresent:true}};assert.equal((await evaluate(w)).gate,'fail')})
+test('review 10: an unsettled inspector is cancelled at the shared deadline',async()=>{const w=world();w.limits={timeoutMs:20};w.inspectRecording=()=>new Promise(()=>{});const result=await Promise.race([evaluate(w),new Promise(resolve=>setTimeout(()=>resolve({gate:'hung'}),120))]);assert.equal(result.gate,'fail')})
+test('review 2: malformed result with otherwise valid targets returns refusal',async()=>{const w=world();artifactJson(w,'nativeReport',r=>r.run.results=[null]);assert.equal((await evaluate(w)).gate,'fail')})
+test('review 2: sparse required recording manifest returns refusal',async()=>{const w=world();w.expected.requiredRecordings=Array(1);assert.equal((await evaluate(w)).gate,'fail')})
+test('native and separate continuity coverage each require their independently selected execution',async()=>{
+  const w=world();w.expected.requiredCoverage.push('w01-shell');w.expected.coverageEvidence['w01-shell']={kind:'native',testIds:['test-1']}
+  artifactJson(w,'coverage',c=>c.rows.push({id:'w01-shell',status:'passed',attempts:1,testIds:['test-1']}))
+  assert.equal((await evaluate(w)).gate,'pass')
+  artifactJson(w,'coverage',c=>c.rows.find(row=>row.id==='w01-shell').testIds=['other-test'])
+  assert.equal((await evaluate(w)).gate,'fail')
+})
+test('review 6: refreshing every nonrecording execution still refuses an old recording',async()=>{
+  const w=world();w.expected.runId=w.packet.binding.runId='run-2'
+  const refresh=ref=>{const value=JSON.parse(w.store.get(ref.ref));value.binding=w.packet.binding;return w.put(ref.ref,value)}
+  w.expected.coverageEvidence['draft-reload'].report=refresh(w.expected.coverageEvidence['draft-reload'].report)
+  for(const role of ['broken','repaired']) w.expected.qualification[role].report=refresh(w.expected.qualification[role].report)
+  artifactJson(w,'build',b=>b.binding=w.packet.binding)
+  artifactJson(w,'nativeReport',r=>r.run.id='run-2')
+  artifactJson(w,'coverage',c=>{c.binding=w.packet.binding;c.rows[0].report=w.expected.coverageEvidence['draft-reload'].report;c.qualification={broken:{report:w.expected.qualification.broken.report},repaired:{report:w.expected.qualification.repaired.report}}})
+  for(const key of ['written','readback']) w.packet.persistence[0][key]=refresh(w.packet.persistence[0][key])
+  const result=await evaluate(w)
+  assert.equal(result.gate,'fail');assert.deepEqual(result.reasons,['artifact run/build binding mismatch','recording provenance differs: draft-reload'])
+})

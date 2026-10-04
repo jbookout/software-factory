@@ -2,7 +2,9 @@
   "repos": {
     "owner/repository": {
       "checkout": "/absolute/path/to/repository",
-      "worktreeRoot": "/absolute/path/to/delivery-worktrees"
+      "worktreeRoot": "/absolute/path/to/delivery-worktrees",
+      "requiredChecks": [{ "name": "test", "appId": 15368 }],
+      "dependencyRevision": "owned-actionable-input-revision"
     }
   },
   "stateDir": "/absolute/path/to/private/factory-delivery-state",

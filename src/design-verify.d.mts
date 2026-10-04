@@ -75,21 +75,40 @@ export interface ProductProofIdentity {
   runtime: { e2e: string; web: string; playwright: string; node: string; browser: string };
 }
 export interface ProductProofPacket {
-  schema: 'browser-product-proof.v1'; binding: ProductProofIdentity & { runId: string; attempt: number };
+  schema: 'browser-product-proof.v2'; binding: ProductProofIdentity & { runId: string; attempt: number };
   build: ArtifactRef; buildArchive: ArtifactRef; nativeReport: ArtifactRef; coverage: ArtifactRef;
   persistence: { id: string; written: ArtifactRef; readback: ArtifactRef }[];
-  recordings: { id: string; operation: 'save-reload'; video: ArtifactRef; trace: ArtifactRef; checkpoint: ArtifactRef }[];
+  recordings: { id: string; operation: 'save-reload'; provenance: ArtifactRef; video: ArtifactRef; trace: ArtifactRef; checkpoint: ArtifactRef }[];
   links: { run: string; artifacts: string };
   metrics: { firstReviewUiFindings: number | null; reproductionMinutes: number | null };
 }
 export declare const PRODUCT_PROOF_RUNTIME: Readonly<{ e2e: '0.16.0'; web: '0.11.2'; playwright: '1.63.0'; browser: 'chromium' }>;
+export interface ProductExecutionRequirement {
+  report: ArtifactRef; testId: string;
+  oracle: { id: string; expected: unknown; violation?: string };
+}
+export interface ProductProofExpected extends ProductProofIdentity {
+  runId: string; attempt: number; requiredNativeTests: string[]; requiredCoverage: string[];
+  coverageEvidence: Record<string,
+    { kind: 'native'; testIds: string[] } | (ProductExecutionRequirement & { kind: 'continuity' })>;
+  qualification: { broken: ProductExecutionRequirement; repaired: ProductExecutionRequirement };
+  requiredPersistence: string[];
+  persistenceIntent: Record<string, { subject: { storage: string; key: string; operation: string }; value: unknown }>;
+  requiredRecordings: { id: string; operation: 'save-reload'; provenance: ArtifactRef }[];
+}
+export interface ProductRecordingProvenance {
+  schema: 'browser-recording.v1'; binding: ProductProofIdentity & { runId: string; attempt: number };
+  id: string; testId: string; execution: ArtifactRef; targetId: 'chromium'; platform: 'web'; attemptId: string;
+  pageId: string; contextId: string; videoStartTime: number; checkpointTime: number;
+  video: ArtifactRef; trace: ArtifactRef; checkpoint: ArtifactRef;
+}
 export declare function evaluateProductProofPacket(input: {
-  packet: ProductProofPacket;
-  expected: ProductProofIdentity & { runId: string; attempt: number; requiredNativeTests: string[]; requiredCoverage: string[]; requiredPersistence: string[];
-    requiredRecordings: { id: string; operation: 'save-reload' }[] };
+  packet: ProductProofPacket; expected: ProductProofExpected;
   readArtifact: (ref: string, options?: { signal: AbortSignal; maxBytes: number; timeoutMs: number }) => Promise<Buffer | null>;
-  inspectRecording: (input: { video: Buffer; trace: Buffer; checkpoint: Buffer; operation: string }) => Promise<{ decoded: boolean; operationPresent: boolean }>;
-  limits?: { timeoutMs?: number; maxBytes?: number };
+  inspectRecording: (input: { video: Buffer; trace: Buffer; checkpoint: Buffer; operation: string;
+    provenance: ProductRecordingProvenance; expected: ProductProofPacket['binding']; deadline: number;
+    signal: AbortSignal }) => Promise<{ decoded: boolean; operationPresent: boolean }>;
+  limits?: { timeoutMs?: number; maxBytes?: number }; deadline?: number;
 }): Promise<{ gate: 'pass' | 'fail'; reasons: string[]; sourceCommit: string | null }>;
 
 export declare function productProofReviewMetrics(input: {repo:string; sourceCommit:string; reviewedSha:string; commentUrl:string; firstReviewUiFindings:number; reproductionMinutes:number}): {schema:'browser-proof-review-metrics.v1'; repo:string; sourceCommit:string; commentUrl:string; firstReviewUiFindings:number; reproductionMinutes:number};
