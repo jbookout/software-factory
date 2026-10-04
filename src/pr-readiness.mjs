@@ -14,14 +14,24 @@ export function classifyChecks({ head, observedHead, requiredChecks, checkRuns, 
   if (head !== observedHead) return result("superseded", { nextAction: "observe-current-head" })
   if (!validRequiredChecks(requiredChecks) || !Array.isArray(checkRuns) || !Array.isArray(statuses)) return result("provider-unknown")
   const latest = new Map()
-  const pending = new Set(["queued", "in_progress", "waiting", "requested", "pending", "expected"])
+  const pending = new Set(["queued", "in_progress", "waiting", "requested", "pending"])
   const failures = new Set(["failure", "error", "cancelled", "timed_out", "action_required", "stale", "startup_failure"])
+  const runStatuses = new Set(["queued", "in_progress", "waiting", "requested", "pending", "completed"])
+  const runConclusions = new Set(["success", "skipped", "neutral", "failure", "cancelled", "timed_out", "action_required", "stale", "startup_failure"])
   for (const c of evidence) {
     if (!c || !SHA.test(c.head_sha ?? "") || !Number.isSafeInteger(c.id) || c.id <= 0) return result("provider-unknown")
     if (c.head_sha !== head) continue
     const name = c.name ?? c.context, appId = c.name ? c.app?.id : undefined
     if (typeof name !== "string" || !name || (c.name && (!Number.isSafeInteger(appId) || appId <= 0))) return result("provider-unknown")
-    const state = c.name ? c.status === "completed" ? c.conclusion : c.status : c.state
+    let state
+    if (c.name) {
+      if (!runStatuses.has(c.status) || (c.status === "completed" ? !runConclusions.has(c.conclusion) : c.conclusion !== null))
+        return result("provider-unknown")
+      state = c.status === "completed" ? c.conclusion : c.status
+    } else {
+      if (!["success", "failure", "error", "pending"].includes(c.state)) return result("provider-unknown")
+      state = c.state
+    }
     if (!["success", "skipped", "neutral"].includes(state) && !pending.has(state) && !failures.has(state)) return result("provider-unknown")
     const key = JSON.stringify([name, appId ?? null])
     if (!latest.has(key) || latest.get(key).id < c.id) latest.set(key, { id: c.id, name, appId, state })

@@ -12,6 +12,8 @@ import { DeliveryError, pause, keyFor, readJson, writeJson, withLease, reserveCo
 
 const SHA = /^[0-9a-f]{40}$/
 const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
+const REST_PAGE_SIZE = 25
+const REST_SCAN_ROWS = 10_000
 const digestOf = value => createHash("sha256").update(value).digest("hex")
 const pass = data => normalizeResult({ status: "pass", data }, "delivery")
 const fail = error => normalizeResult({ status: "fail",
@@ -83,7 +85,10 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
   const gh = async (repo, pr, action, ...args) => (await command(["gh", "pr", action, String(pr), "-R", repo, ...args], getRepo(repo).checkout)).stdout
   async function api(repo, route) {
     for (let attempt = 0; ; attempt++) {
-      const response = await command(["gh", "api", `repos/${repo}/${route}`, "--include"], getRepo(repo).checkout, { allowFailure: true })
+      // Full REST pages include long PR bodies, comments and check output.
+      // Pair smaller pages with the prior reader's 16 MB capture allowance.
+      const response = await command(["gh", "api", `repos/${repo}/${route}`, "--include"], getRepo(repo).checkout,
+        { allowFailure: true, maxOutputBytes: 16_000_000 })
       const parts = response.stdout.split(/\r?\n\r?\n/), headers = parts.shift() ?? ""
       const status = Number(/^HTTP\/[^ ]+ (\d+)/.exec(headers)?.[1])
       if (!response.code && status === 200) {
@@ -103,17 +108,17 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
   async function pages(repo, route, field) {
     const rows = []
     let expected = null
-    for (let page = 1; page <= 100; page++) {
-      const value = await api(repo, `${route}${route.includes("?") ? "&" : "?"}per_page=100&page=${page}`)
+    for (let page = 1; page <= REST_SCAN_ROWS / REST_PAGE_SIZE; page++) {
+      const value = await api(repo, `${route}${route.includes("?") ? "&" : "?"}per_page=${REST_PAGE_SIZE}&page=${page}`)
       const batch = field ? value?.[field] : value
-      if (!Array.isArray(batch) || batch.length > 100 || field && (!Number.isSafeInteger(value.total_count) || value.total_count < 0))
+      if (!Array.isArray(batch) || batch.length > REST_PAGE_SIZE || field && (!Number.isSafeInteger(value.total_count) || value.total_count < 0))
         throw new DeliveryError("invalid GitHub REST page", 1)
       if (field) {
         if (expected !== null && expected !== value.total_count) throw new DeliveryError("GitHub REST pages changed during observation", 1, true)
         expected = value.total_count
       }
       rows.push(...batch)
-      if (batch.length < 100) {
+      if (batch.length < REST_PAGE_SIZE) {
         if (field && rows.length !== expected) throw new DeliveryError("incomplete GitHub REST checks", 1, true)
         return rows
       }
@@ -185,7 +190,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
   async function waitInput(repo, pr, head) {
     const usage = await readJson(path.join(config.stateDir, "usage.json"), [])
     const resolution = await readJson(path.join(config.stateDir, "fixes", `${keyFor(repo, pr)}.json`), null)
-    return { head, dependency: digestOf(JSON.stringify([getRepo(repo).dependencyRevision ?? null, config.limits.runsPer24h, resolution?.evidenceDigest ?? null])),
+    return { head, dependency: digestOf(JSON.stringify([getRepo(repo).dependencyRevision ?? null, resolution?.evidenceDigest ?? null])),
       budgetAvailable: usage.filter(r => r.repo === repo && r.pr === pr && r.at >= Date.now() - 86400_000).length < config.limits.runsPer24h }
   }
   async function suspend(repo, pr, head, stop) {
@@ -497,7 +502,11 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
           base: await git(cwd, "rev-parse", "origin/main"), environment: workerEnvironment, builderId: brief?.builderId ?? `builder-${pr}` }), current.headRefOid)
       const observed = await view(repo, pr)
       requireOpen(observed)
-      if (observed.headRefOid === current.headRefOid) return { head: current.headRefOid }
+      if (observed.headRefOid === current.headRefOid) {
+        const error = new DeliveryError("NO-PROGRESS: fix pushed nothing", 2)
+        error.wait = await suspend(repo, pr, current.headRefOid, { cause: "source-no-progress", code: 2, message: error.message, resetAt: null })
+        throw error
+      }
       if (observed.headRefOid !== await git(cwd, "rev-parse", "HEAD")) throw new DeliveryError("HEAD MOVED after repair; receipt refused", 2)
       let packet
       try { packet = JSON.parse(await fs.readFile(output, "utf8")) } catch { throw new DeliveryError("invalid executor fix receipt JSON", 2) }

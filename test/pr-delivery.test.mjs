@@ -5,6 +5,7 @@ import os from "node:os"
 import path from "node:path"
 import { execFileSync, spawn } from "node:child_process"
 import { fileURLToPath } from "node:url"
+import { acquireLease } from "../src/pr-delivery-state.mjs"
 
 const cli = fileURLToPath(new URL("../bin/pr-delivery.mjs", import.meta.url))
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
@@ -50,7 +51,8 @@ if(tool === 'codex') {
 } else {
  s.ghCalls.push(args); save(); const action=args[1];
  if(args[0]==='api') {
- const route=args[1], page=Number(new URL('https://fixture.invalid/'+route).searchParams.get('page')||1);
+ const route=args[1], params=new URL('https://fixture.invalid/'+route).searchParams;
+ const page=Number(params.get('page')||1),pageSize=Number(params.get('per_page')||100);
  const respond=value=>console.log('HTTP/2.0 200 OK\\n\\n'+JSON.stringify(value));
  if(s.restCodes?.length) {const code=s.restCodes.shift();save();console.log('HTTP/2.0 '+code+' synthetic\\nRetry-After: 0\\n'+(s.quotaEvidence?'X-RateLimit-Remaining: 0\\n':'')+'\\n{}');process.exit(1);}
  if(s.apiFailure) { console.log('HTTP/2.0 403 Forbidden\\nx-ratelimit-remaining: 0\\n\\n{}');console.error('provider unavailable');process.exit(1); }
@@ -65,14 +67,20 @@ if(tool === 'codex') {
  s.headRefOid=git('--git-dir',s.remote,'rev-parse','refs/heads/topic');s.moveDuringChecks=false;save(); }
  save();respond({...pr(),number:Number(route.split('/').at(-1))});
  } else if(route.includes('/pulls?')) {
- const prs=s.listCount?Array.from({length:s.listCount},(_,i)=>({...pr(),number:i===s.listCount-1?7:i+100})):[pr()];respond(prs.slice((page-1)*100,page*100));
- } else if(route.includes('/comments')) respond(/issues\\/7\\//.test(route)?s.comments.slice((page-1)*100,page*100):[]);
+ const prs=s.listCount?Array.from({length:s.listCount},(_,i)=>({...pr(),body:'x'.repeat(s.listBodyBytes??0),number:i===s.listCount-1?7:i+100})):[pr()];respond(prs.slice((page-1)*pageSize,page*pageSize));
+ } else if(route.includes('/comments')) {
+ const number=Number(/issues\\/([0-9]+)\\//.exec(route)[1]);
+ respond(s.comments.filter(c=>(c.pr??7)===number).slice((page-1)*pageSize,page*pageSize));
+ }
  else if(route.includes('/check-runs')) {
  const runs=s.checkRuns??s.statusCheckRollup.filter(c=>c.__typename!=='StatusContext').map((c,i)=>({id:i+1,name:c.name??(i?'optional-'+i:'test'),head_sha:s.headRefOid,status:c.status?.toLowerCase(),conclusion:c.conclusion?.toLowerCase()??null,app:{id:15368}}));
- respond({total_count:runs.length,check_runs:runs.slice((page-1)*100,page*100)});
- } else if(route.includes('/statuses')) respond(s.statuses??s.statusCheckRollup.filter(c=>c.__typename==='StatusContext').map((c,i)=>({id:i+1,context:c.context??'test',state:c.state?.toLowerCase()})));
+ respond({total_count:runs.length,check_runs:runs.slice((page-1)*pageSize,page*pageSize)});
+ } else if(route.includes('/statuses')) {
+ const statuses=s.statuses??s.statusCheckRollup.filter(c=>c.__typename==='StatusContext').map((c,i)=>({id:i+1,context:c.context??'test',state:c.state?.toLowerCase()}));
+ respond(statuses.slice((page-1)*pageSize,page*pageSize));
+ }
  else { console.error('unexpected REST route');process.exit(2); }
- } else if(action==='comment') {if(s.commentFailure==='before')process.exit(17);s.comments.push({body:args[args.indexOf('--body')+1],author:{login:'reviewer'},user:{id:101,login:'reviewer'}}); save();if(s.commentFailure==='after')process.exit(17);}
+ } else if(action==='comment') {if(s.commentFailure==='before')process.exit(17);s.comments.push({body:args[args.indexOf('--body')+1],pr:Number(args[2]),author:{login:'reviewer'},user:{id:101,login:'reviewer'}}); save();if(s.commentFailure==='after')process.exit(17);}
  else if(action==='ready') {s.isDraft=false;save();}
  else if(action==='update-branch') {
  git('-C',s.checkout,'checkout','-q','topic'); git('-C',s.checkout,'fetch','-q','origin'); git('-C',s.checkout,'merge','--no-edit','origin/main'); git('-C',s.checkout,'push','-q','origin','topic');
@@ -113,7 +121,7 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
  const run=(...args)=>launch(process.execPath,[cli,config,...args])
  const wrapper=(name,...args)=>launch("sh",[fileURLToPath(new URL(`../deploy/orch/${name}.sh`,import.meta.url)),...args],
    {...env,FACTORY_ROOT:fileURLToPath(new URL("../",import.meta.url)),FACTORY_PR_CONFIG:config})
- const approve=async body=>{
+ const approve=async (body,number=7)=>{
   if(body) { const s=await read();
     if (/^(REVIEW: BLOCKED|CHANGES REQUESTED)/.test(body) && !body.includes("Delivery-Brief:")) {
       const reproduction={argv:["node","-e","const fs=require('fs'); console.log('property-checked'); process.exit(fs.existsSync('fix.txt')?0:1)"],acknowledgement:"property-checked"}
@@ -121,9 +129,9 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
         reviewDigest:"d".repeat(64),builderId:"builder-7",base:g("rev-parse","origin/main"),environment:`${process.platform}-${process.arch}-node-${process.versions.node}`,
         findings:[{id:"1",ownerRepo:"fixture/new-repository",consumer:{repo:"fixture/new-repository",head},originalHead:head,contractPin:head,reproduction,ownedPaths:["fix.txt"]}]})
     }
-    s.comments.push({body,author:{login:"reviewer"},user:{id:101,login:"reviewer"}});await fs.writeFile(env.FAKE_PR,JSON.stringify(s));return }
+    s.comments.push({body,pr:number,author:{login:"reviewer"},user:{id:101,login:"reviewer"}});await fs.writeFile(env.FAKE_PR,JSON.stringify(s));return }
   const before=await read(), apiFailure=before.apiFailure, move=before.moveDuringChecks;before.apiFailure=false;before.moveDuringChecks=false;await fs.writeFile(env.FAKE_PR,JSON.stringify(before))
-  const r=await run("review-pr","fixture/new-repository","7");assert.equal(r.code,0,JSON.stringify(r))
+  const r=await run("review-pr","fixture/new-repository",String(number));assert.equal(r.code,0,JSON.stringify(r))
   const s=await read();s.apiFailure=apiFailure;s.moveDuringChecks=move;s.moveViewCount=0;s.calls=[];s.ghCalls=[];await fs.writeFile(env.FAKE_PR,JSON.stringify(s))
   await fs.writeFile(path.join(stateDir,"usage.json"),"[]") // approval is fixture setup, outside the exercised budget.
  }
@@ -319,6 +327,21 @@ for(const action of ["pr-loop","review-pr","fix-pr","ci-fix"]) test(`closed PR s
 test("NO-PROGRESS exits 2 instead of re-reviewing unchanged head",async t=>{
  const f=await fixture(t,{noProgress:true});await f.approve("REVIEW: BLOCKED\nReviewed-SHA: "+f.head+"\n1. defect")
  const r=await f.run("pr-loop",repo,"7","-","3");assert.equal(r.code,2,JSON.stringify(r));assert.match(r.stdout,/NO-PROGRESS/);assert.equal((await f.read()).calls.length,1)
+})
+test("nine automatic redispatches on one refused head record one wait and no new attempts",async t=>{
+ const f=await fixture(t,{noProgress:true});await f.approve("REVIEW: BLOCKED\nReviewed-SHA: "+f.head+"\n1. defect")
+ assert.equal((await f.run("pr-loop",repo,"7","-","3")).code,2)
+ for(let i=0;i<9;i++) assert.equal((await f.run("pr-loop",repo,"7","-","3")).code,2)
+ assert.equal((await f.read()).calls.length,1)
+ const events=(await fs.readFile(path.join(f.stateDir,"delivery.jsonl"),"utf8")).trim().split("\n").map(JSON.parse)
+ assert.equal(events.filter(e=>e.status==="suspended").length,1)
+})
+test("concurrent recovery writers cannot redispatch an unchanged deterministic stop",async t=>{
+ const f=await fixture(t,{noProgress:true});await f.approve("REVIEW: BLOCKED\nReviewed-SHA: "+f.head+"\n1. defect")
+ assert.equal((await f.run("pr-loop",repo,"7","-","3")).code,2)
+ const results=await Promise.all([f.run("pr-loop",repo,"7","-","3"),f.run("pr-loop",repo,"7","-","3")])
+ assert.ok(results.every(r=>[2,75].includes(r.code)))
+ assert.equal((await f.read()).calls.length,1)
 })
 test("nine automatic redispatches on one refused head record one wait and no new attempts",async t=>{
  const f=await fixture(t,{noProgress:true});await f.approve("REVIEW: BLOCKED\nReviewed-SHA: "+f.head+"\n1. defect")
@@ -825,3 +848,90 @@ test('failed confirmation records a failed lifecycle before retrying',async t=>{
  const attempt=JSON.parse(await fs.readFile(path.join(dir,file)))
  assert.equal(attempt.status,'failed');assert.equal(attempt.code,17)
 })
+for(const [status,conclusion] of [["success",null],["failure",null],["in_progress","success"],["completed","pending"]])
+ test(`malformed CheckRun ${status}/${conclusion} cannot enqueue or dispatch`,async t=>{
+  const f=await fixture(t);await f.approve()
+  const s=await f.read();s.checkRuns=[{id:1,name:"test",head_sha:f.head,app:{id:15368},status,conclusion}]
+  await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+  assert.notEqual((await f.run("auto-enqueue","--once")).code,0)
+  await assert.rejects(fs.readFile(path.join(f.stateDir,"queue.json")),{code:"ENOENT"})
+  assert.notEqual((await f.run("pr-loop",repo,"7","-","1")).code,0)
+  assert.equal((await f.read()).calls.length,0)
+ })
+
+test("slot timeout resumes the identical guard when the occupied slot is released",async t=>{
+ const f=await fixture(t,{}, {limits:{runsPer24h:8,slots:1,timeoutMs:500}})
+ const release=await acquireLease(path.join(f.stateDir,"locks"),"codex-slot-0")
+ const marker=path.join(f.root,"guard-started")
+ const args=["codex-guard",repo,"7","fix",process.execPath,"-e",`require('fs').writeFileSync(${JSON.stringify(marker)},'started')`]
+ try {
+  assert.equal((await f.run(...args)).code,75)
+  const wait=JSON.parse(await fs.readFile(path.join(f.stateDir,"waits",encodeURIComponent(repo)+"-7.json")))
+  assert.equal(wait.cause,"slot-wait")
+  const stillOccupied=await f.run(...args)
+  assert.equal(stillOccupied.code,75,JSON.stringify(stillOccupied))
+  const events=(await fs.readFile(path.join(f.stateDir,"delivery.jsonl"),"utf8")).trim().split("\n").map(JSON.parse)
+  assert.equal(events.filter(e=>e.status==="suspended").length,1,"repeated slot shortage retains one wait event")
+ } finally {await release()}
+ ok(await f.run(...args))
+ assert.equal(await fs.readFile(marker,"utf8"),"started")
+ assert.equal(JSON.parse(await fs.readFile(path.join(f.stateDir,"usage.json"))).length,1)
+})
+
+for(const cause of ["source-no-progress","rounds-exhausted"])
+ test(`budget-only configuration changes do not reopen ${cause}`,async t=>{
+  const f=await fixture(t,{noProgress:true})
+  if(cause==="source-no-progress") await f.approve(`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. defect`)
+  else {const s=await f.read();s.blockOnce=true;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))}
+  const code=cause==="source-no-progress"?2:1
+  assert.equal((await f.run("pr-loop",repo,"7","-","1")).code,code)
+  f.cfg.limits.runsPer24h=9;await fs.writeFile(f.config,JSON.stringify(f.cfg))
+  assert.equal((await f.run("recover","--once")).code,code)
+  assert.equal((await f.read()).calls.length,1,"unchanged actionable input starts no second child")
+ })
+
+for(const action of ["fix-pr","ci-fix"])
+ test(`standalone ${action} shares the no-progress suspension with loop and recovery`,async t=>{
+  const f=await fixture(t,{noProgress:true});await f.approve(`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. defect`)
+  for(let i=0;i<2;i++) {
+   const r=await f.wrapper(action,repo,"7","-","--no-loop")
+   assert.equal(r.code,2);assert.match(r.stdout,/NO-PROGRESS/)
+  }
+  assert.equal((await f.run("pr-loop",repo,"7","-","1")).code,2)
+  assert.equal((await f.run("recover","--once")).code,2)
+  assert.equal((await f.read()).calls.length,1)
+  const wait=JSON.parse(await fs.readFile(path.join(f.stateDir,"waits",encodeURIComponent(repo)+"-7.json")))
+  assert.equal(wait.cause,"source-no-progress")
+ })
+
+test("REST multi-page scans accept large PR bodies, comments and check output",async t=>{
+ const f=await fixture(t,{listCount:101,listBodyBytes:60000});await f.approve()
+ const s=await f.read()
+ s.comments.unshift(...Array.from({length:26},()=>({body:"x".repeat(60000)})))
+ s.checkRuns=Array.from({length:26},(_,i)=>({id:i+1,name:i?"optional-"+i:"test",head_sha:f.head,
+   app:{id:15368},status:"completed",conclusion:"success",output:{text:"x".repeat(60000)}}))
+ await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ ok(await f.run("auto-enqueue","--once"))
+ const queue=JSON.parse(await fs.readFile(path.join(f.stateDir,"queue.json")))
+ assert.equal(queue.length,1);assert.equal(queue[0].pr,7)
+ const calls=(await f.read()).ghCalls.map(a=>a[1])
+ for(const route of ["/pulls?","/comments?","/check-runs?"])
+  assert.ok(calls.some(r=>r.includes(route)&&r.includes("page=2")),`second page read: ${route}`)
+})
+
+for(const order of ["failure-first","failure-last","all-success"])
+ test(`recovery batch retains outcome: ${order}`,async t=>{
+  const f=await fixture(t,{}, {limits:{runsPer24h:1,slots:1,timeoutMs:5000}});await f.approve()
+  const other=order==="failure-first"?6:8
+  if(order==="all-success") await f.approve(undefined,other)
+  await fs.mkdir(path.join(f.stateDir,"waits"),{recursive:true})
+  // Seed resumable work as persisted recovery would, keeping source and approval real.
+  for(const pr of [7,other]) await fs.writeFile(path.join(f.stateDir,"waits",encodeURIComponent(repo)+`-${pr}.json`),
+   JSON.stringify({schema:"factory-delivery-wait/v1",status:"resumable",repo,pr}))
+  if(order!=="all-success") await fs.writeFile(path.join(f.stateDir,"usage.json"),JSON.stringify([{repo,pr:other,kind:"review",at:Date.now()}]))
+  const r=await f.run("recover","--once")
+  assert.equal(r.code,order==="all-success"?0:75,JSON.stringify(r))
+  assert.match(r.stdout,/APPROVED/)
+  if(order!=="all-success") assert.match(r.stdout,/BUDGET-STOP/)
+  assert.equal((await f.read()).calls.length,0)
+ })

@@ -108,7 +108,11 @@ export async function reserveCodex(config, repo, pr, kind) {
       return null
     }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs })
     if (result) return result
-    if (Date.now() >= until) throw new DeliveryError(`SLOT-STOP ${repo}#${pr}: concurrency wait timed out`, 75)
+    if (Date.now() >= until) {
+      const error = new DeliveryError(`SLOT-STOP ${repo}#${pr}: concurrency wait timed out`, 75)
+      error.cause = "slot-wait"
+      throw error
+    }
     await pause(config.pollMs)
   }
 }
@@ -128,7 +132,11 @@ export async function deliveryWait(config, repo, pr, input, stop = null) {
     if (!prior || prior.status !== "suspended") return null
     const changed = prior.head !== input.head || prior.dependency !== input.dependency
     const budgetOpen = prior.cause === "budget-exhausted" && input.budgetAvailable
-    if (changed || budgetOpen || (prior.resetAt && Date.now() >= prior.resetAt)) {
+    // Slot waits retry admission; reserveCodex remains the atomic arbiter.
+    // Capacity signals cannot reopen a deterministic source/dependency stop.
+    if (prior.cause === "slot-wait" && !changed) return null
+    const budgetReset = prior.cause === "budget-exhausted" && prior.resetAt && Date.now() >= prior.resetAt
+    if (changed || budgetOpen || budgetReset) {
       await writeJson(file, { ...prior, status: "resumable" })
       return null
     }
