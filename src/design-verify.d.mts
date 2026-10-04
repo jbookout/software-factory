@@ -69,3 +69,27 @@ export function evaluateVerification(input: {
   readArtifact: (ref: string, options?: { signal?: AbortSignal; maxBytes?: number; timeoutMs?: number }) => Promise<Buffer | null> | Buffer | null;
   limits?: { timeoutMs?: number; maxBytes?: number };
 }): Promise<VerificationResult>;
+
+export interface ProductProofIdentity {
+  repo: string; sourceCommit: string; buildDigest: string; buildConfigDigest: string; fixtureDigest: string;
+  runtime: { e2e: string; web: string; playwright: string; node: string; browser: string };
+}
+export interface ProductProofPacket {
+  schema: 'browser-product-proof.v1'; binding: ProductProofIdentity & { runId: string; attempt: number };
+  build: ArtifactRef; buildArchive: ArtifactRef; nativeReport: ArtifactRef; coverage: ArtifactRef;
+  persistence: { id: string; written: ArtifactRef; readback: ArtifactRef }[];
+  recordings: { id: string; operation: 'save-reload'; video: ArtifactRef; trace: ArtifactRef; checkpoint: ArtifactRef }[];
+  links: { run: string; artifacts: string };
+  metrics: { firstReviewUiFindings: number | null; reproductionMinutes: number | null };
+}
+export declare const PRODUCT_PROOF_RUNTIME: Readonly<{ e2e: '0.16.0'; web: '0.11.2'; playwright: '1.63.0'; browser: 'chromium' }>;
+export declare function evaluateProductProofPacket(input: {
+  packet: ProductProofPacket;
+  expected: ProductProofIdentity & { runId: string; attempt: number; requiredNativeTests: string[]; requiredCoverage: string[]; requiredPersistence: string[];
+    requiredRecordings: { id: string; operation: 'save-reload' }[] };
+  readArtifact: (ref: string, options?: { signal: AbortSignal; maxBytes: number; timeoutMs: number }) => Promise<Buffer | null>;
+  inspectRecording: (input: { video: Buffer; trace: Buffer; checkpoint: Buffer; operation: string }) => Promise<{ decoded: boolean; operationPresent: boolean }>;
+  limits?: { timeoutMs?: number; maxBytes?: number };
+}): Promise<{ gate: 'pass' | 'fail'; reasons: string[]; sourceCommit: string | null }>;
+
+export declare function productProofReviewMetrics(input: {repo:string; sourceCommit:string; reviewedSha:string; commentUrl:string; firstReviewUiFindings:number; reproductionMinutes:number}): {schema:'browser-proof-review-metrics.v1'; repo:string; sourceCommit:string; commentUrl:string; firstReviewUiFindings:number; reproductionMinutes:number};

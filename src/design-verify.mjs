@@ -300,3 +300,5 @@ export async function evaluateVerification(input) {
   }
   return result(criteria, reviewVerdict({ review, reviewKey, target, targetDigest, manifest, recordDigests }), targetDigest)
 }
+
+export { evaluateProductProofPacket, PRODUCT_PROOF_RUNTIME, productProofReviewMetrics } from './browser-product-proof.mjs'
