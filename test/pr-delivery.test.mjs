@@ -4,6 +4,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { execFileSync, spawn } from "node:child_process"
+import { createHash, randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { acquireLease } from "../src/pr-delivery-state.mjs"
 
@@ -41,19 +42,36 @@ if(tool === 'codex') {
  if(s.apiFailure) { console.log('HTTP/2.0 403 Forbidden\\nx-ratelimit-remaining: 0\\n\\n{}');console.error('provider unavailable');process.exit(1); }
  if(s.restFault) { if(s.restFault==='exception') process.exit(2); if(s.restFault==='refusal') {console.log('HTTP/2.0 401 Unauthorized\\n\\n{}');process.exit(1);}
  console.log('HTTP/2.0 200 OK\\n\\n'+s.restFault);process.exit(0); }
- const pr=()=>({number:s.number,title:s.title,state:s.state==='OPEN'?'open':'closed',merged:s.state==='MERGED',draft:s.isDraft,
+ if(args.includes('--method')) {
+ const field=k=>args[args.indexOf(k+'=')];
+ const fields=Object.fromEntries(args.filter((_,i)=>args[i-1]==='-f').map(v=>[v.slice(0,v.indexOf('=')),v.slice(v.indexOf('=')+1)]));
+ if(route.endsWith('/comments')) {s.comments.push({body:fields.body,pr:Number(/issues\\/([0-9]+)/.exec(route)[1]),author:{login:'reviewer'}});if(s.blockBeforeMerge&&fields.body.startsWith('DELIVERY VERIFIED')) s.comments.push({body:'REVIEW: BLOCKED\\nReviewed-SHA: '+s.headRefOid,author:{login:'reviewer'}});save();respond({id:s.comments.length,body:fields.body});}
+ else if(route.endsWith('/update-branch')) {
+ if(fields.expected_head_sha!==s.headRefOid) process.exit(2);
+ git('-C',s.checkout,'checkout','-q','topic');git('-C',s.checkout,'fetch','-q','origin');git('-C',s.checkout,'merge','--no-edit','origin/main');git('-C',s.checkout,'push','-q','origin','topic');respond({message:'Updating pull request branch.'});
+ } else if(route.endsWith('/merge')) {
+ if(fields.merge_method!=='squash'||fields.sha!==s.headRefOid) process.exit(2);
+ git('-C',s.checkout,'fetch','-q','origin');git('-C',s.checkout,'checkout','-q','main');git('-C',s.checkout,'merge','--squash','origin/topic');git('-C',s.checkout,'commit','-qm','Merge PR');git('-C',s.checkout,'push','-q','origin','main');
+ s.state='MERGED';s.mergeCommit={oid:git('-C',s.checkout,'rev-parse','HEAD')};save();
+ if(s.emptyMergeReply) {respond({});process.exit(0);}
+ if(s.lostMergeReply) {console.log('HTTP/2.0 502 Error\\n\\n{}');process.exit(1);}
+ respond({merged:true,sha:s.mergeCommit.oid});
+ } else process.exit(2);
+ process.exit(0);
+ }
+ const pr=(number=s.number)=>({id:number,number,title:s.title,state:s.state==='OPEN'?'open':'closed',merged:s.state==='MERGED',draft:s.isDraft,
  head:{sha:s.headRefOid,ref:s.headRefName,repo:{full_name:s.isCrossRepository?'fixture/fork':'fixture/new-repository'}},
- base:{ref:s.baseRefName,repo:{full_name:'fixture/new-repository'}},mergeable:s.mergeable==='UNKNOWN'?null:s.mergeable!=='CONFLICTING',mergeable_state:s.mergeStateStatus.toLowerCase(),merge_commit_sha:s.mergeCommit?.oid});
+ base:{ref:s.baseRefName,sha:git('--git-dir',s.remote,'rev-parse','refs/heads/main'),repo:{full_name:'fixture/new-repository'}},comments:s.comments.filter(c=>(c.pr??7)===number).length,mergeable:s.mergeable==='UNKNOWN'?null:s.mergeable!=='CONFLICTING',mergeable_state:s.mergeStateStatus.toLowerCase(),merge_commit_sha:s.mergeCommit?.oid});
  if(/pulls\\/[0-9]+$/.test(route)) {
  if(s.moveDuringChecks && ++s.moveViewCount>1) {
  git('-C',s.checkout,'checkout','-q','topic');fs.writeFileSync(s.checkout+'/moved.txt','moved');git('-C',s.checkout,'add','moved.txt');git('-C',s.checkout,'commit','-qm','Move head');git('-C',s.checkout,'push','-q','origin','topic');
  s.headRefOid=git('--git-dir',s.remote,'rev-parse','refs/heads/topic');s.moveDuringChecks=false;save(); }
- save();respond({...pr(),number:Number(route.split('/').at(-1))});
+ save();respond(pr(Number(route.split('/').at(-1))));
  } else if(route.includes('/pulls?')) {
- const prs=s.listCount?Array.from({length:s.listCount},(_,i)=>({...pr(),body:'x'.repeat(s.listBodyBytes??0),number:i===s.listCount-1?7:i+100})):[pr()];respond(prs.slice((page-1)*pageSize,page*pageSize));
+ const prs=s.listCount?Array.from({length:s.listCount},(_,i)=>({...pr(),body:'x'.repeat(s.listBodyBytes??0),id:i+100,number:i===s.listCount-1?7:i+100,comments:i===s.listCount-1?s.comments.length:0})):[pr()];respond(prs.slice((page-1)*pageSize,page*pageSize));
  } else if(route.includes('/comments')) {
  const number=Number(/issues\\/([0-9]+)\\//.exec(route)[1]);
- respond(s.comments.filter(c=>(c.pr??7)===number).slice((page-1)*pageSize,page*pageSize));
+ if(s.missingCommentPage===page) respond([]); else respond(s.comments.filter(c=>(c.pr??7)===number).map((c,i)=>({id:i+1,created_at:new Date(1700000000000+i*1000).toISOString(),updated_at:new Date(1700000000000+i*1000).toISOString(),user:{login:c.author?.login??'reviewer'},...c})).slice((page-1)*pageSize,page*pageSize));
  }
  else if(route.includes('/check-runs')) {
  const runs=s.checkRuns??s.statusCheckRollup.filter(c=>c.__typename!=='StatusContext').map((c,i)=>({id:i+1,name:c.name??(i?'optional-'+i:'test'),head_sha:s.headRefOid,status:c.status?.toLowerCase(),conclusion:c.conclusion?.toLowerCase()??null,app:{id:15368}}));
@@ -63,15 +81,7 @@ if(tool === 'codex') {
  respond(statuses.slice((page-1)*pageSize,page*pageSize));
  }
  else { console.error('unexpected REST route');process.exit(2); }
- } else if(action==='comment') {s.comments.push({body:args[args.indexOf('--body')+1],pr:Number(args[2]),author:{login:'reviewer'}}); save();}
- else if(action==='ready') {s.isDraft=false;save();}
- else if(action==='update-branch') {
- git('-C',s.checkout,'checkout','-q','topic'); git('-C',s.checkout,'fetch','-q','origin'); git('-C',s.checkout,'merge','--no-edit','origin/main'); git('-C',s.checkout,'push','-q','origin','topic');
- } else if(action==='merge') {
- if(!args.includes('--squash') || args.includes('--auto') || args[args.indexOf('--match-head-commit')+1]!==s.headRefOid) process.exit(2);
- git('-C',s.checkout,'fetch','-q','origin'); git('-C',s.checkout,'checkout','-q','main'); git('-C',s.checkout,'merge','--squash','origin/topic'); git('-C',s.checkout,'commit','-qm','Merge PR'); git('-C',s.checkout,'push','-q','origin','main');
- s.state='MERGED';s.mergeCommit={oid:git('-C',s.checkout,'rev-parse','HEAD')};save();
- } else {console.error('Unexpected gh action '+args.join(' '));process.exit(2);}
+ } else {console.error('GraphQL PR route forbidden');process.exit(2);}
 }
 `
 
@@ -94,7 +104,7 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
  const state={ remote,checkout,number:7,title:"Fixture PR",state:"OPEN",baseRefName:"main",isCrossRepository:false,headRefName:"topic",headRefOid:head,mergeStateStatus:"CLEAN",mergeable:"MERGEABLE",isDraft:false,author:{login:"builder"},comments:[],statusCheckRollup:[{status:"COMPLETED",conclusion:"SUCCESS"}],calls:[],ghCalls:[],...overrides }
  await fs.writeFile(env.FAKE_PR,JSON.stringify(state))
  const config=path.join(root,"config.json"), stateDir=path.join(root,"state")
- const cfg={repos:{"fixture/new-repository":{checkout,originUrl:remote,worktreeRoot:path.join(root,"worktrees"),requiredChecks:[{name:"test"}]}},stateDir,codex:{model:"fixture-model",effort:"high"},limits:{runsPer24h:8,slots:2,timeoutMs:5000},pollMs:5,retryMs:0,commandTimeoutMs:5000,...configOverrides}
+ const cfg={repos:{"fixture/new-repository":{checkout,originUrl:remote,worktreeRoot:path.join(root,"worktrees"),requiredChecks:[{name:"test"}],trustedReviewers:["reviewer"]}},stateDir,codex:{model:"fixture-model",effort:"high"},limits:{runsPer24h:8,slots:2,timeoutMs:5000},pollMs:5,retryMs:0,commandTimeoutMs:5000,...configOverrides}
  await fs.writeFile(config,JSON.stringify(cfg))
  const read=async()=>JSON.parse(await fs.readFile(env.FAKE_PR,"utf8"))
  const launch=(command,args,workerEnv=env)=>new Promise((resolve,reject)=>{
@@ -105,7 +115,16 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
  const wrapper=(name,...args)=>launch("sh",[fileURLToPath(new URL(`../deploy/orch/${name}.sh`,import.meta.url)),...args],
    {...env,FACTORY_ROOT:fileURLToPath(new URL("../",import.meta.url)),FACTORY_PR_CONFIG:config})
  const approve=async (body,number=7)=>{
-  if(body) { const s=await read();s.comments.push({body,author:{login:"reviewer"}});await fs.writeFile(env.FAKE_PR,JSON.stringify(s));return }
+  if(body) { const s=await read();s.comments.push({body,author:{login:"reviewer"}});await fs.writeFile(env.FAKE_PR,JSON.stringify(s));
+   if(body.startsWith("REVIEW: BLOCKED\n") || body.startsWith("CHANGES REQUESTED\n")) {
+    const id=randomUUID(), stem=path.join(stateDir,"reviews",id), prompt="synthetic independent reviewer", output=stem+".output";
+    const hash=v=>createHash("sha256").update(v).digest("hex");
+    const comment=body+"\nFactory-Review: "+id;s.comments.at(-1).body=comment;
+    await fs.mkdir(path.dirname(stem),{recursive:true});await fs.writeFile(stem+".prompt",prompt);await fs.writeFile(output,body);
+    await fs.writeFile(stem+".json",JSON.stringify({schema:"factory-review/v1",repo:"fixture/new-repository",pr:number,head,tree:g("rev-parse",head+"^{tree}"),verdict:body.split("\n")[0],sourceVerified:true,execution:{code:0,pid:1234},output,promptDigest:hash(prompt),outputDigest:hash(body),commentDigest:hash(comment)}));
+    await fs.writeFile(env.FAKE_PR,JSON.stringify(s));
+   }
+   return }
   const before=await read(), apiFailure=before.apiFailure, move=before.moveDuringChecks;before.apiFailure=false;before.moveDuringChecks=false;await fs.writeFile(env.FAKE_PR,JSON.stringify(before))
   const r=await run("review-pr","fixture/new-repository",String(number));assert.equal(r.code,0,JSON.stringify(r))
   const s=await read();s.apiFailure=apiFailure;s.moveDuringChecks=move;s.moveViewCount=0;s.calls=[];s.ghCalls=[];await fs.writeFile(env.FAKE_PR,JSON.stringify(s))
@@ -125,7 +144,7 @@ test("approve -> enqueue -> serial squash merge verifies main",async t=>{
  assert.ok(s.calls[0].args.includes("fixture-model"))
  ok(await f.run("auto-enqueue","--once"));ok(await f.run("merge-queue","--once"))
  const merged=await f.read();assert.equal(merged.state,"MERGED");assert.equal(f.g("rev-parse","origin/main"),merged.mergeCommit.oid)
- assert.ok(merged.ghCalls.some(a=>a[1]==="merge"&&a.includes("--match-head-commit")&&!a.includes("--auto")))
+ assert.ok(merged.ghCalls.some(a=>a[1].endsWith("/merge")&&a.includes("sha="+merged.headRefOid)&&!a.includes("--auto")))
 })
 test("blocked review -> fix -> re-review uses confirmation scope",async t=>{
  const f=await fixture(t,{blockOnce:true});ok(await f.run("pr-loop",repo,"7","-","3"));const s=await f.read()
@@ -222,7 +241,7 @@ test("already merged state must prove its commit exists on main and delivers the
  const f=await fixture(t,{state:"MERGED",mergeCommit:{oid:"a".repeat(40)}})
  const r=await f.run("merge-one-core",repo,"7",f.head)
  assert.notEqual(r.code,0);assert.match(r.stderr,/MERGE.*(MAIN|SOURCE|VERIFY)/)
- assert.equal((await f.read()).ghCalls.filter(a=>a[1]==="merge").length,0)
+ assert.equal((await f.read()).ghCalls.filter(a=>a[1].endsWith("/merge")).length,0)
 })
 test("per-PR budget stop survives invocations and loop stops",async t=>{
  const f=await fixture(t,{blockOnce:true},{limits:{runsPer24h:1,slots:1,timeoutMs:5000}})
@@ -273,11 +292,12 @@ test("a builder formatted approval has no reviewer execution and cannot merge",a
  await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
  const r=await f.run("merge-one-core",repo,"7",f.head)
  assert.equal(r.code,4);assert.equal((await f.read()).state,"OPEN")
- assert.equal((await f.read()).ghCalls.filter(a=>a[1]==="merge").length,0)
+ assert.equal((await f.read()).ghCalls.filter(a=>a[1].endsWith("/merge")).length,0)
 })
 test("independence comes from fresh execution even with a shared GitHub account",async t=>{
  const f=await fixture(t);await f.approve()
  const s=await f.read();s.comments[0].author={login:"builder"};await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ f.cfg.repos[repo].trustedReviewers.push("builder");await fs.writeFile(f.config,JSON.stringify(f.cfg))
  ok(await f.run("merge-one-core",repo,"7",f.head));assert.equal((await f.read()).state,"MERGED")
 })
 for(const artifact of ["prompt","output","receipt"]) test(`changed reviewer ${artifact} invalidates approval evidence`,async t=>{
@@ -338,14 +358,14 @@ test("controller death cannot orphan a guarded child or release its occupied slo
  ok(await f.run("codex-guard",repo,"8","review",process.execPath,"-e","process.exit(0)"))
 })
 test("transient GitHub error is requeued at most three times",async t=>{
- const f=await fixture(t,{apiFailure:true},{retryMs:0});await f.approve();ok(await f.run("merge-enqueue",repo,"7",f.head))
+ const f=await fixture(t,{apiFailure:true},{retryMs:0});await f.approve();const s=await f.read();s.apiFailure=false;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s));ok(await f.run("merge-enqueue",repo,"7",f.head));s.apiFailure=true;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
  for(let i=0;i<5;i++) ok(await f.run("merge-queue","--once"))
  const queue=JSON.parse(await fs.readFile(path.join(f.stateDir,"queue.json")))
  assert.equal(queue[0].attempts,4);assert.equal(queue[0].outcome.status,"fail");assert.equal((await f.read()).state,"OPEN")
 })
 test("same-head CI recovery queues a fresh bounded attempt and preserves the failed outcome",async t=>{
  const f=await fixture(t,{statusCheckRollup:[{status:"COMPLETED",conclusion:"FAILURE"}]});await f.approve()
- ok(await f.run("merge-enqueue",repo,"7",f.head));ok(await f.run("merge-queue","--once"))
+ const admission=await f.read();admission.statusCheckRollup=[{status:"COMPLETED",conclusion:"SUCCESS"}];await fs.writeFile(f.env.FAKE_PR,JSON.stringify(admission));ok(await f.run("merge-enqueue",repo,"7",f.head));admission.statusCheckRollup=[{status:"COMPLETED",conclusion:"FAILURE"}];await fs.writeFile(f.env.FAKE_PR,JSON.stringify(admission));ok(await f.run("merge-queue","--once"))
  const before=JSON.parse(await fs.readFile(path.join(f.stateDir,"queue.json")));assert.equal(before[0].outcome.status,"fail")
  const s=await f.read();s.statusCheckRollup=[{status:"COMPLETED",conclusion:"SUCCESS"}];await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
  ok(await f.run("auto-enqueue","--once"));ok(await f.run("auto-enqueue","--once"));ok(await f.run("merge-queue","--once"))
@@ -365,7 +385,7 @@ test("a valid already merged PR is verified again without another merge",async t
  const first=await f.read()
  ok(await f.run("merge-one-core",repo,"7",f.head))
  const r=await f.run("pr-loop",repo,"7","-","1");ok(r);assert.match(r.stdout,/source verified/)
- const after=await f.read();assert.equal(after.ghCalls.filter(a=>a[1]==="merge").length,1)
+ const after=await f.read();assert.equal(after.ghCalls.filter(a=>a[1].endsWith("/merge")).length,1)
  assert.equal(after.calls.length,0);assert.equal(after.mergeCommit.oid,first.mergeCommit.oid)
 })
 test("red hosted checks refuse merge without a queue approval comment",async t=>{
@@ -387,7 +407,7 @@ test("auto enqueue reaches approved PRs beyond the first fifty results",async t=
 test("concurrent merge workers use a single serial owner",async t=>{
  const f=await fixture(t);await f.approve();ok(await f.run("merge-enqueue",repo,"7",f.head))
  const results=await Promise.all([f.run("merge-queue","--once"),f.run("merge-queue","--once")])
- assert.ok(results.some(r=>r.code===0));assert.ok(results.every(r=>[0,75].includes(r.code)),JSON.stringify(results));assert.equal((await f.read()).ghCalls.filter(a=>a[1]==="merge").length,1)
+ assert.ok(results.some(r=>r.code===0));assert.ok(results.every(r=>[0,75].includes(r.code)),JSON.stringify(results));assert.equal((await f.read()).ghCalls.filter(a=>a[1].endsWith("/merge")).length,1)
 })
 test("duplicate PR loops allow only one fixer/reviewer",async t=>{
  const f=await fixture(t,{noProgress:true});await f.approve("REVIEW: BLOCKED\nReviewed-SHA: "+f.head+"\n1. defect")
@@ -650,3 +670,57 @@ for(const order of ["failure-first","failure-last","all-success"])
   if(order!=="all-success") assert.match(r.stdout,/BUDGET-STOP/)
   assert.equal((await f.read()).calls.length,0)
  })
+
+// Item 11: exercise the deployed consumers, not a second approval predicate.
+test("outsider cannot replay an authentic factory approval comment",async t=>{
+ const f=await fixture(t);await f.approve();const s=await f.read();
+ s.comments[0].author.login="outsider";await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s));
+ ok(await f.wrapper("auto-enqueue","--once"));
+ await assert.rejects(fs.readFile(path.join(f.stateDir,"queue.json")),{code:"ENOENT"});
+});
+test("missing comment page stays unknown even with an older valid approval",async t=>{
+ const f=await fixture(t);await f.approve();const s=await f.read();
+ s.comments.push(...Array.from({length:26},()=>({body:"ordinary note"})));s.missingCommentPage=2;
+ await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s));
+ assert.notEqual((await f.wrapper("auto-enqueue","--once")).code,0);
+ await assert.rejects(fs.readFile(path.join(f.stateDir,"queue.json")),{code:"ENOENT"});
+});
+test("untrusted later BLOCK cannot impersonate the independent reviewer",async t=>{
+ const f=await fixture(t);await f.approve();await f.approve(`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. fabricated`);
+ const s=await f.read();s.comments.at(-1).author.login="outsider";await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s));
+ ok(await f.wrapper("pr-loop",repo,"7","-","1"));assert.equal((await f.read()).calls.length,0);
+});
+test("snapshot carries full source inventory and one provider observation",async t=>{
+ const f=await fixture(t);const r=await f.run("snapshot",repo,"7");ok(r);
+ const v=JSON.parse(r.stdout);assert.equal(v.schema,"factory-github-snapshot/v1");assert.equal(v.state,"known");
+ assert.equal(v.head.sha,f.head);assert.match(v.base.sha,/^[0-9a-f]{40}$/);
+ assert.equal(v.inventory.checkRuns.length,1);assert.equal(v.inventory.comments.length,0);
+ assert.equal(v.metrics.providerCalls,5);assert.equal(v.metrics.staleActions,0);assert.ok(Date.parse(v.fetchedAt));
+});
+
+test("latest trusted BLOCK after APPROVE defeats every deployed reader",async t=>{
+ const f=await fixture(t);await f.approve();await f.approve(`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. defect`);
+ ok(await f.wrapper("auto-enqueue","--once"));await assert.rejects(fs.readFile(path.join(f.stateDir,"queue.json")),{code:"ENOENT"});
+ assert.equal((await f.wrapper("merge-one-core",repo,"7",f.head)).code,4);
+ assert.equal((await f.run("merge-enqueue",repo,"7",f.head)).code,4);
+ const observed=JSON.parse((await f.run("snapshot",repo,"7")).stdout);assert.equal(observed.review.verdict,"REVIEW: BLOCKED");
+ assert.equal((await f.read()).calls.length,0);
+});
+for(const replyFault of ["lostMergeReply","emptyMergeReply"]) test(`merged retry after ${replyFault} authenticates ancestry and never repeats the effect`,async t=>{
+ const f=await fixture(t);await f.approve();const s=await f.read();s[replyFault]=true;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s));
+ ok(await f.wrapper("merge-one-core",repo,"7",f.head));ok(await f.wrapper("merge-one-core",repo,"7",f.head));
+ const after=await f.read();assert.equal(after.ghCalls.filter(a=>a[1].endsWith("/merge")).length,1);
+ assert.equal(f.g("rev-parse","origin/main"),after.mergeCommit.oid);
+ assert.equal(f.g("merge-base","--is-ancestor",after.mergeCommit.oid,"origin/main"),"");
+});
+for(const body of [h=>`Reviewed-SHA: ${h}`,h=>`APPROVE\nReviewed-SHA: ${h.slice(0,7)}`,h=>`APPROVE\nReviewed-SHA: ${h}extra`])
+ test("SHA-only, prefix and malformed approvals refuse enqueue",async t=>{
+  const f=await fixture(t);await f.approve(body(f.head));ok(await f.wrapper("auto-enqueue","--once"));
+  assert.equal((await f.run("merge-enqueue",repo,"7",f.head)).code,4);assert.equal((await f.read()).calls.length,0);
+ });
+
+test("later BLOCK at the final action recheck prevents a stale merge",async t=>{
+ const f=await fixture(t);await f.approve();const s=await f.read();s.blockBeforeMerge=true;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s));
+ assert.equal((await f.wrapper("merge-one-core",repo,"7",f.head)).code,4);
+ const after=await f.read();assert.equal(after.state,"OPEN");assert.equal(after.ghCalls.filter(a=>a[1].endsWith("/merge")).length,0);
+});

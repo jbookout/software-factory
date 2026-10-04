@@ -1,15 +1,55 @@
 {
   "repos": {
-    "owner/repository": {
-      "checkout": "/absolute/path/to/repository",
-      "worktreeRoot": "/absolute/path/to/delivery-worktrees",
-      "requiredChecks": [{ "name": "test", "appId": 15368 }],
-      "dependencyRevision": "owned-actionable-input-revision"
+    "jbookout/carr-system": {
+      "checkout": "/absolute/path/to/carr-system",
+      "worktreeRoot": "/absolute/path/to/delivery-worktrees/carr-system",
+      "requiredChecks": [
+        {
+          "name": "REPLACE_WITH_CURRENT_REQUIRED_CONTEXT",
+          "appId": 15368
+        }
+      ],
+      "trustedReviewers": [
+        "replace-with-verified-review-poster"
+      ]
+    },
+    "jbookout/doctorcre-app": {
+      "checkout": "/absolute/path/to/doctorcre-app",
+      "worktreeRoot": "/absolute/path/to/delivery-worktrees/doctorcre-app",
+      "requiredChecks": [
+        {
+          "name": "REPLACE_WITH_CURRENT_REQUIRED_CONTEXT",
+          "appId": 15368
+        }
+      ],
+      "trustedReviewers": [
+        "replace-with-verified-review-poster"
+      ]
+    },
+    "jbookout/software-factory": {
+      "checkout": "/absolute/path/to/software-factory",
+      "worktreeRoot": "/absolute/path/to/delivery-worktrees/software-factory",
+      "requiredChecks": [
+        {
+          "name": "test",
+          "appId": 15368
+        }
+      ],
+      "trustedReviewers": [
+        "replace-with-verified-review-poster"
+      ]
     }
   },
   "stateDir": "/absolute/path/to/private/factory-delivery-state",
-  "codex": { "model": "gpt-6.1-sol", "effort": "high" },
-  "limits": { "runsPer24h": 8, "slots": 4, "timeoutMs": 4500000 },
+  "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "high"
+  },
+  "limits": {
+    "runsPer24h": 8,
+    "slots": 4,
+    "timeoutMs": 4500000
+  },
   "commandTimeoutMs": 120000,
   "checksTimeoutMs": 3600000,
   "pollMs": 30000,
