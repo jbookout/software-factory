@@ -1,5 +1,5 @@
 import { killOwnedGroup, ownedGroupAlive } from "./process-group.mjs"
-import { Deadline } from "./deadline.mjs"
+import { Deadline, monotonicNow } from "./deadline.mjs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
@@ -58,11 +58,11 @@ export async function acquireLease(root, name, { budget } = {}) {
     await writeJson(file, owner)
     owner.ticket = Math.max(0, ...(await peers()).map(p => p.ticket)) + 1
     await writeJson(file, owner)
-    const choosingUntil = Date.now() + 1000
+    const choosingUntil = monotonicNow() + 1000
     let contenders = await peers()
     while (contenders.some(p => p.ticket === 0)) {
       budget?.check()
-      if (Date.now() >= choosingUntil) { await release(); return null }
+      if (monotonicNow() >= choosingUntil) { await release(); return null }
       if (budget) await budget.sleep(10); else await pause(10)
       contenders = await peers()
     }
@@ -77,12 +77,12 @@ export async function acquireLease(root, name, { budget } = {}) {
   } catch (error) { await release(); throw error }
 }
 export async function withLease(root, name, fn, { waitMs = 0, pollMs = 30, budget } = {}) {
-  const until = Date.now() + waitMs
+  const until = monotonicNow() + waitMs
   do {
     budget?.check()
     const release = await acquireLease(root, name, { budget })
     if (release) { try { return await fn(release) } finally { await release() } }
-    if (Date.now() >= until) throw new DeliveryError(`BUSY: ${name} already owned`, 75)
+    if (monotonicNow() >= until) throw new DeliveryError(`BUSY: ${name} already owned`, 75)
     if (budget) await budget.sleep(pollMs); else await pause(pollMs)
   } while (true)
 }

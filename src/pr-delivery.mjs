@@ -404,7 +404,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       const result = await fn(queue)
       await writeJson(queueFile, queue)
       return result
-    }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs })
+    }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget: budget() })
   }
   async function enqueue(repo, pr, head, note = "", mode = "manual") {
     getRepo(repo)
@@ -568,7 +568,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     await withLease(locks, "budget", async () => {
       const file = path.join(config.stateDir, "usage.json"), usage = await readJson(file, [])
       await writeJson(file, [...usage, ...recent.filter(r => !usage.some(u => u.legacyId === r.legacyId))])
-    }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs })
+    }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget: budget() })
     for (const entry of pending) await enqueue(entry.repo, entry.pr, entry.head, entry.note, "import")
     return { message: `IMPORTED pending queue and recent usage; source unchanged` }
   }
@@ -593,7 +593,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
         const key = keyFor(repo, pr)
         prLeases.set(key, release)
         try { return await fn() } finally { prLeases.delete(key) }
-      }))
+      }, { budget: budget() }))
     },
     async execute(step, request = {}) {
       return inAttempt(async () => {
@@ -633,8 +633,8 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
             case "enqueue": data = await enqueue(repo, pr, head, note); break
             case "auto-enqueue": data = await autoEnqueue(); break
             case "import-legacy": data = await importLegacy(request.root); break
-            case "merge-one-core": data = await withLease(locks, "merge-owner", () => mergeOne(repo, pr, head, note)); break
-            case "merge-queue": data = await withLease(locks, "merge-owner", consumeQueue); break
+            case "merge-one-core": data = await withLease(locks, "merge-owner", () => mergeOne(repo, pr, head, note), { budget: budget() }); break
+            case "merge-queue": data = await withLease(locks, "merge-owner", consumeQueue, { budget: budget() }); break
             default: throw new DeliveryError(`unknown delivery step: ${step}`)
           }
           return pass(data)

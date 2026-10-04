@@ -3,6 +3,7 @@ import { loadDeliveryConfig } from '../src/pr-delivery.mjs'
 import { Deadline } from '../src/deadline.mjs'
 import { reserveCompute } from '../src/process-capacity.mjs'
 import { runProcess } from '../src/process-runner.mjs'
+import { fileURLToPath } from 'node:url'
 
 const [configPath, repo, ...files] = process.argv.slice(2)
 const controller = new AbortController()
@@ -17,14 +18,19 @@ try {
     throw new Error('browser concurrency exceeds configured reservation')
   const budget = new Deadline(config.attemptTimeoutMs, { signal: controller.signal })
   release = await reserveCompute(config, workers, budget.phaseBudget('queue', config.queueTimeoutMs))
-  const result = await runProcess([process.execPath, '--test', `--test-concurrency=${workers}`, ...files], {
+  let passed = 0
+  const reporter = fileURLToPath(new URL('../src/browser-test-reporter.mjs', import.meta.url))
+  const result = await runProcess([process.execPath, '--test', `--test-reporter=${reporter}`, `--test-concurrency=${workers}`, ...files], {
     env: Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== 'NODE_TEST_CONTEXT')),
     cwd: config.repos[repo].checkout, timeoutMs: Math.max(1, Math.floor(Math.min(config.limits.timeoutMs, budget.remaining()))),
     signal: controller.signal, captureOutput: false,
-    onOutput: (chunk, stream) => process[stream].write(chunk),
+    onOutput: (chunk, stream) => {
+      if (stream === 'stdout') for (const byte of chunk) if (byte === 46) passed++
+    },
     onSpawn: job => release.bindJob(job)
   })
-  process.exitCode = result.code
+  process.exitCode = result.code || (passed ? 0 : 1)
+  process.stdout.write(process.exitCode ? `browser tests exited ${process.exitCode}\n` : `pass ${passed}\n`)
 } catch (error) {
   // No provider/process arguments or output are persisted on refusal.
   process.stderr.write(`${error.code === 142 ? error.message : 'browser execution refused'}\n`)

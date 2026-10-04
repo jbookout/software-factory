@@ -18,7 +18,6 @@ const save = () => fs.writeFileSync(file, JSON.stringify(s));
 const git = (...a) => cp.execFileSync('git', a, {encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
 s.headRefOid = git('--git-dir',s.remote,'rev-parse','refs/heads/topic');
 const tool = require('node:path').basename(process.argv[1]);
-if(tool === 'ps') { console.log(process.pid+' '+process.ppid+' node fixture-observer'); return; }
 if(tool === 'codex') {
  let prompt=''; process.stdin.on('data',b=>prompt+=b); process.stdin.on('end',()=>{
  s.calls.push({prompt,cwd:process.cwd(),args}); save();
@@ -92,7 +91,10 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
  g("checkout","-b","topic");await fs.writeFile(path.join(checkout,"feature.txt"),"feature\n");g("add","feature.txt");g("commit","-qm","Feature");g("push","-q","origin","topic")
  const head = g("rev-parse","HEAD");g("checkout","main")
  const tools=path.join(root,"tools");await fs.mkdir(tools)
- for(const name of ["gh","codex","ps"]) await fs.writeFile(path.join(tools,name),fake,{mode:0o755})
+ for(const name of ["gh","codex"]) await fs.writeFile(path.join(tools,name),fake,{mode:0o755})
+ // This fixture observation has no Git/PR dependency; keep its startup cost
+ // comparable to the native observer used by admission.
+ await fs.writeFile(path.join(tools,"ps"),'#!/bin/sh\nprintf "%s %s fixture-observer\\n" "$$" "$PPID"\n',{mode:0o755})
  env.PATH=tools+path.delimiter+env.PATH
  const state={ remote,checkout,number:7,title:"Fixture PR",state:"OPEN",baseRefName:"main",isCrossRepository:false,headRefName:"topic",headRefOid:head,mergeStateStatus:"CLEAN",mergeable:"MERGEABLE",isDraft:false,author:{login:"builder"},comments:[],statusCheckRollup:[{status:"COMPLETED",conclusion:"SUCCESS"}],calls:[],ghCalls:[],...overrides }
  await fs.writeFile(env.FAKE_PR,JSON.stringify(state))
@@ -727,6 +729,23 @@ test('browser concurrency 1/2 uses the same immutable fixture and bounded child 
   measurements.push({workers,tests:4,failures:0,peak,durationMs:Date.now()-start})
  }
  t.diagnostic(JSON.stringify(measurements))
+})
+
+test('browser wrapper does not forward private test diagnostics',async t=>{
+ const f=await fixture(t),file=path.join(f.checkout,'private-browser.test.mjs'),canary='CANARY_PRIVATE_BROWSER_CLIENT_SECRET'
+ await fs.writeFile(file,`import test from 'node:test';test(${JSON.stringify(canary)},()=>{console.error(${JSON.stringify(canary)});throw Error(${JSON.stringify(canary)})})`)
+ const result=await f.wrapper('test-browser',repo,file)
+ assert.notEqual(result.code,0)
+ assert.equal((result.stdout+result.stderr).includes(canary),false)
+ const locks=path.join(f.stateDir,'locks')
+ for(const name of await fs.readdir(locks)) assert.deepEqual(await fs.readdir(path.join(locks,name)),[])
+})
+
+test('browser wrapper refuses zero acknowledged results even when Node exits zero',async t=>{
+ const f=await fixture(t),file=path.join(f.checkout,'skipped-browser.test.mjs')
+ await fs.writeFile(file,"import test from 'node:test';test.skip('synthetic skipped case',()=>{})")
+ const result=await f.wrapper('test-browser',repo,file)
+ assert.equal(result.code,1);assert.doesNotMatch(result.stdout,/pass /)
 })
 
 test('subprocess error canaries do not reach persisted delivery/wait bytes',async t=>{

@@ -4,6 +4,24 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { acquireLease, withLease } from "../src/pr-delivery-state.mjs"
+import { createPrDeliveryAdapter } from "../src/pr-delivery.mjs"
+
+test('PR ownership admission shares the total attempt deadline',async t=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-pr-admission-'));t.after(()=>fs.rm(root,{recursive:true,force:true}))
+ const dir=path.join(root,'locks','pr-fixture%2Frepo-1.claims');await fs.mkdir(dir,{recursive:true})
+ await fs.writeFile(path.join(dir,'choosing.json'),JSON.stringify({pid:process.pid,token:'choosing',ticket:0}))
+ const adapter=createPrDeliveryAdapter({stateDir:root,repos:{'fixture/repo':{}},attemptTimeoutMs:100})
+ await assert.rejects(adapter.exclusive('fixture/repo',1,()=>assert.fail('expired admission entered its callback')),{code:142})
+ assert.deepEqual(await fs.readdir(dir),['choosing.json'])
+})
+
+test('legacy lease election remains bounded if the wall clock stops',{timeout:2000},async t=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-lease-wall-'));t.after(()=>fs.rm(root,{recursive:true,force:true}))
+ const dir=path.join(root,'slot.claims');await fs.mkdir(dir)
+ await fs.writeFile(path.join(dir,'choosing.json'),JSON.stringify({pid:process.pid,token:'choosing',ticket:0}))
+ t.mock.method(Date,'now',()=>0)
+ await assert.rejects(withLease(root,'slot',()=>assert.fail('choosing peer still owns its claim')),{code:75})
+})
 
 test('lease recovery does not kill a live job when only its wall deadline moved',async t=>{
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-lease-clock-'));t.after(()=>fs.rm(root,{recursive:true,force:true}))

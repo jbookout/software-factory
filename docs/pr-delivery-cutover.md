@@ -193,8 +193,10 @@ shared `factory-entry.sh` through the existing drained cutover above. No live
 wrapper was edited by this source change. The new `test-browser.sh` invokes
 `bin/browser-suite.mjs` for an independently scheduled browser suite:
 `test-browser.sh owner/repository <explicit-test-files...>`. It reserves its
-worker count and invokes Node with explicit test file concurrency. The private
-`FACTORY_BROWSER_CONCURRENCY` override may lower that count, but cannot exceed
+worker count and invokes Node with explicit test file concurrency. The wrapper
+reports result counts and exit status; test names, console output and
+error payloads never enter the wrapper's output. Zero acknowledged results fail.
+The private `FACTORY_BROWSER_CONCURRENCY` override may lower that count, but cannot exceed
 the configured reservation. A guard already reserves its own test children;
 its tests should use that exported concurrency in their Node invocation,
 rather than nest another standalone reservation. Existing ungoverned test
