@@ -122,10 +122,10 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     await fs.mkdir(config.stateDir, { recursive: true, mode: 0o700 })
     await fs.appendFile(path.join(config.stateDir, "delivery.jsonl"), JSON.stringify({ at: new Date().toISOString(), ...event }) + "\n", { mode: 0o600 })
   }
-  async function waitChecks(repo, pr, head, completedOnly = false) {
+  async function waitChecks(repo, pr, head, completedOnly = false, inspect = view) {
     const until = Date.now() + config.checksTimeoutMs
     while (true) {
-      const current = await view(repo, pr)
+      const current = await inspect(repo, pr)
       requireOpen(current)
       if (current.headRefOid !== head) throw new DeliveryError("HEAD MOVED during checks; needs fresh review", 1)
       const outcome = checksOutcome(current.statusCheckRollup)
@@ -303,53 +303,99 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       throw new DeliveryError("MERGE SOURCE VERIFY: delivered tree does not match PR", 7)
     return { message: `${repo}#${pr} MERGED ${commit} (on main, source verified)`, mergeCommit: commit, merged: true }
   }
+  // Integration reads use REST and complete pagination. Never inherit a verdict
+  // from the pre-integration tree, even for disjoint filenames.
+  async function integrationView(repo, pr) {
+    const api = async (...args) => {
+      const result = await command(["gh", "api", ...args], getRepo(repo).checkout)
+      try { return JSON.parse(result.stdout) }
+      catch { throw new DeliveryError("invalid integration REST JSON", 1, true) }
+    }
+    const p = await api(`repos/${repo}/pulls/${pr}`)
+    if (!["open", "closed"].includes(p.state) || !SHA.test(p.head?.sha ?? ""))
+      throw new DeliveryError("invalid integration PR response", 1, true)
+    supportedBase({baseRefName: p.base?.ref})
+    const pages = async endpoint => {
+      const result = await api("--paginate", "--slurp", endpoint)
+      if (!Array.isArray(result)) throw new DeliveryError("invalid integration pages", 1, true)
+      return result
+    }
+    const checks = (await pages(`repos/${repo}/commits/${p.head.sha}/check-runs?per_page=100`))
+      .flatMap(page => {
+        if (!Array.isArray(page.check_runs)) throw new DeliveryError("invalid integration checks", 1, true)
+        return page.check_runs
+      }).map(c => ({status: c.status?.toUpperCase(), conclusion: c.conclusion?.toUpperCase()}))
+    const statuses = (await pages(`repos/${repo}/commits/${p.head.sha}/statuses?per_page=100`)).flat()
+    // Statuses are newest first; old failures must not overwrite a newer state.
+    const contexts = new Set()
+    for (const c of statuses) if (!contexts.has(c.context)) {
+      contexts.add(c.context); checks.push({state: c.state?.toUpperCase()})
+    }
+    const comments = (await pages(`repos/${repo}/issues/${pr}/comments?per_page=100`)).flat()
+    const current = {state: p.merged ? "MERGED" : p.state.toUpperCase(), headRefOid: p.head.sha,
+      baseRefName: p.base?.ref, mergeStateStatus: p.mergeable_state?.toUpperCase(),
+      mergeable: p.mergeable === false ? "CONFLICTING" : "MERGEABLE", isDraft: p.draft,
+      mergeCommit: {oid: p.merge_commit_sha}, statusCheckRollup: checks, comments}
+    supportedBase(current)
+    return current
+  }
   async function mergeOne(repo, pr, old, note = "", retry = false) {
     const local = getRepo(repo)
     if (!SHA.test(old)) throw new DeliveryError("approved SHA must be a full commit SHA")
-    let current = await view(repo, pr)
+    let current = await integrationView(repo, pr)
     if (current.state === "MERGED") return verifyDelivery(repo, pr, current, old)
     if (current.state !== "OPEN") throw new DeliveryError(`${repo}#${pr} NOT OPEN (${current.state})`, 8)
+    if (current.isDraft) throw new DeliveryError("DRAFT: integration requires a published candidate", 8)
     await git(local.checkout, "fetch", "-q", "origin", "main", current.headRefOid, old)
     if (current.mergeStateStatus === "DIRTY" || current.mergeable === "CONFLICTING")
       throw new DeliveryError("CONFLICT with main; needs a builder merge + fresh review", 5)
     const ancestor = await command(["git", "merge-base", "--is-ancestor", "origin/main", current.headRefOid], local.checkout, { allowFailure: true })
     if (ancestor.code) {
-      await gh(repo, pr, "update-branch")
-      current = await view(repo, pr)
-      await git(local.checkout, "fetch", "-q", "origin", current.headRefOid)
+      const update = await command(["gh", "api", "-X", "PUT", `repos/${repo}/pulls/${pr}/update-branch`,
+        "-f", `expected_head_sha=${current.headRefOid}`], local.checkout, {allowFailure: true})
+      if (update.code) throw new DeliveryError("UPDATE-BRANCH FAILED; needs a builder integration + fresh review", 5)
+      throw new DeliveryError("INTEGRATION UPDATED; needs fresh review and CI of the integrated tree", 2)
     }
     const head = current.headRefOid
-    await verifyApprovedHead(local, head, old)
-    await waitChecks(repo, pr, head)
-    current = await view(repo, pr)
+    if (head !== old) throw new DeliveryError("HEAD CHANGED after integration; needs fresh review", 2)
+    const base = await git(local.checkout, "rev-parse", "origin/main")
+    await waitChecks(repo, pr, head, false, integrationView)
+    current = await integrationView(repo, pr)
     if (current.headRefOid !== head) throw new DeliveryError("HEAD MOVED during checks; needs fresh review")
     requireOpen(current)
+    await git(local.checkout, "fetch", "-q", "origin", "main")
+    if (await git(local.checkout, "rev-parse", "origin/main") !== base)
+      throw new DeliveryError("INTEGRATION BASE MOVED; needs fresh integration, review and CI", 2)
     const approval = await latestReview(repo, pr, current)
     if (checksOutcome(current.statusCheckRollup) !== "accepted") throw new DeliveryError(`NONGREEN on ${head}`, 3)
     if (!approval || approval.verdict !== "APPROVE" || approval.sha !== old)
       throw new DeliveryError(`NO INDEPENDENT APPROVE for ${old}`, 4)
-    await gh(repo, pr, "comment", "--body", `DELIVERY VERIFIED\nSource-SHA: ${head}\n\nOrchestrator merge queue: exact head verified, independent approval of ${old}, all hosted checks green. ${head !== old ? "Deterministic re-approval: every intervening commit is an automatic main merge with matching tree." : ""} ${note}`)
-    if (current.isDraft) await gh(repo, pr, "ready")
-    const result = await command(["gh", "pr", "merge", String(pr), "-R", repo, "--squash", "--match-head-commit", head], local.checkout, { allowFailure: true })
+    await command(["gh", "api", `repos/${repo}/issues/${pr}/comments`, "-f", `body=DELIVERY VERIFIED\nSource-SHA: ${head}\nIntegration-Base: ${base}\n\nExact integrated head, independent review and hosted checks verified. ${note}`], local.checkout)
+    const result = await command(["gh", "api", "-X", "PUT", `repos/${repo}/pulls/${pr}/merge`, "-f", "merge_method=squash", "-f", `sha=${head}`], local.checkout, { allowFailure: true })
     if (result.code) {
       if (!retry && result.stderr.includes("not up to date")) return mergeOne(repo, pr, old, note, true)
       throw new DeliveryError("MERGE REFUSED" + (/GraphQL|rate limit|timed out|502/i.test(result.stderr) || result.timedOut ? ": transient service error" : ""), 6,
         /GraphQL|rate limit|timed out|502/i.test(result.stderr) || result.timedOut)
     }
+    let acknowledgement
+    try { acknowledgement = JSON.parse(result.stdout) } catch { /* fail closed below */ }
+    if (acknowledgement?.merged !== true || !SHA.test(acknowledgement.sha ?? ""))
+      throw new DeliveryError("MERGE acknowledgement missing; reconcile before retry", 7)
     let lastError
     for (let attempt = 0; attempt < 6; attempt++) {
-      try { return await verifyDelivery(repo, pr, await view(repo, pr), head) }
+      try { return await verifyDelivery(repo, pr, await integrationView(repo, pr), head) }
       catch (error) { if (!error.transient) throw error; lastError = error }
       await pause(config.pollMs)
     }
     throw lastError
   }
-  async function consumeQueue() {
-    const entry = await queueState(queue => queue.find(e => !e.outcome && e.availableAt <= Date.now()))
+  async function consumeQueue(repo) {
+    const entry = await queueState(queue => queue.find(e => e.repo === repo && !e.outcome && e.availableAt <= Date.now()))
     if (!entry) return { message: "QUEUE IDLE", idle: true }
     let outcome
-    try { outcome = pass(await mergeOne(entry.repo, entry.pr, entry.head, entry.note)) }
+    try { outcome = pass(await withLease(locks, `pr-${keyFor(entry.repo, entry.pr)}`, () => mergeOne(entry.repo, entry.pr, entry.head, entry.note))) }
     catch (e) { outcome = fail(e) }
+    if (outcome.data.code === 75) throw new DeliveryError("BUSY: integration PR writer already owned", 75)
     await queueState(queue => {
       const index = queue.findIndex(e => e.id === entry.id), stored = queue[index]
       stored.attempts++
@@ -464,8 +510,18 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
           case "enqueue": data = await enqueue(repo, pr, head, note); break
           case "auto-enqueue": data = await autoEnqueue(); break
           case "import-legacy": data = await importLegacy(request.root); break
-          case "merge-one-core": data = await withLease(locks, "merge-owner", () => mergeOne(repo, pr, head, note)); break
-          case "merge-queue": data = await withLease(locks, "merge-owner", consumeQueue); break
+          case "merge-one-core": data = await withLease(locks, `merge-${encodeURIComponent(repo)}`, () => withLease(locks, `pr-${keyFor(repo, pr)}`, () => mergeOne(repo, pr, head, note))); break
+          case "merge-queue": {
+            const repos = repo ? [repo] : Object.keys(config.repos)
+            let busy = false
+            for (const target of repos) {
+              try { data = await withLease(locks, `merge-${encodeURIComponent(target)}`, () => consumeQueue(target)) }
+              catch (e) { if (e.code !== 75) throw e; busy = true; continue }
+              if (!data.idle) break
+            }
+            if (!data || (data.idle && busy)) throw new DeliveryError("BUSY: integration lane already owned", 75)
+            break
+          }
           default: throw new DeliveryError(`unknown delivery step: ${step}`)
         }
         return pass(data)

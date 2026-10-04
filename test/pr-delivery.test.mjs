@@ -10,7 +10,7 @@ const cli = fileURLToPath(new URL("../bin/pr-delivery.mjs", import.meta.url))
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
 const fake = `#!/usr/bin/env node
 const fs = require('node:fs'), cp = require('node:child_process');
-const args = process.argv.slice(2), file = process.env.FAKE_PR;
+let args = process.argv.slice(2); const file = process.env.FAKE_PR;
 const s = JSON.parse(fs.readFileSync(file));
 const save = () => fs.writeFileSync(file, JSON.stringify(s));
 const git = (...a) => cp.execFileSync('git', a, {encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
@@ -30,7 +30,26 @@ if(tool === 'codex') {
  }
  });
 } else {
- s.ghCalls.push(args); save(); const action=args[1];
+ s.ghCalls.push(args); save();
+ if(args[0]==='api') {
+  if(s.apiFailure) { console.error('REST rate limit'); process.exit(1); }
+  const endpoint=args.find(a=>a.startsWith('repos/'));
+  const value=k=>args.find(a=>a.startsWith(k+'='))?.slice(k.length+1);
+  if(endpoint.includes('/check-runs')) {console.log(JSON.stringify([{check_runs:s.statusCheckRollup.filter(c=>c.status).map(c=>({status:c.status.toLowerCase(),conclusion:c.conclusion?.toLowerCase()}))}]));process.exit(0);}
+  if(endpoint.includes('/statuses')) {console.log(JSON.stringify([s.statusCheckRollup.filter(c=>c.state).map(c=>({context:'fixture',state:c.state.toLowerCase()}))]));process.exit(0);}
+  if(endpoint.includes('/comments') && args.includes('--paginate')) {console.log(JSON.stringify([s.comments]));process.exit(0);}
+  if(endpoint.endsWith('/comments')) args=['pr','comment','--body',value('body')];
+  else if(endpoint.endsWith('/update-branch')) args=['pr','update-branch'];
+  else if(endpoint.endsWith('/merge')) args=['pr','merge','--squash','--match-head-commit',value('sha'),'REST'];
+  else if(args.includes('draft=false')) args=['pr','ready'];
+  else {
+ if(s.moveDuringChecks && ++s.moveViewCount>1) {
+ git('-C',s.checkout,'checkout','-q','topic');fs.writeFileSync(s.checkout+'/moved.txt','moved');git('-C',s.checkout,'add','moved.txt');git('-C',s.checkout,'commit','-qm','Move head');git('-C',s.checkout,'push','-q','origin','topic');
+ s.headRefOid=git('--git-dir',s.remote,'rev-parse','refs/heads/topic');s.moveDuringChecks=false; }
+ if(s.restMalformed){console.log('private-canary-123 invalid REST');process.exit(0);}
+ save();console.log(JSON.stringify({state:s.state==='OPEN'?'open':'closed',merged:s.state==='MERGED',head:{sha:s.headRefOid},base:{ref:s.baseRefName},mergeable_state:s.mergeStateStatus.toLowerCase(),mergeable:s.mergeable!=='CONFLICTING',draft:s.isDraft,merge_commit_sha:s.mergeCommit?.oid}));process.exit(0); }
+ }
+ const action=args[1];
  if(action==='view') {
  if(s.apiFailure) {console.error('GraphQL rate limit');process.exit(1);}
  if(s.moveDuringChecks && ++s.moveViewCount>1) {
@@ -52,11 +71,11 @@ if(tool === 'codex') {
  } else if(action==='comment') {s.comments.push({body:args[args.indexOf('--body')+1],author:{login:'reviewer'}}); save();}
  else if(action==='ready') {s.isDraft=false;save();}
  else if(action==='update-branch') {
- git('-C',s.checkout,'checkout','-q','topic'); git('-C',s.checkout,'fetch','-q','origin'); git('-C',s.checkout,'merge','--no-edit','origin/main'); git('-C',s.checkout,'push','-q','origin','topic');
+ git('-C',s.checkout,'checkout','-q','topic'); git('-C',s.checkout,'fetch','-q','origin'); git('-C',s.checkout,'merge','--no-edit','origin/main'); git('-C',s.checkout,'push','-q','origin','topic');s.headRefOid=git('--git-dir',s.remote,'rev-parse','refs/heads/topic');save();
  } else if(action==='merge') {
  if(!args.includes('--squash') || args.includes('--auto') || args[args.indexOf('--match-head-commit')+1]!==s.headRefOid) process.exit(2);
  git('-C',s.checkout,'fetch','-q','origin'); git('-C',s.checkout,'checkout','-q','main'); git('-C',s.checkout,'merge','--squash','origin/topic'); git('-C',s.checkout,'commit','-qm','Merge PR'); git('-C',s.checkout,'push','-q','origin','main');
- s.state='MERGED';s.mergeCommit={oid:git('-C',s.checkout,'rev-parse','HEAD')};save();
+ s.state='MERGED';s.mergeCommit={oid:git('-C',s.checkout,'rev-parse','HEAD')};save();if(args.includes('REST') && !s.missingAck) console.log(JSON.stringify({merged:true,sha:s.mergeCommit.oid}));
  } else {console.error('Unexpected gh action '+args.join(' '));process.exit(2);}
 }
 `
@@ -108,7 +127,7 @@ test("approve -> enqueue -> serial squash merge verifies main",async t=>{
  assert.ok(s.calls[0].args.includes("fixture-model"))
  ok(await f.run("auto-enqueue","--once"));ok(await f.run("merge-queue","--once"))
  const merged=await f.read();assert.equal(merged.state,"MERGED");assert.equal(f.g("rev-parse","origin/main"),merged.mergeCommit.oid)
- assert.ok(merged.ghCalls.some(a=>a[1]==="merge"&&a.includes("--match-head-commit")&&!a.includes("--auto")))
+ assert.ok(merged.ghCalls.some(a=>a[0]==="api" && a.some(v=>v.endsWith("/merge")) && a.includes("sha="+f.head) && a.includes("merge_method=squash")))
 })
 test("blocked review -> fix -> re-review uses confirmation scope",async t=>{
  const f=await fixture(t,{blockOnce:true});ok(await f.run("pr-loop",repo,"7","-","3"));const s=await f.read()
@@ -142,7 +161,7 @@ for(const action of ["merge-one-core","review-pr","fix-pr"]) test(`unsupported P
  const r=await f.run(action,repo,"7",f.head)
  assert.notEqual(r.code,0);assert.match(r.stderr,/base|target/i)
  const s=await f.read();assert.equal(s.state,"OPEN");assert.equal(s.calls.length,0)
- assert.ok(s.ghCalls.every(a=>a[1]==="view"),"no update, comment or merge")
+ assert.ok(s.ghCalls.every(a=>a[1]==="view" || (a[0]==="api" && !a.includes("-X") && !a.includes("-f"))),"no update, comment or merge")
 })
 for(const action of ["pr-loop","review-pr","fix-pr","ci-fix"]) test(`closed PR stops ${action} before work or success claims`,async t=>{
  const f=await fixture(t,{state:"CLOSED"});await f.approve(`APPROVE\nReviewed-SHA: ${f.head}`)
@@ -190,7 +209,7 @@ test("already merged state must prove its commit exists on main and delivers the
  const f=await fixture(t,{state:"MERGED",mergeCommit:{oid:"a".repeat(40)}})
  const r=await f.run("merge-one-core",repo,"7",f.head)
  assert.notEqual(r.code,0);assert.match(r.stderr,/MERGE.*(MAIN|SOURCE|VERIFY)/)
- assert.equal((await f.read()).ghCalls.filter(a=>a[1]==="merge").length,0)
+ assert.equal((await f.read()).ghCalls.filter(a=>a.some(v=>v.endsWith("/merge"))).length,0)
 })
 test("per-PR budget stop survives invocations and loop stops",async t=>{
  const f=await fixture(t,{blockOnce:true},{limits:{runsPer24h:1,slots:1,timeoutMs:5000}})
@@ -228,7 +247,7 @@ test("unknown repo rejected with a clear configuration message",async t=>{
 })
 test("stale approval on moved head requires re-review and cannot merge",async t=>{
  const f=await fixture(t);await f.approve();f.g("checkout","topic");await fs.writeFile(path.join(f.checkout,"extra.txt"),"extra");f.g("add","extra.txt");f.g("commit","-qm","Extra");f.g("push","-q","origin","topic");f.g("checkout","main")
- const r=await f.run("merge-one-core",repo,"7",f.head);assert.equal(r.code,1);assert.match(r.stderr,/fresh review/)
+ const r=await f.run("merge-one-core",repo,"7",f.head);assert.equal(r.code,2);assert.match(r.stderr,/fresh review/)
  ok(await f.run("pr-loop",repo,"7","-","2"));assert.equal((await f.read()).calls.length,1)
 })
 test("a blocked comment quoting Reviewed-SHA is not independent approval",async t=>{
@@ -241,7 +260,7 @@ test("a builder formatted approval has no reviewer execution and cannot merge",a
  await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
  const r=await f.run("merge-one-core",repo,"7",f.head)
  assert.equal(r.code,4);assert.equal((await f.read()).state,"OPEN")
- assert.equal((await f.read()).ghCalls.filter(a=>a[1]==="merge").length,0)
+ assert.equal((await f.read()).ghCalls.filter(a=>a.some(v=>v.endsWith("/merge"))).length,0)
 })
 test("independence comes from fresh execution even with a shared GitHub account",async t=>{
  const f=await fixture(t);await f.approve()
@@ -261,9 +280,9 @@ for(const artifact of ["prompt","output","receipt"]) test(`changed reviewer ${ar
 test("head moving during checks cannot merge",async t=>{
  const f=await fixture(t,{moveDuringChecks:true});await f.approve();const r=await f.run("merge-one-core",repo,"7",f.head);assert.equal(r.code,1);assert.equal((await f.read()).state,"OPEN")
 })
-test("automatic main merge preserves approval only after tree proof",async t=>{
+test("automatic main merge invalidates the pre-integration review",async t=>{
  const f=await fixture(t);await f.approve();await fs.writeFile(path.join(f.checkout,"main-change.txt"),"main");f.g("add","main-change.txt");f.g("commit","-qm","Main advances");f.g("push","-q","origin","main")
- ok(await f.run("merge-one-core",repo,"7",f.head));assert.equal((await f.read()).state,"MERGED")
+ const r=await f.run("merge-one-core",repo,"7",f.head);assert.equal(r.code,2);assert.equal((await f.read()).state,"OPEN")
 })
 
 test("concurrent guard invocations cannot overspend a per-PR budget",async t=>{
@@ -333,7 +352,7 @@ test("a valid already merged PR is verified again without another merge",async t
  const first=await f.read()
  ok(await f.run("merge-one-core",repo,"7",f.head))
  const r=await f.run("pr-loop",repo,"7","-","1");ok(r);assert.match(r.stdout,/source verified/)
- const after=await f.read();assert.equal(after.ghCalls.filter(a=>a[1]==="merge").length,1)
+ const after=await f.read();assert.equal(after.ghCalls.filter(a=>a.some(v=>v.endsWith("/merge"))).length,1)
  assert.equal(after.calls.length,0);assert.equal(after.mergeCommit.oid,first.mergeCommit.oid)
 })
 test("red hosted checks refuse merge without a queue approval comment",async t=>{
@@ -355,7 +374,7 @@ test("auto enqueue reaches approved PRs beyond the first fifty results",async t=
 test("concurrent merge workers use a single serial owner",async t=>{
  const f=await fixture(t);await f.approve();ok(await f.run("merge-enqueue",repo,"7",f.head))
  const results=await Promise.all([f.run("merge-queue","--once"),f.run("merge-queue","--once")])
- assert.ok(results.some(r=>r.code===0));assert.ok(results.every(r=>[0,75].includes(r.code)),JSON.stringify(results));assert.equal((await f.read()).ghCalls.filter(a=>a[1]==="merge").length,1)
+ assert.ok(results.some(r=>r.code===0));assert.ok(results.every(r=>[0,75].includes(r.code)),JSON.stringify(results));assert.equal((await f.read()).ghCalls.filter(a=>a.some(v=>v.endsWith("/merge"))).length,1)
 })
 test("duplicate PR loops allow only one fixer/reviewer",async t=>{
  const f=await fixture(t,{noProgress:true});await f.approve("REVIEW: BLOCKED\nReviewed-SHA: "+f.head+"\n1. defect")
@@ -364,7 +383,7 @@ test("duplicate PR loops allow only one fixer/reviewer",async t=>{
 test("manual merge edits invalidate deterministic re-approval",async t=>{
  const f=await fixture(t);await f.approve();await fs.writeFile(path.join(f.checkout,"main-change.txt"),"main");f.g("add","main-change.txt");f.g("commit","-qm","Main advances");f.g("push","-q","origin","main")
  f.g("checkout","topic");f.g("merge","--no-commit","origin/main");await fs.writeFile(path.join(f.checkout,"extra.txt"),"hand edit");f.g("add","extra.txt");f.g("commit","-qm","Merge with edits");f.g("push","-q","origin","topic");f.g("checkout","main")
- const r=await f.run("merge-one-core",repo,"7",f.head);assert.equal(r.code,2);assert.match(r.stderr,/HAND EDITS/);assert.equal((await f.read()).state,"OPEN")
+ const r=await f.run("merge-one-core",repo,"7",f.head);assert.equal(r.code,2);assert.match(r.stderr,/needs fresh review/);assert.equal((await f.read()).state,"OPEN")
 })
 
 test("read-only legacy import preserves pending FIFO entries and recent usage",async t=>{
@@ -391,4 +410,84 @@ for(const missing of ["root","merge-queue.txt","merge-queue.done","budget"]) tes
 })
 test("API errors on approved PR stop without spending a CI-fix run",async t=>{
  const f=await fixture(t,{apiFailure:true});await f.approve();const r=await f.run("pr-loop",repo,"7");assert.notEqual(r.code,0);assert.equal((await f.read()).calls.length,0)
+})
+
+test("different-file interaction is integrated before fresh exact-tree review", async t => {
+ const f=await fixture(t); await f.approve()
+ await fs.writeFile(path.join(f.checkout,"producer-contract.txt"),"changed contract\n")
+ f.g("add","producer-contract.txt"); f.g("commit","-qm","Producer contract advances"); f.g("push","-q","origin","main")
+ const r=await f.run("merge-one-core",repo,"7",f.head)
+ assert.equal(r.code,2,JSON.stringify(r)); assert.match(r.stderr,/needs fresh review/)
+ const s=await f.read(); assert.equal(s.state,"OPEN"); assert.notEqual(s.headRefOid,f.head)
+ assert.ok(!s.ghCalls.some(a=>a[1]==="merge"))
+ await f.approve(); const integrated=(await f.read()).headRefOid
+ ok(await f.run("merge-one-core",repo,"7",integrated)); assert.equal((await f.read()).state,"MERGED")
+})
+
+test("queue mutation respects the same PR writer lease as a fixer", async t => {
+ const f=await fixture(t); await f.approve(); ok(await f.run("merge-enqueue",repo,"7",f.head))
+ const {acquireLease,keyFor}=await import("../src/pr-delivery-state.mjs")
+ const release=await acquireLease(path.join(f.stateDir,"locks"),`pr-${keyFor(repo,7)}`)
+ assert.ok(release)
+ try {
+  const r=await f.run("merge-queue",repo,"--once"); assert.equal(r.code,75,JSON.stringify(r))
+  assert.equal((await f.read()).state,"OPEN")
+  const q=JSON.parse(await fs.readFile(path.join(f.stateDir,"queue.json"))); assert.equal(q[0].attempts,0)
+ } finally { await release() }
+ ok(await f.run("merge-queue",repo,"--once")); assert.equal((await f.read()).state,"MERGED")
+})
+
+test("a held CARR-style integration lane does not starve another repo", async t => {
+ const a=await fixture(t), b=await fixture(t), second='fixture/independent'
+ b.cfg.repos={[second]:b.cfg.repos[repo]}; b.cfg.stateDir=a.stateDir
+ await fs.writeFile(b.config,JSON.stringify(b.cfg))
+ await a.approve(); ok(await b.run('review-pr',second,'7'))
+ ok(await a.run('merge-enqueue',repo,'7',a.head)); ok(await b.run('merge-enqueue',second,'7',b.head))
+ const {acquireLease}=await import('../src/pr-delivery-state.mjs')
+ const release=await acquireLease(path.join(a.stateDir,'locks'),`merge-${encodeURIComponent(repo)}`)
+ assert.ok(release)
+ try {
+  assert.equal((await a.run('merge-queue',repo,'--once')).code,75)
+  ok(await b.run('merge-queue',second,'--once')); assert.equal((await b.read()).state,'MERGED')
+  assert.equal((await a.read()).state,'OPEN')
+ } finally { await release() }
+ ok(await a.run('merge-queue',repo,'--once')); assert.equal((await a.read()).state,'MERGED')
+})
+
+test("a real overlapping-file update conflict refuses before final evidence", async t => {
+ const f=await fixture(t);await f.approve()
+ await fs.writeFile(path.join(f.checkout,'feature.txt'),'conflicting main contract\n')
+ f.g('add','feature.txt');f.g('commit','-qm','Conflicting producer');f.g('push','-q','origin','main')
+ const r=await f.run('merge-one-core',repo,'7',f.head)
+ assert.equal(r.code,5);assert.match(r.stderr,/UPDATE-BRANCH FAILED/)
+ assert.equal((await f.read()).state,'OPEN')
+ assert.ok(!(await f.read()).ghCalls.some(a=>a.some(v=>v.endsWith('/merge'))))
+})
+
+
+test("empty merge acknowledgement is reconciled without repeating the effect",async t=>{
+ const f=await fixture(t,{missingAck:true});await f.approve()
+ const first=await f.run('merge-one-core',repo,'7',f.head)
+ assert.equal(first.code,7);assert.match(first.stderr,/acknowledgement missing/)
+ assert.equal((await f.read()).state,'MERGED')
+ ok(await f.run('merge-one-core',repo,'7',f.head))
+ assert.equal((await f.read()).ghCalls.filter(a=>a.some(v=>v.endsWith('/merge'))).length,1)
+})
+
+test("malformed integration read cannot persist provider canary bytes",async t=>{
+ const f=await fixture(t,{restMalformed:true})
+ const r=await f.run('merge-one-core',repo,'7',f.head)
+ assert.equal(r.code,1);assert.match(r.stderr,/invalid integration REST JSON/)
+ assert.ok(!JSON.stringify(r).includes('private-canary-123'))
+ assert.ok(!(await fs.readFile(path.join(f.stateDir,'delivery.jsonl'),'utf8')).includes('private-canary-123'))
+ assert.equal((await f.read()).state,'OPEN')
+})
+
+
+test("a draft integration candidate stays refused without readiness mutation",async t=>{
+ const f=await fixture(t,{isDraft:true});await f.approve()
+ const r=await f.run('merge-one-core',repo,'7',f.head)
+ assert.equal(r.code,8);assert.match(r.stderr,/DRAFT/)
+ assert.ok((await f.read()).ghCalls.every(a=>!a.includes('-X') && !a.includes('-f')))
+ assert.equal((await f.read()).state,'OPEN')
 })
