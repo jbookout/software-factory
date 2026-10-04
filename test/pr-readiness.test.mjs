@@ -41,3 +41,10 @@ test("legacy commit status is exact-head bound and required inventory cannot be 
   assert.equal(result.state, "success")
   assert.equal(classifyChecks(input({ requiredChecks: [] })).state, "provider-unknown")
 })
+for (const [status, conclusion] of [["success", null], ["failure", null], ["completed", null],
+  ["completed", "pending"], ["completed", "error"], ["in_progress", "success"], ["queued", "failure"]])
+  test(`malformed CheckRun ${status}/${conclusion} is provider-unknown`, () => {
+    const result = classifyChecks(input({ checkRuns: [run(C, conclusion, { status })] }))
+    assert.equal(result.state, "provider-unknown")
+    assert.equal(result.repairable, undefined)
+  })

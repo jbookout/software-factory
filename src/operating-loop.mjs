@@ -376,12 +376,6 @@ export async function runPrDelivery(job, adapter) {
     if (inspect.data.approved || inspect.data.blocked) {
       const repair = await execute(inspect.data.approved ? "ci-fix" : "fix")
       if (repair.status !== "pass") return stopped(repair)
-      if (repair.data.head === inspect.data.head) {
-        const stop = { cause: "source-no-progress", code: 2, message: "NO-PROGRESS: fix pushed nothing", resetAt: null }
-        const saved = await adapter.execute("pr:suspend", { ...request, head: inspect.data.head, stop })
-        if (saved.status !== "pass") return stopped(saved)
-        return { ...stop, events }
-      }
     }
     const review = await execute("review")
     if (review.status !== "pass") return stopped(review)

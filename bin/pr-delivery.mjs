@@ -17,14 +17,18 @@ try {
     const data = result.data ?? result
     if (result.status === "fail") process.stderr.write(`${data.message}\n`)
     process.stdout.write(`${data.message ?? data.worktree ?? JSON.stringify(data)}\n`)
-    process.exitCode = data.code ?? (result.status === "fail" ? 1 : 0)
+    const code = data.code ?? (result.status === "fail" ? 1 : 0)
+    if (code && !process.exitCode) process.exitCode = code
   }
   if (action === "pr-loop") report(await adapter.exclusive(repo, pr, loop))
   else if (action === "recover") {
     do {
       for (const candidate of await adapter.recoveryCandidates()) {
         try { report(await adapter.exclusive(candidate.repo, candidate.pr, () => runPrDelivery(candidate, adapter))) }
-        catch (e) { if (e.code !== 75) throw e }
+        catch (e) {
+          if (e.code !== 75) throw e
+          report({ status: "fail", data: { code: e.code, message: e.message } })
+        }
       }
       if (once) break
       process.exitCode = 0
@@ -55,5 +59,5 @@ try {
   else throw new Error(`unknown delivery action: ${action}`)
 } catch (error) {
   process.stderr.write(`${error.message}\n`)
-  process.exitCode = Number.isInteger(error.code) ? error.code : 1
+  if (!process.exitCode) process.exitCode = Number.isInteger(error.code) ? error.code : 1
 }

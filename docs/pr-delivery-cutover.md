@@ -78,7 +78,9 @@ Automatic scanning can enqueue a recovered failed head again, preserving prior
 outcomes and linking attempts. `queueRunsPer24h` bounds automatic queue entries
 for a head in a rolling day; active and successful entries stay deduplicated.
 Scans paginate REST results until completeness is observed, with a visible stop
-at the repository bound instead of silent tail truncation. The canonical
+at the repository bound instead of silent tail truncation. REST pages contain
+at most 25 objects with a 16 MB capture allowance for long bodies and check
+output; the scan retains its 10,000-row bound. The canonical
 required-check policy and provider retry rules are described below. Closed PRs
 do no agent work; merged PRs must
 prove the squash commit, target ancestry, and delivered source tree again.
@@ -130,6 +132,11 @@ head or that pin. Budget waits reopen at their recorded rolling-window reset or
 when the current usage/config proves capacity reopened; reservation rechecks
 the budget atomically. A child exit 75 without known reset guidance waits for
 changed input. Slot ownership and child cleanup retain the factory supervisor.
+Slot-wait refusals retry atomic reservation on the next invocation, so released
+slots restore admission without changing source or consuming extra budget.
+Every repair entry point records unchanged-head no-progress through the repair
+operation itself. Recovery batches retain the first nonzero exit code even
+when a later candidate succeeds.
 Successful delivery-loop completion retires recovery eligibility while keeping
 the prior wait record. Closing a PR refuses work; reopening without changed
 eligibility retains its stop. Queue outcomes and original CI evidence survive.
@@ -141,8 +148,10 @@ contexts never authorize enqueue or merge. Optional skipped/neutral jobs remain
 accepted. Obsolete heads request observation of the current head and start no
 fixer. Current cancellation requests a check rerun; authenticated assertion
 failure remains repairable. All new provider reads use paginated REST checks,
-commit statuses, PRs and comments. Malformed/permission responses stop;
-transport timeout, quota-evidenced 403, 429 and temporary 5xx reads retry at most
+commit statuses, PRs and comments. Malformed/permission responses stop.
+CheckRun status and conclusion are validated separately: an unfinished run
+must have no conclusion, and only completed success can satisfy a required run.
+Transport timeout, quota-evidenced 403, 429 and temporary 5xx reads retry at most
 twice, respecting bounded provider delay. They never become CI-red.
 
 `usage.json` counts reservations, `delivery.jsonl` records dispatched child
