@@ -114,7 +114,8 @@ certify acceptance or grant production authority.
 
 [Entry playbooks](docs/design-manager/entry-playbooks.md) build on those contracts
 with one-question interview snapshots, explicit tier and workflow assurance,
-entry-specific artifact inputs, pending required work and visible scope expansion.
+entry-specific artifact inputs, lowest unsupported layer diagnosis, revision-bound
+dependency reassessment, pending required work and visible scope expansion.
 Initialization is pure bookkeeping; durable journals and execution remain later
 slices.
 

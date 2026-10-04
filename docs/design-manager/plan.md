@@ -3,10 +3,11 @@
 Joe-approved direction, 2026-10-01. TASK AE revised the plan after slice 1
 (PR 15) merged; TASK AI applied the stringsaeed stack post before slice 2.
 TASK AW applies Joe's 2026-10-02 design sources after slice 2 (PR 24) merged.
-TASK AW changed the plan only, including an explicit slice-2 follow-up.
+The slice-2 entry diagnosis follow-up is implemented at the pure interview
+interface and tested by `test/acceptance/design-layer-diagnosis.test.mjs` (AW-2).
 Slice 3 now has [settings and an offline-tested cloud qualification harness](settings-cloud.md).
-Its live account/background-runtime qualification remains incomplete. The other
-later slices and the follow-up remain planned; none is qualified by this text.
+Its live account/background-runtime qualification remains incomplete. Later
+slices remain planned; none is qualified by this text or pure replay.
 
 ## Purpose and ownership
 
@@ -178,9 +179,12 @@ invalidates dependent decisions, while retaining the prior decision and evidence
 If every applicable layer is supported, return to the entry's pending work rather
 than inventing another interview. A surface request with an unsupported domain
 decision routes to that domain question first, without silently expanding scope.
-This follow-up will add supplied layer-assessment types and replay tests at the
-existing pure interview interface; the merged slice-2 intake does not diagnose
-layers today. Its existing one-question, tier, scope and resume rules remain binding.
+The follow-up supplies layer-assessment types and replay tests at the existing
+pure interview interface; [entry-playbooks.md](entry-playbooks.md#layer-diagnosis)
+describes the supplied set, reassessment, dependency revisions and history.
+Its one-question, tier, scope and resume rules remain binding. This checks reported
+evidence/applicability only; live artifact authentication and independent judgment
+remain in later slices.
 
 ## Contracts first
 
@@ -810,7 +814,7 @@ and Claude Design. Slices 4, 9 and 10 retain their requested numbers.
 | Slice | Deliverable | Artifact read / compared against | Failure condition |
 | --- | --- | --- | --- |
 | 1. Contracts (merged; AE extensions only) | lifecycle, tiers, checklist catalogs, handoffs/gates/version schema; stations, platforms, proof receipt and pure mobile precondition | actual public contract module/declarations/schema and sample fixtures against original catalogs, station/gate tables, malformed cases and baseline npm tests | renamed/lost rubric or stop, schema/type drift, invalid jumps, missing platforms, skipped/stale proof passes, iOS missing capability does not fail with exact message, regression |
-| 2. Entry playbooks (merged; diagnosis follow-up planned) | existing entry paths and one-question grill; lowest unsupported layer diagnosis | initialized states/interview trace against required artifacts/tier criteria; layer assessments and dependency invalidation against AW-2 below | omitted critical work, batch interview, silent Lean default, hidden scope expansion, surface work conceals unsupported lower layer |
+| 2. Entry playbooks (merged; diagnosis follow-up implemented) | existing entry paths and one-question grill; lowest unsupported layer diagnosis | initialized states/interview trace against required artifacts/tier criteria; layer assessments and dependency invalidation against AW-2 below | omitted critical work, batch interview, silent Lean default, hidden scope expansion, surface work conceals unsupported lower layer |
 | 3. User settings and Codex cloud qualification | configurable station workers/modes; Joe profile; qualified background subscription runtime and dependent-seat routes | resolved settings, actual task IDs/model/effort/usage/resume/cancel/timeout results from a laptop-off sample task against source docs and eligible route baseline | hard-coded seat, API billing fallback, local execution called cloud, lost result, hidden blocked Claude/Dot route, unqualified entitlement or expiry recovery |
 | 4. Independent review, VERIFY and agentic UI qualification | maker/reviewer/tester independence, bounded repair/escalation; criterion evidence contract; product VERIFY/map; e2e explore/bug bash/MCP wrapper | frozen planted-defect/trap manifest, broken/clean app outputs (including unit-green broken user paths), criterion-to-e2e assertions on the exact build SHA/digest for web and triggered mobile, failing repros, independent reviewer context, archived proof after cleanup and second-run model-call count; AW-4 | user-facing criterion has only unit/component tests or dev-loop driver evidence, missing exact-build e2e behavioral evidence, author approves self, any check cannot detect its broken fixture, any defect missed, any trap flagged, non-bug accepted, no failing repro, build A approves B, lost evidence, model call during replay, third failed automatic repair, missing escalation |
 | 5. Factory Design Journal | SQLite records, reference evidence records, immutable artifacts, MCP-ready commands, project isolation and restore | actual written/read-back/restore records and digest-addressed bytes against decisions, idempotency/revision conflicts, scope and evidence labels on sample apps; AW-5 | provenance loss, evidence label promoted beyond observed scope, cross-project access, transcript dependence, conflicting authority, public/private material committed, incomplete restore |
@@ -825,7 +829,8 @@ and Claude Design. Slices 4, 9 and 10 retain their requested numbers.
 
 ### TASK AW acceptance scenarios per affected slice
 
-These are future slice acceptance tests, not tests executed by this plan PR. Use
+AW-2 is implemented in `test/acceptance/design-layer-diagnosis.test.mjs`; the other
+rows remain future slice acceptance tests. Use
 both unrelated synthetic sample projects and the existing mobile trigger when
 applicable. Each row requires its passing case and deliberately failing case;
 retain the actual artifact/observation, expected outcome and source binding.
