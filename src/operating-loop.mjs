@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { readFileSync } from "node:fs"
 import Ajv2020 from "ajv/dist/2020.js"
 
-import { acceptEvidence, buildIdentity } from "./evidence.mjs"
+import { acceptEvidence, buildIdentity, evidenceReadLimits } from "./evidence.mjs"
 import { evaluatePerformance } from "./performance-factory.mjs"
 import { classifyRisk, reviewsFor } from "./risk-router.mjs"
 import { verifyPinnedBuildContext } from "./model-room.mjs"
@@ -50,7 +50,8 @@ function assertJob(job) {
 }
 
 export function createFactory({ now = () => new Date().toISOString(), makeId = randomUUID,
-  modelRoomAdvisor = null, readArtifact = null } = {}) {
+  modelRoomAdvisor = null, readArtifact = null, evidenceLimits } = {}) {
+  const readLimits = evidenceReadLimits(evidenceLimits)
   return {
     async run(job, adapter) {
       assertJob(job)
@@ -59,6 +60,8 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
       if (job.criterion !== undefined && !validateCriterion(job.criterion)) {
         throw new Error(`invalid criterion: ${ajv.errorsText(validateCriterion.errors)}`)
       }
+      // The caller and adapters own their values; the run owns its snapshot.
+      job = structuredClone(job)
 
       const startedAt = now()
       const jobId = job.id ?? makeId()
@@ -70,19 +73,26 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
       let prepared = false
       let environmentId = null
       let candidate = null
+      let verificationRounds = 0
       const evidenceAcceptance = { before: null, after: null }
-      const criterion = job.criterion ?? null
+      const criterion = job.criterion ? Object.freeze(job.criterion) : null
       const needsEvidence = risk => job.kind === "bug" || risk.signals.includes("interface")
+      let risk = classifyRisk(job.risk)
+      let changedPaths = [...(job.risk?.changedPaths ?? [])]
+      let reviewRoles = reviewsFor(risk)
+      let modelRoom = null
+      let performance = evaluatePerformance({ baseline: job.performance?.baseline, current: {},
+        budgets: job.performance?.budgets, knownFingerprints: job.performance?.knownFingerprints })
 
       async function execute(step, input = {}) {
         let result
         try {
-          result = await adapter.execute(step, {
+          result = await adapter.execute(step, structuredClone({
             jobId,
             outcome: job.outcome,
             sourceRevision: job.sourceRevision,
             ...input
-          })
+          }))
         } catch (error) {
           result = {
             status: "fail",
@@ -102,181 +112,214 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
 
       // Phase evidence counts only when the factory reads the artifacts and accepts them.
       async function accept(phase, result, binding, priorDigests) {
-        const verdict = await acceptEvidence({ phase, criterionId: criterion.id, binding,
-          records: result.evidence, readArtifact, priorDigests })
+        let verdict
+        try {
+          verdict = await acceptEvidence({ phase, kind: job.kind, criterionId: criterion.id, binding,
+            records: result.evidence, readArtifact, priorDigests, limits: readLimits })
+        } catch (error) {
+          verdict = { result: "failed", reasons: ["unexpected evidence acceptance error"], artifacts: [] }
+          findings.push({ step: `evidence:${phase}`, reason: "evidence acceptance failed",
+            errorType: error.name, errorDigest: hash(error.message) })
+        }
         evidenceAcceptance[phase] = verdict
         return verdict.result === "passed" ? null : `evidence:${phase}:${verdict.result}`
       }
 
-      async function repairLoop(step, repairStep, limit) {
+      async function buildCandidate() {
+        const build = await execute("build", modelRoom ? { route: modelRoom.selected_route,
+          modelRoomStateDigest: modelRoom.state_digest,
+          ...(modelRoom.build_context ? { pinnedBuildContext: modelRoom.build_context } : {}) } : {})
+        // A repair invalidates the previous candidate until a new build binds it.
+        candidate = null
+        evidenceAcceptance.after = null
+        if (build.status !== "pass") stopped = build.status === "skip" ? "build:missing" : "build"
+        else ({ candidate, stopped } = buildIdentity(build.data, job.sourceRevision))
+        return !stopped
+      }
+
+      async function repairCandidate(step, request) {
+        const repair = await execute(step, request)
+        if (repair.status !== "pass") {
+          stopped = repair.status === "skip" ? `${step}:missing` : step
+          return false
+        }
+        // Always rebuild: repairs can change source, fixtures or build configuration.
+        return buildCandidate()
+      }
+
+      async function verifyCandidate() {
         let previous = null
-        for (let round = 1; round <= limit; round += 1) {
-          const result = await execute(step, { round })
+        const limit = budgets.verificationRounds
+        while (verificationRounds < limit) {
+          const round = ++verificationRounds
+          const result = await execute("verify", { round })
           if (result.status === "pass") return true
           if (result.status === "skip") {
-            stopped = `${step}:missing`
+            stopped = "verify:missing"
             return false
           }
           const current = findingKey(result.findings)
           if (current === previous) {
-            stopped = `${step}:stalled`
+            stopped = "verify:stalled"
             return false
           }
           previous = current
           if (round < limit) {
-            const repair = await execute(repairStep, { round, findings: result.findings })
-            if (repair.status === "skip") {
-              stopped = `${repairStep}:missing`
-              return false
-            }
+            if (!await repairCandidate("repair:verification", { round, findings: result.findings })) return false
           }
         }
-        stopped = `${step}:budget-exhausted`
+        stopped = "verify:budget-exhausted"
         return false
       }
 
-      const environment = await execute("environment:prepare")
-      environmentId = environment.data.environmentId ?? null
-      prepared = Boolean(environmentId)
-      if (environment.status !== "pass" || environment.data.isolated !== true || !environment.data.environmentId) {
-        stopped = environment.status === "skip" ? "environment:missing" : "environment:prepare"
-      }
-
-      const context = !stopped ? await execute("context:collect", { environmentId }) : { status: "skip" }
-      if (!stopped && context.status !== "pass") {
-        stopped = context.status === "skip" ? "context:missing" : "context:collect"
-      }
-      const evidenceRequired = needsEvidence(classifyRisk(job.risk))
-      if (!stopped && evidenceRequired && !criterion) stopped = "evidence:criterion:missing"
-      const before = !stopped ? await execute("evidence:before", { required: evidenceRequired, criterion })
-        : { status: "skip" }
-      if (!stopped && evidenceRequired) {
-        stopped = before.status === "pass" ? await accept("before", before, { revision: job.sourceRevision })
-          : "evidence:before:missing"
-      }
-      let modelRoom = null
-      if (!stopped && job.product === "DoctorCRE" && modelRoomAdvisor) {
-        try {
-          modelRoom = await modelRoomAdvisor({ job, context: context.data })
-          if (!modelRoom || modelRoom.schema !== "doctorcre-build-route.v1" || !modelRoom.selected_route)
-            throw new Error("invalid model room advice")
-          if (modelRoom.build_context && !verifyPinnedBuildContext(modelRoom.build_context))
-            throw new Error("invalid pinned build context")
-          events.push({ step: "model-room:advise", status: "pass" })
-        } catch (error) {
-          stopped = "model-room:advise"
-          findings.push({ step: "model-room:advise", reason: "model room advice failed",
-            errorType: error.name, errorDigest: hash(error.message) })
-          events.push({ step: "model-room:advise", status: "fail" })
+      try {
+        const environment = await execute("environment:prepare")
+        environmentId = environment.data.environmentId ?? null
+        prepared = Boolean(environmentId)
+        if (environment.status !== "pass" || environment.data.isolated !== true || !environment.data.environmentId) {
+          stopped = environment.status === "skip" ? "environment:missing" : "environment:prepare"
         }
-      }
-      if (!stopped) {
-        const build = await execute("build", modelRoom ? { route: modelRoom.selected_route,
-          modelRoomStateDigest: modelRoom.state_digest,
-          ...(modelRoom.build_context ? { pinnedBuildContext: modelRoom.build_context } : {}) } : {})
-        if (build.status !== "pass") stopped = build.status === "skip" ? "build:missing" : "build"
-        else ({ candidate, stopped } = buildIdentity(build.data, job.sourceRevision))
-      }
-      if (!stopped) await repairLoop("verify", "repair:verification", budgets.verificationRounds)
 
-      const inspected = !stopped ? await execute("risk:inspect") : { status: "skip", data: {} }
-      if (!stopped && inspected.status !== "pass") {
-        stopped = inspected.status === "skip" ? "risk:missing" : "risk:inspect"
-      }
-      const risk = classifyRisk({
-        changedPaths: [...new Set([...(job.risk?.changedPaths ?? []), ...(inspected.data.changedPaths ?? [])])],
-        signals: [...new Set([...(job.risk?.signals ?? []), ...(inspected.data.signals ?? [])])]
-      })
-      const reviewRoles = reviewsFor(risk)
-      if (!stopped && needsEvidence(risk) && !evidenceAcceptance.before) {
-        stopped = !criterion ? "evidence:criterion:missing"
-          : before.status !== "pass" ? "evidence:before:missing-after-inspection"
-            : await accept("before", before, { revision: job.sourceRevision })
-      }
-      if (!stopped) {
-        let previous = null
-        for (let round = 1; round <= budgets.reviewRounds; round += 1) {
-          const results = await Promise.all(reviewRoles.map((role) => execute(`review:${role}`, { role, round, risk })))
-          const missing = results.some((result) => result.status === "skip")
-          if (missing) {
-            stopped = "review:missing"
-            break
+        const context = !stopped ? await execute("context:collect", { environmentId }) : { status: "skip" }
+        if (!stopped && context.status !== "pass") {
+          stopped = context.status === "skip" ? "context:missing" : "context:collect"
+        }
+        const evidenceRequired = needsEvidence(classifyRisk(job.risk))
+        if (!stopped && evidenceRequired && !criterion) stopped = "evidence:criterion:missing"
+        const before = !stopped ? await execute("evidence:before", { required: evidenceRequired, criterion })
+          : { status: "skip" }
+        if (!stopped && evidenceRequired) {
+          stopped = before.status === "pass" ? await accept("before", before, { revision: job.sourceRevision })
+            : "evidence:before:missing"
+        }
+        if (!stopped && job.product === "DoctorCRE" && modelRoomAdvisor) {
+          try {
+            modelRoom = await modelRoomAdvisor(structuredClone({ job, context: context.data }))
+            modelRoom = structuredClone(modelRoom)
+            if (!modelRoom || modelRoom.schema !== "doctorcre-build-route.v1" || !modelRoom.selected_route)
+              throw new Error("invalid model room advice")
+            if (modelRoom.build_context && !verifyPinnedBuildContext(modelRoom.build_context))
+              throw new Error("invalid pinned build context")
+            events.push({ step: "model-room:advise", status: "pass" })
+          } catch (error) {
+            stopped = "model-room:advise"
+            findings.push({ step: "model-room:advise", reason: "model room advice failed",
+              errorType: error.name, errorDigest: hash(error.message) })
+            events.push({ step: "model-room:advise", status: "fail" })
           }
-          const failed = results.flatMap((result, index) => {
-            if (result.status === "pass") return []
-            return result.findings.length ? result.findings : [{ role: reviewRoles[index], reason: "review did not pass" }]
+        }
+        if (!stopped) await buildCandidate()
+        if (!stopped) await verifyCandidate()
+
+        async function inspectRisk() {
+          const inspected = await execute("risk:inspect")
+          if (inspected.status !== "pass") {
+            stopped = inspected.status === "skip" ? "risk:missing" : "risk:inspect"
+            return
+          }
+          changedPaths = [...new Set([...changedPaths, ...(inspected.data.changedPaths ?? [])])]
+          risk = classifyRisk({
+            changedPaths,
+            signals: [...new Set([...risk.signals, ...(inspected.data.signals ?? [])])]
           })
-          if (!failed.length) break
-          const current = findingKey(failed)
-          if (current === previous) {
-            stopped = "review:stalled"
-            break
-          }
-          previous = current
-          if (round === budgets.reviewRounds) {
-            stopped = "review:budget-exhausted"
-            break
-          }
-          const repair = await execute("repair:review", { round, findings: failed })
-          if (repair.status === "skip") {
-            stopped = "repair:review:missing"
-            break
+          reviewRoles = reviewsFor(risk)
+          if (needsEvidence(risk) && !evidenceAcceptance.before) {
+            stopped = !criterion ? "evidence:criterion:missing"
+              : before.status !== "pass" ? "evidence:before:missing-after-inspection"
+                : await accept("before", before, { revision: job.sourceRevision })
           }
         }
-      }
-
-      if (!stopped) {
-        const required = needsEvidence(risk)
-        const after = await execute("evidence:after", { risk, required, criterion, candidate })
-        if (required) {
-          stopped = after.status === "pass"
-            ? await accept("after", after, candidate, evidenceAcceptance.before.artifacts.map(({ digest }) => digest))
-            : "evidence:after:missing"
+        if (!stopped) await inspectRisk()
+        if (!stopped) {
+          let previous = null
+          for (let round = 1; round <= budgets.reviewRounds; round += 1) {
+            const results = await Promise.all(reviewRoles.map((role) => execute(`review:${role}`, { role, round, risk })))
+            const missing = results.some((result) => result.status === "skip")
+            if (missing) {
+              stopped = "review:missing"
+              break
+            }
+            const failed = results.flatMap((result, index) => {
+              if (result.status === "pass") return []
+              return result.findings.length ? result.findings : [{ role: reviewRoles[index], reason: "review did not pass" }]
+            })
+            if (!failed.length) break
+            const current = findingKey(failed)
+            if (current === previous) {
+              stopped = "review:stalled"
+              break
+            }
+            previous = current
+            if (round === budgets.reviewRounds) {
+              stopped = "review:budget-exhausted"
+              break
+            }
+            const verifiedCandidate = candidate
+            if (!await repairCandidate("repair:review", { round, findings: failed })) break
+            if (hash(candidate) !== hash(verifiedCandidate) && !await verifyCandidate()) break
+            await inspectRisk()
+            if (stopped) break
+          }
         }
-      }
 
-      let release = { status: "skip", findings: [] }
-      let production = { status: "skip", findings: [] }
-      if (!stopped) {
-        release = await execute("release:observe", { risk })
-        if (release.status === "fail") stopped = "release:observe"
-      }
-      if (!stopped) {
-        production = await execute("production:observe", { risk })
-        if (production.status === "fail") stopped = "production:observe"
-      }
-
-      const measurement = !stopped
-        ? await execute("performance:measure", { risk })
-        : { status: "skip", measurements: {} }
-      let performance = evaluatePerformance({
-        baseline: job.performance?.baseline,
-        current: measurement.measurements,
-        budgets: job.performance?.budgets,
-        knownFingerprints: job.performance?.knownFingerprints
-      })
-      if (Object.keys(job.performance?.budgets ?? {}).length && measurement.status !== "pass") {
-        performance = {
-          status: "fail",
-          findings: [{ metric: null, reason: "required performance measurement did not pass" }],
-          duplicates: []
+        if (!stopped) {
+          const required = needsEvidence(risk)
+          const after = await execute("evidence:after", { risk, required, criterion, candidate })
+          if (required) {
+            stopped = after.status === "pass"
+              ? await accept("after", after, candidate, evidenceAcceptance.before.artifacts.map(({ digest }) => digest))
+              : "evidence:after:missing"
+          }
         }
-      }
-      if (performance.findings.length) {
-        findings.push(...performance.findings.map((item) => ({ step: "performance:evaluate", ...item })))
-        await execute("performance:analyze", { regressions: performance.findings })
-      }
 
-      const incidentSignals = [release, production].flatMap((result) => result.findings)
-        .filter((item) => ["critical", "outage"].includes(item.severity))
-      if (incidentSignals.length) {
-        await execute("incident:investigate", { signals: incidentSignals, authority: "read-only" })
-      }
+        let release = { status: "skip", findings: [] }
+        let production = { status: "skip", findings: [] }
+        if (!stopped) {
+          release = await execute("release:observe", { risk })
+          if (release.status === "fail") stopped = "release:observe"
+        }
+        if (!stopped) {
+          production = await execute("production:observe", { risk })
+          if (production.status === "fail") stopped = "production:observe"
+        }
 
-      if (prepared) await execute("garden:inspect", { risk })
-      if (prepared) {
-        const disposed = await execute("environment:dispose", { environmentId })
-        if (disposed.status !== "pass" && !stopped) stopped = "environment:dispose"
+        const measurement = !stopped
+          ? await execute("performance:measure", { risk })
+          : { status: "skip", measurements: {} }
+        performance = evaluatePerformance({
+          baseline: job.performance?.baseline,
+          current: measurement.measurements,
+          budgets: job.performance?.budgets,
+          knownFingerprints: job.performance?.knownFingerprints
+        })
+        if (Object.keys(job.performance?.budgets ?? {}).length && measurement.status !== "pass") {
+          performance = {
+            status: "fail",
+            findings: [{ metric: null, reason: "required performance measurement did not pass" }],
+            duplicates: []
+          }
+        }
+        if (performance.findings.length) {
+          findings.push(...performance.findings.map((item) => ({ step: "performance:evaluate", ...item })))
+          await execute("performance:analyze", { regressions: performance.findings })
+        }
+
+        const incidentSignals = [release, production].flatMap((result) => result.findings)
+          .filter((item) => ["critical", "outage"].includes(item.severity))
+        if (incidentSignals.length) {
+          await execute("incident:investigate", { signals: incidentSignals, authority: "read-only" })
+        }
+
+        if (prepared) await execute("garden:inspect", { risk })
+      } catch (error) {
+        stopped ??= "factory:execution"
+        findings.push({ step: "factory:execution", reason: "unexpected factory execution error",
+          errorType: error.name, errorDigest: hash(error.message) })
+      } finally {
+        if (prepared) {
+          const disposed = await execute("environment:dispose", { environmentId })
+          if (disposed.status !== "pass" && !stopped) stopped = "environment:dispose"
+        }
       }
       const outcome = stopped || performance.status === "fail" ? "needs-attention" : "complete"
       await execute("learn:record", { outcome, stopped, risk, findings })

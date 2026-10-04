@@ -64,6 +64,10 @@ result fails, and a malformed `evidence`, `findings` or `proposals` list is an
 error rather than an empty one. A build passes only when it reports
 `data.candidateRevision`, different from `job.sourceRevision`, and a SHA-256
 `data.buildDigest`.
+The Codex producer schema and prompt require both fields. Every successful
+repair rebuilds the candidate; review repairs also rerun verification and risk
+inspection before another review round when the revision or build digest changes.
+Verification shares the job's original round budget across rebuilt candidates.
 
 Bug work, and work with an interface signal, needs a frozen `job.criterion`
 (`id`, `expectation`) before any evidence step runs. Each evidence step returns
@@ -72,9 +76,23 @@ factory reads those bytes through `createFactory({ readArtifact })`. The CLI bui
 that reader from the product profile's `evidenceRoot`, a store outside the
 disposable environment. Each artifact must be a `factory-observation.v1` record
 from the [evidence schema](schemas/factory-evidence.schema.json). `evidence:before`
-must observe `failed` on the source revision. `evidence:after` must observe
+must observe `failed` on the source revision for bugs. Other interface work may
+observe either `passed` or `failed` to capture prior behavior. `evidence:after` must observe
 `passed` on the candidate's revision and build digest, and must not reuse a
 before-phase artifact. Attachments such as screenshots are read and digest-checked.
+The run snapshots its job and sends independent requests to adapters; evidence
+acceptance retains its own criterion and candidate bindings across asynchronous reads.
+
+The filesystem reader requires Python 3 on macOS/Linux. It pins the store's
+identity and opens each path component through held directory descriptors with
+`O_NOFOLLOW`, rejecting symlinks and non-regular files. Each artifact is limited
+to 10 MiB; each acceptance phase and filesystem read has a five-second deadline.
+Callers may set `evidenceLimits: { maxBytes, timeoutMs }` on `createFactory` or
+pass those options to `createArtifactReader`. Injected readers return a `Buffer`
+or `null` and receive `{ signal, maxBytes, timeoutMs }` as their second argument.
+They must bound allocation and honor cancellation; acceptance independently
+rejects oversized/malformed bytes and stops waiting at its deadline. A timeout
+is `blocked`, malformed bytes are `failed`, and disposal runs from `finally`.
 
 The receipt's `evidenceAcceptance` holds each phase's typed verdict (`passed`,
 `failed` or `blocked`) with reasons and the accepted artifact digests. With no

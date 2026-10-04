@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto"
-import { readFileSync } from "node:fs"
-import { readFile } from "node:fs/promises"
+import { readFileSync, realpathSync, statSync } from "node:fs"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 import Ajv2020 from "ajv/dist/2020.js"
+import { runProcess } from "./process-runner.mjs"
 
 const schema = JSON.parse(readFileSync(new URL("../schemas/factory-evidence.schema.json", import.meta.url)))
 const ajv = new Ajv2020({ strict: true })
@@ -12,20 +13,44 @@ const validateArtifact = validator("artifact")
 const validateCandidate = validator("candidate")
 const validateObservation = validator("observation")
 
-// The observed outcome each phase must show: the defect on the baseline, then its absence.
-const EXPECTED = { before: "failed", after: "passed" }
+const DEFAULT_LIMITS = { timeoutMs: 5000, maxBytes: 10 * 1024 * 1024 }
+
+export function evidenceReadLimits(input = {}) {
+  const limits = { ...DEFAULT_LIMITS, ...input }
+  for (const key of Object.keys(DEFAULT_LIMITS)) {
+    if (!Number.isSafeInteger(limits[key]) || limits[key] <= 0) throw Error(`invalid evidence ${key}`)
+  }
+  return limits
+}
 
 const digestOf = bytes => createHash("sha256").update(bytes).digest("hex")
 
 // Reads evidence bytes from a store that outlives the job's scratch environment.
-// Returns null for anything outside the store or unreadable.
-export function createArtifactReader(root) {
-  const base = path.resolve(root)
-  return async ref => {
-    const file = path.resolve(base, ref)
-    const relative = path.relative(base, file)
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return null
-    return readFile(file).catch(() => null)
+// Pins the configured store identity. The POSIX helper opens each component
+// relative to a held directory descriptor with O_NOFOLLOW (no check/use gap).
+// Python 3 is required on macOS/Linux; unsupported stores fail closed.
+export function createArtifactReader(root, options = {}) {
+  const limits = evidenceReadLimits(options)
+  let store
+  try {
+    const base = realpathSync(root)
+    const stat = statSync(base)
+    if (stat.isDirectory()) store = { root: base, device: stat.dev, inode: stat.ino }
+  } catch { /* Missing/unreadable stores return null. */ }
+  return async (ref, readOptions = {}) => {
+    if (!store || typeof ref !== "string" || path.isAbsolute(ref) ||
+        ref.split(/[\\/]/).some(part => part === "..")) return null
+    const timeoutMs = Math.min(limits.timeoutMs, readOptions.timeoutMs ?? limits.timeoutMs)
+    const maxBytes = Math.min(limits.maxBytes, readOptions.maxBytes ?? limits.maxBytes)
+    try {
+      const result = await runProcess(["python3", fileURLToPath(new URL("./read-artifact.py", import.meta.url))], {
+        input: JSON.stringify({ ...store, ref, max_bytes: maxBytes }), timeoutMs,
+        maxOutputBytes: Math.ceil(maxBytes / 3) * 4 + 64
+      })
+      if (result.code !== 0 || result.timedOut || result.overflow) return null
+      const encoded = JSON.parse(result.stdout)
+      return typeof encoded === "string" ? Buffer.from(encoded, "base64") : null
+    } catch { return null }
   }
 }
 
@@ -34,7 +59,7 @@ export function buildIdentity(data, sourceRevision) {
   const candidate = { revision: data?.candidateRevision, buildDigest: data?.buildDigest }
   if (!validateCandidate(candidate)) return { candidate: null, stopped: "build:unbound" }
   if (candidate.revision === sourceRevision) return { candidate: null, stopped: "build:no-change" }
-  return { candidate, stopped: null }
+  return { candidate: Object.freeze(candidate), stopped: null }
 }
 
 // Decides whether a phase's evidence proves the criterion, asking in order:
@@ -49,7 +74,15 @@ export function buildIdentity(data, sourceRevision) {
 // Any failed reason makes the verdict failed; otherwise any blocked reason makes it blocked.
 // Digests bind bytes, not truth: this rejects labels and stale or copied artifacts, but
 // it does not authenticate who wrote the observation.
-export async function acceptEvidence({ phase, criterionId, binding, records, readArtifact, priorDigests = [] }) {
+export async function acceptEvidence({ phase, kind, criterionId, binding, records, readArtifact,
+  priorDigests = [], limits: inputLimits }) {
+  const limits = evidenceReadLimits(inputLimits)
+  const deadline = Date.now() + limits.timeoutMs
+  // Acceptance uses snapshots even while an injected reader yields control.
+  binding = structuredClone(binding)
+  records = structuredClone(records)
+  priorDigests = [...priorDigests]
+  const expected = phase === "after" ? ["passed"] : kind === "bug" ? ["failed"] : ["passed", "failed"]
   const failed = []
   const blocked = []
   const artifacts = []
@@ -59,8 +92,27 @@ export async function acceptEvidence({ phase, criterionId, binding, records, rea
 
   async function read(artifact) {
     if (!validateArtifact(artifact)) return void failed.push("malformed artifact reference")
-    const bytes = await Promise.resolve().then(() => readArtifact(artifact.ref)).catch(() => null)
-    if (!bytes) return void blocked.push(`unreadable: ${artifact.ref}`)
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) return void blocked.push(`read deadline exceeded: ${artifact.ref}`)
+    const controller = new AbortController()
+    let timer
+    let bytes
+    try {
+      bytes = await Promise.race([
+        Promise.resolve().then(() => readArtifact(artifact.ref, {
+          signal: controller.signal, maxBytes: limits.maxBytes, timeoutMs: remaining
+        })),
+        new Promise((_, reject) => { timer = setTimeout(() => {
+          controller.abort()
+          reject(Error("read deadline exceeded"))
+        }, remaining) })
+      ])
+    } catch (error) {
+      return void blocked.push(`${controller.signal.aborted ? "read deadline exceeded" : "unreadable"}: ${artifact.ref}`)
+    } finally { clearTimeout(timer) }
+    if (bytes === null || bytes === undefined) return void blocked.push(`unreadable: ${artifact.ref}`)
+    if (!Buffer.isBuffer(bytes)) return void failed.push(`invalid reader byte contract: ${artifact.ref}`)
+    if (bytes.length > limits.maxBytes) return void failed.push(`artifact size limit exceeded: ${artifact.ref}`)
     if (!bytes.length) return void failed.push(`empty: ${artifact.ref}`)
     const digest = digestOf(bytes)
     if (digest !== artifact.digest) return void failed.push(`digest mismatch: ${artifact.ref}`)
@@ -86,8 +138,8 @@ export async function acceptEvidence({ phase, criterionId, binding, records, rea
     }
     for (const attachment of observation.attachments) await read(attachment)
     if (observation.outcome === "blocked") blocked.push(`observer blocked: ${record.artifact.ref}`)
-    else if (observation.outcome !== EXPECTED[phase]) {
-      failed.push(`observed ${observation.outcome}, expected ${EXPECTED[phase]}: ${record.artifact.ref}`)
+    else if (!expected.includes(observation.outcome)) {
+      failed.push(`observed ${observation.outcome}, expected ${expected.join(" or ")}: ${record.artifact.ref}`)
     }
   }
   const result = failed.length ? "failed" : blocked.length ? "blocked" : "passed"

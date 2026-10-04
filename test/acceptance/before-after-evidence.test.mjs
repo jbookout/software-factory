@@ -4,6 +4,8 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 
 import * as factory from "../../src/index.mjs"
 
@@ -57,9 +59,9 @@ function steps({ before, after, build = built, ...overrides }) {
   }
 }
 
-async function run(adapterSteps, { readArtifact, value = job } = {}) {
+async function run(adapterSteps, { readArtifact, value = job, evidenceLimits } = {}) {
   const adapter = factory.createFixtureAdapter(adapterSteps)
-  const result = await factory.createFactory({ readArtifact }).run(value, adapter)
+  const result = await factory.createFactory({ readArtifact, evidenceLimits }).run(value, adapter)
   return { result, adapter }
 }
 
@@ -82,6 +84,223 @@ test("an independently read correct artifact passes", async () => {
   const after = adapter.calls.find(call => call.step === "evidence:after").request
   assert.deepEqual(after.criterion, criterion)
   assert.deepEqual(after.candidate, result.candidate)
+})
+
+test("review 2: adapters cannot rewrite the frozen criterion or candidate", async t => {
+  for (const phase of ["before", "after"]) await t.test(phase, async () => {
+    const s = await store()
+    const proof = await s.proof()
+    const value = structuredClone(job)
+    const { result, adapter } = await run(steps({ ...proof,
+      [`evidence:${phase}`]: async request => {
+        if (phase === "before") {
+          request.criterion.id = "unrelated"
+          request.criterion.expectation = "unrelated behavior"
+          const observation = await s.observe("mutated-before.json", { criterionId: "unrelated",
+            revision: baseRevision, outcome: "failed" })
+          return { status: "pass", evidence: [{ ...observation, criterionId: "unrelated" }] }
+        }
+        request.candidate.revision = baseRevision
+        return { status: "pass", evidence: [await s.observe("mutated-after.json", { revision: baseRevision })] }
+      } }), { ...s, value })
+    assertStopped(result, adapter, `evidence:${phase}:failed`)
+    assert.deepEqual(value.criterion, criterion)
+    if (phase === "after") assert.equal(result.candidate.revision, candidateRevision)
+  })
+})
+
+test("review 2: asynchronous reads retain independent acceptance bindings", async () => {
+  const s = await store()
+  const proof = await s.proof()
+  const value = structuredClone(job)
+  let afterRequest
+  const { result } = await run(steps({ ...proof, "evidence:after": request => {
+    afterRequest = request
+    return proof.after
+  } }), { value, readArtifact: async ref => {
+    if (ref === "after.json") {
+      value.criterion.id = "late-change"
+      afterRequest.candidate.revision = baseRevision
+      await Promise.resolve()
+    }
+    return s.readArtifact(ref)
+  } })
+  assert.equal(result.outcome, "complete")
+  assert.equal(result.candidate.revision, candidateRevision)
+})
+
+test("review 3: both repair paths rebuild and reject evidence for the initial candidate", async t => {
+  for (const phase of ["verification", "review"]) await t.test(phase, async () => {
+    const s = await store()
+    const proof = await s.proof()
+    const final = { revision: "c".repeat(40), buildDigest: "e".repeat(64) }
+    let builds = 0
+    let repaired = false
+    const check = phase === "verification" ? "verify" : "review:Test Engineer"
+    const setup = steps({ ...proof,
+      build: () => ++builds === 1 ? built : { status: "pass", data: {
+        candidateRevision: final.revision, buildDigest: final.buildDigest } },
+      [check]: ({ round }) => round === 1 ? { status: "fail", findings: [{ reason: "repair this" }] } : pass,
+      [`repair:${phase}`]: () => { repaired = true; return { status: "pass", data: {
+        sourceChanged: true, candidateRevision: final.revision, buildDigest: final.buildDigest } } }
+    })
+    const { result, adapter } = await run(setup, s)
+    assertStopped(result, adapter, "evidence:after:failed")
+    assert.equal(repaired, true)
+    assert.equal(builds, 2)
+    assert.deepEqual(result.candidate, final)
+    if (phase === "review") {
+      const repairIndex = adapter.calls.findIndex(call => call.step === "repair:review")
+      assert.ok(adapter.calls.slice(repairIndex + 1).some(call => call.step === "verify"))
+    }
+    builds = 0
+    setup["evidence:after"] = { status: "pass", evidence: [await s.observe("final.json", final)] }
+    const accepted = await run(setup, s)
+    assert.equal(accepted.result.outcome, "complete")
+    assert.deepEqual(accepted.result.candidate, final)
+  })
+})
+
+test("review 4: filesystem reader rejects leaf and parent symlinks", async t => {
+  const s = await store()
+  const outside = await store()
+  await outside.write("outside.txt", "outside bytes")
+  await fs.symlink(path.join(outside.root, "outside.txt"), path.join(s.root, "leaf"))
+  await fs.symlink(outside.root, path.join(s.root, "parent"))
+  for (const ref of ["leaf", "parent/outside.txt"]) await t.test(ref, async () => {
+    assert.equal(await s.readArtifact(ref), null)
+  })
+})
+
+test("review 5: stalled artifact reader times out with disposal and a typed verdict", async () => {
+  const s = await store()
+  const pending = run(steps(await s.proof()), { readArtifact: () => new Promise(() => {}),
+    evidenceLimits: { timeoutMs: 30 } })
+  let timer
+  try {
+    const { result, adapter } = await Promise.race([pending, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(Error("acceptance never reached cleanup")), 500)
+    })])
+    assertStopped(result, adapter, "evidence:before:blocked")
+    assert.match(result.evidenceAcceptance.before.reasons.join("\n"), /deadline/)
+    assert.equal(adapter.calls.filter(call => call.step === "environment:dispose").length, 1)
+  } finally { clearTimeout(timer) }
+})
+
+test("review 5: filesystem reader rejects a FIFO without waiting for a writer", async () => {
+  const s = await store()
+  await promisify(execFile)("mkfifo", [path.join(s.root, "pipe")])
+  const moduleUrl = new URL("../../src/evidence.mjs", import.meta.url).href
+  const { stdout } = await promisify(execFile)(process.execPath, ["--input-type=module", "-e",
+    `import { createArtifactReader } from ${JSON.stringify(moduleUrl)};
+     console.log(await createArtifactReader(${JSON.stringify(s.root)})("pipe"));`], { timeout: 5000 })
+  assert.equal(stdout.trim(), "null")
+})
+
+test("review 5: file and injected reader byte limits reject oversized artifacts", async t => {
+  const s = await store()
+  await s.write("large.bin", "x".repeat(2048))
+  await t.test("filesystem", async () => {
+    assert.equal(await factory.createArtifactReader(s.root, { maxBytes: 1024 })("large.bin"), null)
+  })
+  await t.test("acceptance", async () => {
+    const { result, adapter } = await run(steps(await s.proof()), {
+      readArtifact: () => Buffer.alloc(2048), evidenceLimits: { maxBytes: 1024 } })
+    assertStopped(result, adapter, "evidence:before:failed")
+    assert.match(result.evidenceAcceptance.before.reasons.join("\n"), /size limit/)
+  })
+})
+
+test("review 6: malformed reader bytes fail with receipt and disposal", async t => {
+  for (const bytes of [{ length: 1 }, "partial text", new Uint8Array([1])]) await t.test(String(bytes), async () => {
+    const s = await store()
+    const { result, adapter } = await run(steps(await s.proof()), { readArtifact: () => bytes })
+    assertStopped(result, adapter, "evidence:before:failed")
+    assert.match(result.evidenceAcceptance.before.reasons.join("\n"), /byte contract/)
+    assert.equal(adapter.calls.filter(call => call.step === "environment:dispose").length, 1)
+    assert.equal(factory.verifyFactoryReceipt(result, result.receiptDigest), true)
+  })
+})
+
+test("review 6: unexpected acceptance errors still produce a receipt and dispose", async () => {
+  const s = await store()
+  const proof = await s.proof()
+  let reads = 0
+  const record = { kind: "observation", criterionId: criterion.id,
+    get artifact() {
+      if (++reads > 1) throw Error("unexpected acceptance error")
+      return proof.before.evidence[0].artifact
+    } }
+  const { result, adapter } = await run(steps({ ...proof, before: { status: "pass", evidence: [record] } }), s)
+  assertStopped(result, adapter, "evidence:before:failed")
+  assert.equal(adapter.calls.filter(call => call.step === "environment:dispose").length, 1)
+  assert.equal(factory.verifyFactoryReceipt(result, result.receiptDigest), true)
+})
+
+test("review 7: feature and refactor interface baselines may already pass", async t => {
+  for (const kind of ["feature", "refactor"]) for (const inspected of [false, true]) {
+    await t.test(`${kind}, ${inspected ? "inspected" : "declared"}`, async () => {
+      const s = await store()
+      const proof = await s.proof()
+      const passing = await s.observe("healthy-baseline.json", { revision: baseRevision, buildDigest: baselineBuild })
+      const { result } = await run(steps({ ...proof, before: { status: "pass", evidence: [passing] },
+        "risk:inspect": inspected ? { status: "pass", data: { signals: ["interface"] } } : pass,
+        "review:UI and Accessibility Engineer": pass }), { ...s, value: { ...job, kind,
+        risk: inspected ? {} : { signals: ["interface"] } } })
+      assert.equal(result.outcome, "complete")
+      assert.equal(result.evidenceAcceptance.before.result, "passed")
+    })
+  }
+})
+
+test("review 8: a filename beginning with two dots is contained and readable", async () => {
+  const s = await store()
+  await s.write("..capture.json", "capture bytes")
+  assert.deepEqual(await s.readArtifact("..capture.json"), Buffer.from("capture bytes"))
+})
+
+test("filesystem reads retain exact binary bytes and the pinned root identity", async () => {
+  const s = await store()
+  await fs.mkdir(path.join(s.root, "nested"))
+  const bytes = Buffer.from([0, 255, 128, 10, 13])
+  await fs.writeFile(path.join(s.root, "nested", "binary"), bytes)
+  assert.deepEqual(await s.readArtifact("nested/./binary"), bytes)
+  assert.equal(await s.readArtifact("nested"), null)
+  assert.equal(await s.readArtifact("../binary"), null)
+  const outside = await store()
+  await outside.write("nested", "outside bytes")
+  await fs.rename(s.root, `${s.root}-moved`)
+  await fs.symlink(outside.root, s.root)
+  assert.equal(await s.readArtifact("nested"), null)
+})
+
+test("descriptor-relative traversal survives a parent swapped for an outside symlink", async () => {
+  const s = await store()
+  const outside = await store()
+  await fs.mkdir(path.join(s.root, "parent"))
+  await s.write("parent/capture", "inside")
+  await outside.write("capture", "outside")
+  const helper = new URL("../../src/read-artifact.py", import.meta.url)
+  const request = { root: await fs.realpath(s.root), ref: "parent/capture", max_bytes: 1024 }
+  const rootStat = await fs.stat(s.root)
+  request.device = rootStat.dev
+  request.inode = rootStat.ino
+  const { stdout } = await promisify(execFile)("python3", ["-B", "-c", `
+import importlib.util, json, os
+spec = importlib.util.spec_from_file_location("reader", ${JSON.stringify(helper.pathname)})
+reader = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(reader)
+original = os.open
+def swap_after_open(path, flags, **kwargs):
+    descriptor = original(path, flags, **kwargs)
+    if path == "parent":
+        os.rename(${JSON.stringify(path.join(s.root, "parent"))}, ${JSON.stringify(path.join(s.root, "moved"))})
+        os.symlink(${JSON.stringify(outside.root)}, ${JSON.stringify(path.join(s.root, "parent"))})
+    return descriptor
+os.open = swap_after_open
+print(json.dumps(reader.read_artifact(json.loads(${JSON.stringify(JSON.stringify(request))}))))
+`], { timeout: 5000 })
+  assert.deepEqual(Buffer.from(JSON.parse(stdout), "base64"), Buffer.from("inside"))
 })
 
 test("a no-op builder fails regardless of its pass label", async t => {
