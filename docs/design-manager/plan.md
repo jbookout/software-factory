@@ -6,8 +6,11 @@ TASK AW applies Joe's 2026-10-02 design sources after slice 2 (PR 24) merged.
 The slice-2 entry diagnosis follow-up is implemented at the pure interview
 interface and tested by `test/acceptance/design-layer-diagnosis.test.mjs` (AW-2).
 Slice 3 now has [settings and an offline-tested cloud qualification harness](settings-cloud.md).
-Its live account/background-runtime qualification remains incomplete. Later
-slices remain planned; none is qualified by this text or pure replay.
+Its live account/background-runtime qualification remains incomplete. Slice 4 now
+has the criterion evidence gate (`software-factory/design-verify`, tested by AW-4),
+a sample-app VERIFY skill/runner and the [e2e wrapper](../../capabilities/agentic-ui-evaluation/README.md)
+as a non-blocking pilot. Live e2e qualification with Joe's attended ChatGPT login
+remains incomplete. Later slices remain planned; none is qualified by this text or pure replay.
 
 ## Purpose and ownership
 
@@ -263,9 +266,10 @@ function stationForDesignGate(gate: DesignGate): DesignStation;
 Slice 2's [entry playbooks and interview interface](entry-playbooks.md) initialize
 the same project schema at Intake with explicit tier, scope and pending work.
 They preserve the standard adjacent-stage path and confer no execution authority.
-The future criterion evidence, reference records and project design contract
-below are specifications for their owning slices, not additions to today's
-`VerificationProof`, project schema or public declarations. The current helpers
+Slice 4 implements the criterion evidence contract as its own versioned records
+(`schemas/design-verify.schema.json`: `design-check.v1`, `design-review.v1`), not as
+additions to `VerificationProof` or the project schema. Reference records and the
+project design contract below remain specifications for their owning slices. The current helpers
 check reported eligibility/initialization only. Slices 4/5 will version stored
 contracts and reject older incomplete receipts for acceptance; no compatibility
 path may promote today's receipt shape into the stronger proof contract.
@@ -829,8 +833,10 @@ and Claude Design. Slices 4, 9 and 10 retain their requested numbers.
 
 ### TASK AW acceptance scenarios per affected slice
 
-AW-2 is implemented in `test/acceptance/design-layer-diagnosis.test.mjs`; the other
-rows remain future slice acceptance tests. Use
+AW-2 is implemented in `test/acceptance/design-layer-diagnosis.test.mjs`. AW-4's gate
+rules are implemented in `test/acceptance/design-verify.test.mjs` with synthetic store
+records; the sample-app run is `test/acceptance/verify-sample-app.test.mjs`. AW-4's live
+e2e qualification and the other rows remain future slice acceptance tests. Use
 both unrelated synthetic sample projects and the existing mobile trigger when
 applicable. Each row requires its passing case and deliberately failing case;
 retain the actual artifact/observation, expected outcome and source binding.
