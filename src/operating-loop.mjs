@@ -364,21 +364,27 @@ export async function runPrDelivery(job, adapter) {
     return result
   }
   const stopped = result => ({ code: result.data.code ?? 1, message: result.data.message, events })
+  const complete = async message => {
+    const result = await adapter.execute("pr:complete", request)
+    return result.status === "pass" ? { code: 0, message, events } : stopped(result)
+  }
   for (let round = 0; round < rounds; round++) {
     const inspect = await execute("pr:inspect")
     if (inspect.status !== "pass") return stopped(inspect)
-    if (inspect.data.merged) return { code: 0, message: inspect.data.message, events }
-    if (inspect.data.ready) return { code: 0, message: "APPROVED", events }
+    if (inspect.data.merged) return complete(inspect.data.message)
+    if (inspect.data.ready) return complete("APPROVED")
     if (inspect.data.approved || inspect.data.blocked) {
       const repair = await execute(inspect.data.approved ? "ci-fix" : "fix")
       if (repair.status !== "pass") return stopped(repair)
-      if (repair.data.head === inspect.data.head) return { code: 2, message: "NO-PROGRESS: fix pushed nothing", events }
     }
     const review = await execute("review")
     if (review.status !== "pass") return stopped(review)
   }
   const final = await execute("pr:inspect")
   if (final.status !== "pass") return stopped(final)
-  if (final.data.merged) return { code: 0, message: final.data.message, events }
-  return { code: final.data.ready ? 0 : 1, message: final.data.ready ? "APPROVED" : `UNRESOLVED after ${rounds} rounds`, events }
+  if (final.data.merged) return complete(final.data.message)
+  if (final.data.ready) return complete("APPROVED")
+  const stop = { cause: "rounds-exhausted", code: 1, message: `UNRESOLVED after ${rounds} rounds`, resetAt: null }
+  const saved = await adapter.execute("pr:suspend", { ...request, head: final.data.head, stop })
+  return saved.status === "pass" ? { ...stop, events } : stopped(saved)
 }
