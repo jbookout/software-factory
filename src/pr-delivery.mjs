@@ -1,10 +1,12 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 import { createHash, randomUUID } from "node:crypto"
+import { runProofReplay } from "./pr-proof-replay.mjs"
 import { runProcess } from "./process-runner.mjs"
 import { createCodexExecArgs } from "./codex-build.mjs"
 import { normalizeResult } from "./adapters.mjs"
 import { deliveryPrompt } from "./pr-delivery-prompts.mjs"
+import { deliveryDigest, validateDeliveryReceipt, proveFixReceipt, proveSelfReview, validateResolutionProof } from "./pr-delivery-receipts.mjs"
 import { classifyChecks, validRequiredChecks } from "./pr-readiness.mjs"
 import { DeliveryError, pause, keyFor, readJson, writeJson, withLease, reserveCodex, deliveryWait, completeDeliveryWait } from "./pr-delivery-state.mjs"
 
@@ -16,7 +18,8 @@ const digestOf = value => createHash("sha256").update(value).digest("hex")
 const pass = data => normalizeResult({ status: "pass", data }, "delivery")
 const fail = error => normalizeResult({ status: "fail",
   data: { code: Number.isInteger(error.code) ? error.code : 1, message: error.message, transient: error.transient ?? false,
-    ...(error.wait ? { cause: error.wait.cause, resetAt: error.wait.resetAt, head: error.wait.head, nextAction: "wait-for-input-or-reset", admitted: false } : {}) },
+    ...(error.wait ? { cause: error.wait.cause, resetAt: error.wait.resetAt, head: error.wait.head, nextAction: "wait-for-input-or-reset", admitted: false } : {}),
+    ...((error.dependencies ?? error.wait?.dependencies) ? { dependencies: error.dependencies ?? error.wait.dependencies, nextAction: "owner-tested-pin-receipt", admitted: false } : {}) },
   findings: [{ reason: error.message }] }, "delivery")
 
 export async function loadDeliveryConfig(file) {
@@ -31,6 +34,9 @@ export async function loadDeliveryConfig(file) {
     repos: Object.fromEntries(Object.entries(value.repos).map(([repo, local]) => {
       if (!REPO.test(repo)) throw new DeliveryError("invalid repository in config", 9)
       if (!validRequiredChecks(local.requiredChecks)) throw new DeliveryError("config repo requiredChecks must name the expected checks", 9)
+      if (local.trustedReviewerIds !== undefined && (!Array.isArray(local.trustedReviewerIds) || local.trustedReviewerIds.some(id => !Number.isSafeInteger(id) || id <= 0)))
+        throw new DeliveryError("config trustedReviewerIds must contain GitHub numeric user IDs", 9)
+      if (local.instructionSurfaces !== undefined) validateDeliveryReceipt("paths", local.instructionSurfaces)
       if (local.dependencyRevision !== undefined && (typeof local.dependencyRevision !== "string" || !local.dependencyRevision.trim()))
         throw new DeliveryError("config dependencyRevision must be a nonempty owned input pin", 9)
       return [repo, { ...local, checkout: absolute(local.checkout), worktreeRoot: absolute(local.worktreeRoot) }]
@@ -55,7 +61,7 @@ function reviews(pr) {
     const [verdict, line] = (c.body ?? "").split(/\r?\n/)
     const sha = /^Reviewed-SHA: ([0-9a-f]{40})$/.exec(line ?? "")?.[1]
     if (!sha || !["APPROVE", "REVIEW: BLOCKED", "CHANGES REQUESTED"].includes(verdict)) return null
-    return { verdict, sha, body: c.body }
+    return { verdict, sha, body: c.body, reviewerId: c.user?.id }
   }).filter(Boolean)
 }
 
@@ -152,21 +158,30 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
   function requireOpen(pr) {
     if (pr.state !== "OPEN") throw new DeliveryError(`NOT OPEN (${pr.state}): no repair or review work`, 8)
   }
-  async function latestReview(repo, pr, current) {
-    const candidate = reviews(current).at(-1)
-    if (!candidate || candidate.verdict !== "APPROVE") return candidate
+  async function verifiedReview(repo, pr, candidate) {
     const id = /^Factory-Review: ([0-9a-f-]{36})$/m.exec(candidate.body)?.[1]
-    if (!id) return null // Imported/handwritten approvals require a new factory review.
+    if (!id) return null
     const receipt = await readJson(path.join(config.stateDir, "reviews", `${id}.json`), null)
     if (!receipt || receipt.schema !== "factory-review/v1" || receipt.repo !== repo || receipt.pr !== pr ||
-        receipt.head !== candidate.sha || receipt.verdict !== "APPROVE" || receipt.commentDigest !== digestOf(candidate.body) ||
+        receipt.head !== candidate.sha || receipt.verdict !== candidate.verdict || receipt.commentDigest !== digestOf(candidate.body) ||
+        receipt.role !== "independent-reviewer" || receipt.executorId !== `review-${id}` ||
         receipt.execution?.code !== 0 || !receipt.execution?.pid || !receipt.sourceVerified) return null
     const artifacts = path.join(config.stateDir, "reviews", id)
     const prompt = await fs.readFile(`${artifacts}.prompt`, "utf8").catch(() => null)
     const output = await fs.readFile(receipt.output, "utf8").catch(() => null)
     if (prompt === null || output === null || digestOf(prompt) !== receipt.promptDigest || digestOf(output) !== receipt.outputDigest) return null
     if (await git(getRepo(repo).checkout, "rev-parse", `${receipt.head}^{tree}`) !== receipt.tree) return null
-    return candidate
+    return receipt
+  }
+  async function latestReview(repo, pr, current) {
+    const candidate = reviews(current).at(-1)
+    if (!candidate || candidate.verdict !== "APPROVE") return candidate
+    return await verifiedReview(repo, pr, candidate) ? candidate : null
+  }
+  async function admittedBrief(prior, repo, pr) {
+    if (!(getRepo(repo).trustedReviewerIds ?? []).includes(prior.reviewerId) && !await verifiedReview(repo, pr, prior))
+      throw new DeliveryError("executable finding brief lacks trusted reviewer/orchestrator provenance", 2)
+    return findingBrief(prior, repo, pr)
   }
   async function log(event) {
     await fs.mkdir(config.stateDir, { recursive: true, mode: 0o700 })
@@ -174,7 +189,8 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
   }
   async function waitInput(repo, pr, head) {
     const usage = await readJson(path.join(config.stateDir, "usage.json"), [])
-    return { head, dependency: digestOf(JSON.stringify(getRepo(repo).dependencyRevision ?? null)),
+    const resolution = await readJson(path.join(config.stateDir, "fixes", `${keyFor(repo, pr)}.json`), null)
+    return { head, dependency: digestOf(JSON.stringify([getRepo(repo).dependencyRevision ?? null, resolution?.evidenceDigest ?? null])),
       budgetAvailable: usage.filter(r => r.repo === repo && r.pr === pr && r.at >= Date.now() - 86400_000).length < config.limits.runsPer24h }
   }
   async function suspend(repo, pr, head, stop) {
@@ -241,7 +257,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     if (await git(worktree, "rev-parse", "HEAD") !== remoteHead) throw new DeliveryError("repair source binding mismatch; retained")
     return worktree
   }
-  async function guarded(repo, pr, kind, argv, cwd, input, head) {
+  async function guarded(repo, pr, kind, argv, cwd, input, head, attemptLease) {
     if (!["review", "fix", "ci-fix", "rescope"].includes(kind)) throw new DeliveryError("invalid guarded delivery kind", 9)
     head ??= (await view(repo, pr)).headRefOid
     await eligible(repo, pr, head)
@@ -256,6 +272,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       const result = await command(argv, cwd, { input, timeoutMs: config.limits.timeoutMs, allowFailure: true,
         captureOutput: false, onOutput: chunk => digest.update(chunk), onSpawn: async job => {
           const bindings = [await release.bindJob(job)]
+          if (attemptLease) bindings.push(await attemptLease.bindJob(job))
           const prLease = prLeases.get(keyFor(repo, pr))
           if (prLease) bindings.push(await prLease.bindJob(job))
           return bindings
@@ -271,10 +288,124 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       throw error
     } finally { if (release) await release() }
   }
+  const workerEnvironment = `${process.platform}-${process.arch}-node-${process.versions.node}`
+  function findingBrief(prior, repo, pr) {
+    const line = /^Delivery-Brief: (.+)$/m.exec(prior.body)
+    if (!line) throw new DeliveryError("missing executor finding brief; orchestrator must bind original findings", 2)
+    let brief
+    try { brief = JSON.parse(line[1]) } catch { throw new DeliveryError("invalid finding brief JSON", 2) }
+    brief.reviewDigest = deliveryDigest(prior.body.split(/^Delivery-Brief: /m)[0].trimEnd())
+    validateDeliveryReceipt("brief", brief)
+    const blocking = prior.body.split(/^Delivery-Brief: /m)[0].split(/^(?:#{1,6}\s*)?(?:Non-blocking\b|Follow-ups\s*\(non-blocking\)(?=\s|$)).*$/mi)[0]
+    const numbered = [...blocking.matchAll(/^(\d+)\.\s/gm)].map(m => m[1])
+    if (brief.repo !== repo || brief.pr !== pr || brief.head !== prior.sha ||
+        numbered.length !== brief.findings.length || new Set(numbered).size !== numbered.length ||
+        brief.findings.some(f => !numbered.includes(f.id))) throw new DeliveryError("original finding brief binding mismatch", 2)
+    return brief
+  }
+  async function replay({ repo, head, argv, priorHead, changedPaths, consumer, contractPin }) {
+    const local = getRepo(repo), dir = path.join(local.worktreeRoot, `proof-${randomUUID()}`)
+    await git(local.checkout, "fetch", "-q", "origin", head)
+    if (priorHead) {
+      await git(local.checkout, "fetch", "-q", "origin", priorHead)
+      const changed = (await git(local.checkout, "diff", "--name-only", "-z", priorHead, head)).split("\0").filter(Boolean)
+      if (!changedPaths.every(p => changed.includes(p))) throw new DeliveryError("resolution changed-path proof missing", 2)
+    }
+    await fs.mkdir(local.worktreeRoot, { recursive: true })
+    await git(local.checkout, "worktree", "add", "-q", "--detach", dir, head)
+    let consumerDir = null, consumerLocal = null
+    let sourceChanged = false
+    try {
+      if (consumer && (consumer.repo !== repo || consumer.head !== head)) {
+        consumerLocal = getRepo(consumer.repo)
+        await git(consumerLocal.checkout, "fetch", "-q", "origin", consumer.head)
+        consumerDir = path.join(consumerLocal.worktreeRoot, `proof-consumer-${randomUUID()}`)
+        await fs.mkdir(consumerLocal.worktreeRoot, { recursive: true })
+        await git(consumerLocal.checkout, "worktree", "add", "-q", "--detach", consumerDir, consumer.head)
+      }
+      const tree = await git(dir, "rev-parse", "HEAD^{tree}")
+      const consumerTree = consumerDir && await git(consumerDir, "rev-parse", "HEAD^{tree}")
+      const result = await runProofReplay(argv, { cwd: dir, consumerDir: consumerDir ?? dir, pins: {
+        FACTORY_PROOF_HEAD: head, FACTORY_CONTRACT_PIN: contractPin ?? head,
+        FACTORY_CONSUMER_HEAD: consumer?.head ?? head, FACTORY_CONSUMER_WORKTREE: consumerDir ?? dir }, timeoutMs: config.commandTimeoutMs })
+      sourceChanged = await git(dir, "rev-parse", "HEAD") !== head || await git(dir, "write-tree") !== tree ||
+        Boolean(await git(dir, "status", "--porcelain", "--untracked-files=no")) ||
+        Boolean(consumerDir && (await git(consumerDir, "rev-parse", "HEAD") !== consumer.head ||
+          await git(consumerDir, "write-tree") !== consumerTree || await git(consumerDir, "status", "--porcelain", "--untracked-files=no")))
+      if (sourceChanged) throw new DeliveryError("proof changed pinned source; worktrees retained", 2)
+      return result
+    } finally {
+      if (!sourceChanged) {
+        if (consumerDir) await git(consumerLocal.checkout, "worktree", "remove", "--force", consumerDir)
+        await git(local.checkout, "worktree", "remove", "--force", dir)
+      }
+    }
+  }
+  async function confirmation(repo, pr, current, prior) {
+    const brief = await admittedBrief(prior, repo, pr)
+    const proof = await readJson(path.join(config.stateDir, "fixes", `${keyFor(repo, pr)}.json`), null)
+    validateResolutionProof(proof, brief, current.headRefOid)
+    if (proof.status !== "resolved") {
+      const error = new DeliveryError("owned finding dependency: wait for tested pin receipt", 2)
+      error.dependencies = proof.dependencies; throw error
+    }
+    return proof
+  }
+  async function builderPreflight(repo, receipt) {
+    validateDeliveryReceipt("selfReview", receipt)
+    const local = getRepo(repo)
+    await git(local.checkout, "fetch", "-q", "origin", "main", receipt.head)
+    const base = await git(local.checkout, "rev-parse", "origin/main")
+    const changed = (await git(local.checkout, "diff", "--name-only", "-z", base, receipt.head)).split("\0").filter(Boolean)
+    const binding = { repo, head: receipt.head, base,
+      environment: workerEnvironment, builderId: receipt.builderId,
+      registeredSteering: (local.instructionSurfaces ?? []).some(p => changed.includes(p)) }
+    const proof = await proveSelfReview(receipt, binding, replay)
+    await git(local.checkout, "fetch", "-q", "origin", "main")
+    if (await git(local.checkout, "rev-parse", "origin/main") !== base) throw new DeliveryError("base moved during builder checks; repeat exact-base preflight", 2)
+    await writeJson(path.join(config.stateDir, "builders", `${repo.replaceAll("/", "--")}-${receipt.head}.json`), proof)
+    return proof
+  }
   async function review(repo, pr) {
     const initial = await view(repo, pr)
     requireOpen(initial)
     const current = await waitChecks(repo, pr, initial.headRefOid, true)
+    const local = getRepo(repo), head = current.headRefOid
+    await eligible(repo, pr, head)
+    const prior = reviews(current).filter(r => ["REVIEW: BLOCKED", "CHANGES REQUESTED"].includes(r.verdict)).at(-1)
+    const resolution = prior ? await confirmation(repo, pr, current, prior) : null
+    const confirmationKey = resolution && path.join(config.stateDir, "confirmations", `${keyFor(repo, pr)}-${head}-${resolution.evidenceDigest}.json`)
+    if (confirmationKey) return withLease(locks, `confirmation-${keyFor(repo, pr)}-${head}-${resolution.evidenceDigest}`,
+      async lease => {
+        const previous = await readJson(confirmationKey, null)
+        if (previous?.status === "complete") throw new DeliveryError("unchanged head/finding resolution already confirmed", 2)
+        // A posting interruption is reconciled from verified execution artifacts
+        // and remote comments while this owner holds the attempt lease.
+        if (previous?.attempt) {
+          const file = path.join(config.stateDir, "reviews", `${previous.attempt}.json`)
+          const receipt = await readJson(file, null)
+          if (receipt) {
+            const body = await fs.readFile(receipt.output, "utf8").catch(() => null)
+            const comment = body === null ? null : `${body}\nFactory-Review: ${previous.attempt}`
+            const candidate = comment && reviews({ comments: [{ body: comment }] })[0]
+            if (!candidate || !await verifiedReview(repo, pr, candidate) || candidate.sha !== head ||
+                previous.head !== head || previous.evidenceDigest !== resolution.evidenceDigest)
+              throw new DeliveryError("interrupted confirmation execution binding mismatch", 2)
+            const observed = await view(repo, pr); requireOpen(observed)
+            if (observed.headRefOid !== head) throw new DeliveryError("HEAD MOVED before confirmation reconciliation", 2)
+            if (!observed.comments.some(c => c.body === comment)) await gh(repo, pr, "comment", "--body", comment)
+            await writeJson(confirmationKey, { ...previous, status: "complete" })
+            await completeDeliveryWait(config, repo, pr)
+            return { head, verdict: candidate.verdict, reconciled: true }
+          }
+          // No durable successful execution exists. The lease ensures the
+          // previous supervised process group has ended before a new attempt.
+        }
+        return performReview(repo, pr, current, prior, resolution, confirmationKey, lease)
+      })
+    return performReview(repo, pr, current, prior, resolution, null, null)
+  }
+  async function performReview(repo, pr, current, prior, resolution, confirmationKey, lease) {
     const local = getRepo(repo), head = current.headRefOid
     await git(local.checkout, "fetch", "-q", "origin", head)
     const attempt = randomUUID()
@@ -287,18 +418,20 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       !(await git(dir, "status", "--porcelain", "--untracked-files=no"))
     const output = path.join(config.stateDir, `review-${keyFor(repo, pr)}-${attempt}.txt`)
     try {
-      const prior = reviews(current).filter(r => ["REVIEW: BLOCKED", "CHANGES REQUESTED"].includes(r.verdict)).at(-1)
-      const prompt = deliveryPrompt("review", { repo, pr, head, prior })
+      const base = await git(local.checkout, "rev-parse", "origin/main")
+      const prompt = deliveryPrompt("review", { repo, pr, head, prior, resolution, base, environment: workerEnvironment, builderId: `builder-${pr}` })
       await fs.rm(output, { force: true })
       const argv = [config.codex.command ?? "codex", ...createCodexExecArgs(config.codex),
         "--sandbox", "danger-full-access", "--output-last-message", output, "-"]
-      const execution = await guarded(repo, pr, "review", argv, dir, prompt, head)
+      if (confirmationKey) await writeJson(confirmationKey, { status: "running", attempt, head, evidenceDigest: resolution.evidenceDigest })
+      const execution = await guarded(repo, pr, "review", argv, dir, prompt, head, lease)
       if (!(await unchanged()))
         throw new DeliveryError("reviewer changed pinned source; refusing approval, worktree retained")
       const body = await fs.readFile(output, "utf8")
       const parsed = reviews({ comments: [{ body }] })[0]
       if (!parsed || parsed.sha !== head || !["APPROVE", "REVIEW: BLOCKED"].includes(parsed.verdict))
         throw new DeliveryError("invalid reviewer comment format or Reviewed-SHA")
+      if (parsed.verdict === "REVIEW: BLOCKED") findingBrief(parsed, repo, pr)
       const beforePost = await view(repo, pr)
       requireOpen(beforePost)
       if (beforePost.headRefOid !== head) throw new DeliveryError("HEAD MOVED during review; needs fresh review")
@@ -306,11 +439,20 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       const artifacts = path.join(config.stateDir, "reviews", attempt)
       await fs.mkdir(path.dirname(artifacts), { recursive: true, mode: 0o700 })
       await fs.writeFile(`${artifacts}.prompt`, prompt, { mode: 0o600 })
-      await writeJson(`${artifacts}.json`, { schema: "factory-review/v1", repo, pr, head, tree,
+      await writeJson(`${artifacts}.json`, { schema: "factory-review/v1", role: "independent-reviewer", executorId: `review-${attempt}`, repo, pr, head, tree,
         verdict: parsed.verdict, sourceVerified: true, cwd: dir, argv, execution,
         promptDigest: digestOf(prompt), output, outputDigest: digestOf(body), commentDigest: digestOf(comment) })
+      if (confirmationKey) await writeJson(confirmationKey, { status: "posting", attempt, head, evidenceDigest: resolution.evidenceDigest })
       await gh(repo, pr, "comment", "--body", comment)
+      if (confirmationKey) await writeJson(confirmationKey, { status: "complete", attempt, head, evidenceDigest: resolution.evidenceDigest })
+      await completeDeliveryWait(config, repo, pr)
       return { head, verdict: parsed.verdict }
+    } catch (error) {
+      // A successful execution receipt belongs to posting reconciliation. Only
+      // attempts without that evidence are failed and eligible for reexecution.
+      if (confirmationKey && !await readJson(path.join(config.stateDir, "reviews", `${attempt}.json`), null))
+        await writeJson(confirmationKey, { status: "failed", attempt, head, evidenceDigest: resolution.evidenceDigest, code: error.code ?? 1 })
+      throw error
     } finally {
       // Test artifacts may be untracked; keep a modified tracked source tree for
       // diagnosis rather than silently discarding an agent's prohibited edit.
@@ -321,21 +463,67 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
   async function fix(repo, pr, kind, worktree) {
     const current = await view(repo, pr)
     requireOpen(current)
+    await eligible(repo, pr, current.headRefOid)
+    const prior = reviews(current).filter(r => ["REVIEW: BLOCKED", "CHANGES REQUESTED"].includes(r.verdict)).at(-1)
+    const brief = prior ? await admittedBrief(prior, repo, pr) : null
+    const proofFile = path.join(config.stateDir, "fixes", `${keyFor(repo, pr)}.json`)
+    if (brief && kind === "fix") {
+      const existing = await readJson(proofFile, null)
+      if (existing?.head === current.headRefOid) {
+        validateResolutionProof(existing, brief, current.headRefOid)
+        if (existing.status === "resolved") return { head: current.headRefOid, resolution: existing }
+        const error = new DeliveryError("owned finding dependency: wait for tested pin receipt", 2)
+        error.dependencies = existing.dependencies; throw error
+      }
+      if (brief.findings.every(f => f.ownerRepo !== repo)) {
+        const receipt = { schema: "factory-fix-receipt/v1", role: "builder", builderId: brief.builderId,
+          repo, pr, priorHead: brief.head, head: current.headRefOid, reviewDigest: brief.reviewDigest, resolutions: [],
+          dependencies: brief.findings.map(f => ({ id: f.id, ownerRepo: f.ownerRepo, head: f.originalHead, contractPin: f.contractPin,
+            wakeCondition: "owner-tested-pin-receipt", deadline: new Date(Date.now() + 86400_000).toISOString().replace(/\.\d{3}Z$/, "Z") })) }
+        const proof = await proveFixReceipt({ brief, receipt, expectedHead: current.headRefOid }, replay)
+        await writeJson(proofFile, proof)
+        const error = new DeliveryError("owned finding dependency: wrong repo gets no fixer", 2)
+        error.dependencies = proof.dependencies; throw error
+      }
+    }
     if (current.isCrossRepository !== false) throw new DeliveryError("fork repair is unsupported; origin is not the PR source")
     const fallback = worktree && worktree !== "-" ? path.resolve(worktree) : path.join(getRepo(repo).worktreeRoot, `fix-${pr}`)
     const cwd = await branchWorktree(repo, current.headRefName, fallback, current.headRefOid)
     await git(cwd, "fetch", "-q", "origin")
     if ((await view(repo, pr)).headRefOid !== current.headRefOid || await git(cwd, "rev-parse", "HEAD") !== current.headRefOid)
       throw new DeliveryError("HEAD MOVED before repair; source retained")
-    await guarded(repo, pr, kind, [config.codex.command ?? "codex", ...createCodexExecArgs(config.codex), "--sandbox", "danger-full-access", "-"], cwd,
-      deliveryPrompt(kind, { repo, pr, head: current.headRefOid, branch: current.headRefName }), current.headRefOid)
-    const head = (await view(repo, pr)).headRefOid
-    if (head === current.headRefOid) {
-      const error = new DeliveryError("NO-PROGRESS: fix pushed nothing", 2)
-      error.wait = await suspend(repo, pr, head, { cause: "source-no-progress", code: 2, message: error.message, resetAt: null })
-      throw error
-    }
-    return { head }
+    const output = path.join(config.stateDir, `fix-output-${randomUUID()}.json`)
+    await fs.mkdir(config.stateDir, { recursive: true, mode: 0o700 })
+    await fs.writeFile(output, "", { mode: 0o600 })
+    try {
+      await guarded(repo, pr, kind, [config.codex.command ?? "codex", ...createCodexExecArgs(config.codex),
+        "--sandbox", "danger-full-access", "--output-last-message", output, "-"], cwd,
+        deliveryPrompt(kind, { repo, pr, head: current.headRefOid, branch: current.headRefName, brief,
+          base: await git(cwd, "rev-parse", "origin/main"), environment: workerEnvironment, builderId: brief?.builderId ?? `builder-${pr}` }), current.headRefOid)
+      const observed = await view(repo, pr)
+      requireOpen(observed)
+      if (observed.headRefOid === current.headRefOid) {
+        const error = new DeliveryError("NO-PROGRESS: fix pushed nothing", 2)
+        error.wait = await suspend(repo, pr, current.headRefOid, { cause: "source-no-progress", code: 2, message: error.message, resetAt: null })
+        throw error
+      }
+      if (observed.headRefOid !== await git(cwd, "rev-parse", "HEAD")) throw new DeliveryError("HEAD MOVED after repair; receipt refused", 2)
+      let packet
+      try { packet = JSON.parse(await fs.readFile(output, "utf8")) } catch { throw new DeliveryError("invalid executor fix receipt JSON", 2) }
+      const selfReview = await builderPreflight(repo, packet.selfReview)
+      if (selfReview.head !== observed.headRefOid || selfReview.builderId !== (brief?.builderId ?? `builder-${pr}`))
+        throw new DeliveryError("builder receipt binding mismatch", 2)
+      let resolution = null
+      if (brief) {
+        resolution = await proveFixReceipt({ brief, receipt: packet.fix, expectedHead: observed.headRefOid }, replay)
+        await writeJson(proofFile, resolution)
+        if (resolution.status !== "resolved") {
+          const error = new DeliveryError("owned finding dependency: wait for tested pin receipt", 2)
+          error.dependencies = resolution.dependencies; throw error
+        }
+      }
+      return { head: observed.headRefOid, resolution }
+    } finally { await fs.rm(output, { force: true }) }
   }
   async function queueState(fn) {
     return withLease(locks, "queue-state", async () => {
@@ -540,6 +728,17 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
         if (repo) getRepo(repo)
         let data
         switch (step) {
+          case "builder:preflight": data = await builderPreflight(repo, request.receipt); break
+          case "resolve-findings": {
+            const current = await view(repo, pr); requireOpen(current)
+            const prior = reviews(current).filter(r => ["REVIEW: BLOCKED", "CHANGES REQUESTED"].includes(r.verdict)).at(-1)
+            if (!prior) throw new DeliveryError("no original finding set", 2)
+            const brief = await admittedBrief(prior, repo, pr)
+            const proof = await proveFixReceipt({ brief, receipt: request.receipt, expectedHead: current.headRefOid }, replay)
+            if ((await view(repo, pr)).headRefOid !== current.headRefOid) throw new DeliveryError("HEAD MOVED during resolution proof", 2)
+            await writeJson(path.join(config.stateDir, "fixes", `${keyFor(repo, pr)}.json`), proof)
+            data = proof; break
+          }
           case "pr:inspect": {
             let current = await view(repo, pr)
             if (current.state === "MERGED") { data = await verifyDelivery(repo, pr, current, current.headRefOid); break }
@@ -577,6 +776,11 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
         }
         return pass(data)
       } catch (error) {
+        if (error.dependencies && !error.wait && ["review", "fix"].includes(step)) {
+          const current = await view(repo, pr)
+          error.wait = await suspend(repo, pr, current.headRefOid, { cause: "finding-dependency", code: 2,
+            message: "owned finding dependency: wait for tested pin receipt", resetAt: null, dependencies: error.dependencies })
+        }
         if (!error.wait) await log({ step, repo, pr, status: "failed", code: error.code ?? 1, message: error.message })
         return fail(error)
       }

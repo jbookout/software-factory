@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "factory-pr-delivery/v1",
+  "$defs": {
+    "brief": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "repo", "pr", "head", "reviewDigest", "builderId", "base", "environment", "findings"],
+      "properties": {
+        "schema": {"const": "factory-delivery-brief/v1"},
+        "repo": {"$ref": "#/$defs/repo"},
+        "pr": {"type": "integer", "minimum": 1},
+        "head": {"$ref": "#/$defs/sha"},
+        "reviewDigest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "builderId": {"$ref": "#/$defs/id"},
+        "base": {"$ref": "#/$defs/sha"},
+        "environment": {"$ref": "#/$defs/text"},
+        "findings": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/finding"}}
+      }
+    },
+    "fix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "role", "builderId", "repo", "pr", "priorHead", "head", "reviewDigest", "resolutions", "dependencies"],
+      "properties": {
+        "schema": {"const": "factory-fix-receipt/v1"},
+        "role": {"const": "builder"},
+        "builderId": {"$ref": "#/$defs/id"},
+        "repo": {"$ref": "#/$defs/repo"},
+        "pr": {"type": "integer", "minimum": 1},
+        "priorHead": {"$ref": "#/$defs/sha"},
+        "head": {"$ref": "#/$defs/sha"},
+        "reviewDigest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "resolutions": {"type": "array", "minItems": 0, "items": {"$ref": "#/$defs/resolution"}},
+        "dependencies": {"type": "array", "minItems": 0, "items": {"$ref": "#/$defs/dependency"}}
+      }
+    },
+    "selfReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "role",
+        "builderId",
+        "repo",
+        "head",
+        "base",
+        "environment",
+        "issues",
+        "checks",
+        "checklist",
+        "requirements",
+        "testContract",
+        "instructionEval"
+      ],
+      "properties": {
+        "schema": {"const": "factory-self-review/v1"},
+        "role": {"const": "builder"},
+        "builderId": {"$ref": "#/$defs/id"},
+        "repo": {"$ref": "#/$defs/repo"},
+        "head": {"$ref": "#/$defs/sha"},
+        "base": {"$ref": "#/$defs/sha"},
+        "environment": {"$ref": "#/$defs/text"},
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "repair", "check"],
+            "properties": {"id": {"$ref": "#/$defs/id"}, "repair": {"$ref": "#/$defs/text"}, "check": {"$ref": "#/$defs/id"}}
+          }
+        },
+        "checks": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/check"}},
+        "checklist": {"type": "array", "minItems": 11, "items": {"$ref": "#/$defs/row"}},
+        "requirements": {"type": "array", "minItems": 6, "items": {"$ref": "#/$defs/row"}},
+        "testContract": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["fixtureOwner", "resources", "selectionDependencies", "globalState"],
+          "properties": {
+            "fixtureOwner": {"$ref": "#/$defs/repo"},
+            "resources": {"type": "array", "items": {"$ref": "#/$defs/text"}},
+            "selectionDependencies": {"type": "array", "items": {"$ref": "#/$defs/text"}},
+            "globalState": {"const": false}
+          }
+        },
+        "instructionEval": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["status", "relevanceTest"],
+              "properties": {"status": {"const": "na"}, "relevanceTest": {"type": "string", "minLength": 20}}
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["status", "checks"],
+              "properties": {"status": {"const": "checked"}, "checks": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/id"}}}
+            }
+          ]
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "ownerRepo", "consumer", "originalHead", "contractPin", "reproduction", "ownedPaths"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "ownerRepo": {"$ref": "#/$defs/repo"},
+        "consumer": {"$ref": "#/$defs/consumer"},
+        "originalHead": {"$ref": "#/$defs/sha"},
+        "contractPin": {"$ref": "#/$defs/sha"},
+        "reproduction": {"$ref": "#/$defs/reproduction"},
+        "ownedPaths": {"$ref": "#/$defs/paths"}
+      }
+    },
+    "resolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "ownerRepo", "consumer", "head", "contractPin", "reproduction", "changedPaths"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "ownerRepo": {"$ref": "#/$defs/repo"},
+        "consumer": {"$ref": "#/$defs/consumer"},
+        "head": {"$ref": "#/$defs/sha"},
+        "contractPin": {"$ref": "#/$defs/sha"},
+        "reproduction": {"$ref": "#/$defs/reproduction"},
+        "changedPaths": {"$ref": "#/$defs/paths"}
+      }
+    },
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "ownerRepo", "head", "contractPin", "wakeCondition", "deadline"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "ownerRepo": {"$ref": "#/$defs/repo"},
+        "head": {"$ref": "#/$defs/sha"},
+        "contractPin": {"$ref": "#/$defs/sha"},
+        "wakeCondition": {"$ref": "#/$defs/text"},
+        "deadline": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"}
+      }
+    },
+    "row": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "status", "checks"],
+          "properties": {
+            "id": {"$ref": "#/$defs/id"},
+            "status": {"const": "checked"},
+            "checks": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "status", "relevanceTest"],
+          "properties": {
+            "id": {"$ref": "#/$defs/id"},
+            "status": {"const": "na"},
+            "relevanceTest": {"type": "string", "minLength": 20, "maxLength": 4000}
+          }
+        }
+      ]
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "head", "argv", "acknowledgement"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "head": {"$ref": "#/$defs/sha"},
+        "argv": {"$ref": "#/$defs/argv"},
+        "acknowledgement": {"$ref": "#/$defs/text"},
+        "control": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["head", "argv"],
+          "properties": {"head": {"$ref": "#/$defs/sha"}, "argv": {"$ref": "#/$defs/argv"}}
+        }
+      }
+    },
+    "sha": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+    "repo": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+$", "maxLength": 100},
+    "text": {"type": "string", "minLength": 1, "maxLength": 4000},
+    "argv": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"$ref": "#/$defs/text"}},
+    "paths": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$", "maxLength": 500}
+    },
+    "consumer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo", "head"],
+      "properties": {"repo": {"$ref": "#/$defs/repo"}, "head": {"$ref": "#/$defs/sha"}}
+    },
+    "reproduction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["argv", "acknowledgement"],
+      "properties": {"argv": {"$ref": "#/$defs/argv"}, "acknowledgement": {"$ref": "#/$defs/text"}}
+    }
+  }
+}

@@ -11,7 +11,11 @@ export const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 export const keyFor = (repo, pr) => `${encodeURIComponent(repo)}-${pr}`
 export async function readJson(file, fallback) {
   try { return JSON.parse(await fs.readFile(file, "utf8")) }
-  catch (error) { if (error.code === "ENOENT") return fallback; throw error }
+  catch (error) {
+    if (error.code === "ENOENT") return fallback
+    if (error instanceof SyntaxError) throw new DeliveryError("persisted delivery JSON is invalid", 2)
+    throw error
+  }
 }
 export async function writeJson(file, value) {
   const temp = `${file}.${randomUUID()}.tmp`

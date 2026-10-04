@@ -353,7 +353,7 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
 }
 
 // The PR lifecycle crosses the same execute(step, request) seam as build jobs.
-// Progress is the remote head, not the agent's claimed completion or findings.
+// Progress is a changed remote head or a tested executor resolution receipt.
 export async function runPrDelivery(job, adapter) {
   const { rounds = 3, ...request } = job
   if (!Number.isSafeInteger(rounds) || rounds <= 0) throw new Error("rounds must be a positive integer")

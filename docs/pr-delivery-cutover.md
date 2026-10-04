@@ -71,7 +71,7 @@ Queue comments say `DELIVERY VERIFIED` and are outside the review protocol.
 
 Stops are observable in CLI output; process and adapter outcomes also enter
 private `delivery.jsonl`. An unchanged
-repair head exits 2 (`NO-PROGRESS`), exhausted usage/slots exits 75, timeout exits
+repair head without a tested finding-resolution receipt exits 2 (`NO-PROGRESS`), exhausted usage/slots exits 75, timeout exits
 142, unknown repo exits 9. Failed merge outcomes remain in `queue.json`;
 transient API errors retry three times after the initial attempt.
 Automatic scanning can enqueue a recovered failed head again, preserving prior
@@ -158,3 +158,106 @@ twice, respecting bounded provider delay. They never become CI-red.
 starts separately, and wait events name their cause/reset. Neither count proves
 paid model usage. The audit's weekly reduction targets require matched rollout
 cohorts; these replays do not establish fleet savings or active installation.
+
+## Finding receipts and builder preflight
+
+All builder and review entry points share
+[the receipt schema](../schemas/pr-delivery.schema.json). A blocking review
+includes a one-line `Delivery-Brief` manifest whose IDs match every numbered
+finding. It binds the original reproduction, owning repository/paths, consumer
+revision, contract pin, reviewed head and review bytes. Legacy blocking comments
+without that manifest refuse dispatch until the orchestrator supplies the
+missing binding; the factory never guesses an owner from prose.
+
+Fix workers return `{fix, selfReview}` JSON. The adapter replays each original
+command on its original and repaired sources in disposable detached worktrees,
+verifies claimed changed paths against Git, and pins the consumer worktree too.
+Commands receive `FACTORY_PROOF_HEAD`, `FACTORY_CONTRACT_PIN`,
+`FACTORY_CONSUMER_HEAD` and `FACTORY_CONSUMER_WORKTREE`. Each reproduction prints
+its exact acknowledgement after checking the property, exits 1 for the failing
+control and 0 for the repair. Empty, partial, refused, timed-out or exceptional
+results never count. A reseal or main merge with the same defect cannot pass.
+Modified proof source is retained for diagnosis rather than discarded.
+
+Foreign findings create one owned wait with the finding ID, original head/pin,
+deadline and `owner-tested-pin-receipt` next action. They launch no wrong-repo
+fixer. Configure the owning and consuming repos, then use
+`node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" resolve-findings "$R" "$N" "$RECEIPT"`
+to replay the executor's tested pin receipt. Confirmation requires every finding
+resolved at the current PR head. Unchanged head/finding/evidence admits one
+confirmation attempt; a tested foreign owner pin wakes the recovery loop even
+when the local PR head stays unchanged. A distinct reviewer still checks the
+repair and CI.
+
+Before creating a PR, the external builder calls
+`node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" builder-preflight "$R" "$RECEIPT"`.
+This command validates and replays a `factory-self-review/v1` receipt against
+the pushed head, current `origin/main` and actual Node/platform environment.
+It does not create a PR or a review comment. The builder remains responsible
+for calling it before PR creation; the factory does not intercept arbitrary
+`gh pr create` calls. Repair workers invoke the same admission automatically.
+The local pass uses the identical full-review checklist without its posting
+instruction. Each heading references executed checks; each N/A gives its failed
+relevance test. Repairs reference the same failing/repaired reproduction.
+Fixture ownership, resources, selection dependencies and the six builder
+requirements are mandatory. Product-owned `instructionSurfaces` may list
+registered steering file paths in repo config; an intersecting diff must carry
+executed instruction-eval checks.
+
+New proof records persist command/output/issue digests and execution results,
+not raw subprocess diagnostics or repair narrative. They include replay time,
+check and repaired-issue counts; unreported model tokens remain unknown.
+Rollout comparison must still measure paired defect detection, false blockers,
+first-review findings and total model usage. Builder proof has role `builder`;
+only a fresh factory reviewer execution with role `independent-reviewer` can
+satisfy approval provenance. Earlier reviewer receipts without that role require
+a new independent review. These are source capabilities and replay evidence;
+installation into the active orchestration directory remains the orchestrator's
+cutover operation.
+
+
+### Executable finding admission and replay isolation
+
+A blocked comment is executable input only when its exact bytes have a verified
+local independent-review receipt, or GitHub REST attributes it to a numeric user
+ID in that repository's `trustedReviewerIds`. This optional allowlist admits
+external orchestrator briefs; an empty list permits only verified factory
+reviews. A login, association, quoted marker or syntactically valid brief alone
+cannot grant executable admission. Approvals still require factory execution
+provenance, even for allowlisted users.
+
+All receipt replay uses a clean environment and a platform sandbox:
+macOS Seatbelt (`/usr/bin/sandbox-exec`) or Linux Bubblewrap (`bwrap` with working
+unprivileged user namespaces, including private network setup). CI installs
+Bubblewrap on the pinned Ubuntu 22.04 image and runs startup and host-network
+isolation smoke tests before the full suite. Ubuntu 24 runner policy refused
+private-loopback setup in the tested image; other Linux hosts must provide a
+compatible sandbox policy. Unsupported or unavailable isolation refuses proof.
+Replay can read system tooling and its pinned producer
+and consumer worktrees, and write only in those disposable trees. It cannot read
+the worker's home or shared Git metadata, inherit its credential environment, or
+use the network. Checks must use source files and `FACTORY_PROOF_HEAD`,
+`FACTORY_CONSUMER_HEAD`, `FACTORY_CONSUMER_WORKTREE`, and `FACTORY_CONTRACT_PIN`;
+network fetches, credential access and Git commands requiring the shared `.git`
+directory cannot serve as proof. Tracked source mutations still refuse proof and
+retain the affected trees for diagnosis. This execution contract applies to
+builder preflight as well as original/repaired finding replay.
+
+Both repair and confirmation use the same cached-proof validator. It binds the
+canonical finding manifest and rederives the semantic evidence digest from the
+current findings and the recorded repaired pins. Local findings must fail on the
+reviewed head. A repaired consumer in the reviewed repository must use the
+current PR head; the original failing replay retains the original consumer.
+Optional notes after `Non-blocking` or `Follow-ups (non-blocking)` do not become
+executable findings. Keep reproduction instructions indented beneath their
+finding.
+
+Confirmation takes an owned lease before reserving a model run. Its persisted
+attempt moves from running to posting to complete, or failed when execution
+produces no verified receipt. A failed child with no
+verified successful execution can be retried after the prior process group has
+ended. A posting interruption first verifies the saved execution artifacts and
+observes remote comments: an existing exact comment completes the attempt, and
+an absent comment is reposted with the same attempt identity without rerunning
+the model. Successful attempts remain deduplicated. Malformed persisted JSON
+produces a fixed diagnostic without its input bytes.
