@@ -1,6 +1,6 @@
-import { performance } from 'node:perf_hooks'
-
-const realClock = { now: () => performance.now(), setTimer: setTimeout, clearTimer: clearTimeout }
+// Node's host monotonic clock is shared by the controller and its supervisor.
+export const monotonicNow = () => Number(process.hrtime.bigint() / 1_000_000n)
+const realClock = { now: monotonicNow, setTimer: setTimeout, clearTimer: clearTimeout }
 export class DeadlineError extends Error {
   constructor(phase) {
     super(`${phase.toUpperCase()}-TIMEOUT`)

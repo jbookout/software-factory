@@ -1,4 +1,5 @@
 import { killOwnedGroup } from "./process-group.mjs"
+import { monotonicNow } from "./deadline.mjs"
 import { spawn, fork } from "node:child_process"
 import { readJson, writeJson } from "./pr-delivery-state.mjs"
 
@@ -19,7 +20,7 @@ const stop = () => {
 process.on("disconnect", stop)
 process.on("SIGTERM", stop)
 process.on("SIGINT", stop)
-process.once("message", ({ argv, cwd, env, input, deadline, grace = 100, bindings = [] }) => {
+process.once("message", ({ argv, cwd, env, input, elapsedDeadline, grace = 100, bindings = [] }) => {
   const latched = bindings.length > 0
   child = latched
     ? fork(new URL("./process-launcher.mjs", import.meta.url), [], { cwd, env, execArgv: [],
@@ -27,7 +28,7 @@ process.once("message", ({ argv, cwd, env, input, deadline, grace = 100, binding
     : spawn(argv[0], argv.slice(1), { cwd, env, shell: false,
       detached: process.platform !== "win32", stdio: ["pipe", "inherit", "inherit"] })
   if (process.connected) process.send({ groupPid: child.pid })
-  timer = setTimeout(() => { timedOut = true; stop() }, Math.max(0, deadline - Date.now() - grace))
+  timer = setTimeout(() => { timedOut = true; stop() }, Math.max(0, elapsedDeadline - monotonicNow() - grace))
   child.stdin.on("error", error => { if (error.code !== "EPIPE") stop() })
   const persisted = Promise.all(bindings.map(async ({ file, token }) => {
     const owner = await readJson(file, null)
@@ -42,7 +43,7 @@ process.once("message", ({ argv, cwd, env, input, deadline, grace = 100, binding
     let persistenceTimer
     try {
       await Promise.race([persisted.catch(() => {}), new Promise(resolve => {
-        persistenceTimer = setTimeout(resolve, Math.max(0, deadline - Date.now()))
+        persistenceTimer = setTimeout(resolve, Math.max(0, elapsedDeadline - monotonicNow()))
       })])
     } finally { clearTimeout(persistenceTimer) }
     clearTimeout(timer); clearTimeout(hardStop)

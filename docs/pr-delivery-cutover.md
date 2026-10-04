@@ -169,7 +169,10 @@ remaining monotonic budget. Readiness checks run immediately, then back off;
 Retry-After/reset guidance never renews the API or attempt deadline. The ledger
 records API, readiness, queue, execution, and cleanup durations and typed stops.
 The supervisor reserves termination time inside the process deadline, including
-an unresponsive launch binding. A launch latch prevents execution until every
+an unresponsive launch binding. Active process expiry uses the shared host
+monotonic clock; persisted wall deadlines are readback metadata. Lease recovery
+does not kill a live supervised job because its wall deadline moved. A launch
+latch prevents execution until every
 group lease binding has been persisted. Timeout/cancellation of a started mutation
 returns `uncertain` and `readback-before-retry`; an unchanged guarded mutation
 cannot redispatch. Observe the remote head and reconcile the effect before

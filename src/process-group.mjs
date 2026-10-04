@@ -4,7 +4,9 @@ import { spawnSync } from 'node:child_process'
 // Permission errors on any live group remain failures; never suppress them by
 // errno alone. Observe only PID/group/state, never command arguments or output.
 function liveMembers(pid) {
-  const observation = spawnSync('ps', ['-axo', 'pid=,pgid=,stat='], {
+  // The macOS fallback must read the system utility, including when a caller
+  // injects a PATH shim for another process observation contract.
+  const observation = spawnSync('/bin/ps', ['-axo', 'pid=,pgid=,stat='], {
     encoding: 'utf8', timeout: 100, maxBuffer: 1_000_000
   })
   if (observation.error || observation.status !== 0) return null

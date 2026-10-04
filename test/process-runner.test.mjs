@@ -25,6 +25,12 @@ test("process seam treats arguments literally without a shell", async () => {
   assert.equal(result.stdout, literal)
 })
 
+test('wall-clock corrections cannot shorten the active process budget',async t=>{
+ t.mock.method(Date,'now',()=>0)
+ const result=await runProcess([process.execPath,'-e',"process.stdout.write('healthy')"],{timeoutMs:2000})
+ assert.equal(result.code,0);assert.equal(result.stdout,'healthy')
+})
+
 test("streamed Codex output does not impose an accidental output budget", async () => {
   let bytes = 0
   const result = await runProcess([process.execPath, "-e", "process.stdout.write('x'.repeat(2000000))"], {
@@ -131,4 +137,16 @@ test('a permission error on a live group remains a refusal',async t=>{
  t.mock.method(process,'kill',()=>{const error=Error('synthetic permission refusal');error.code='EPERM';throw error})
  assert.equal(ownedGroupAlive(group),true)
  assert.throws(()=>killOwnedGroup(group,'SIGKILL'),{code:'EPERM'})
+})
+
+test('macOS retired-group readback uses the system observer rather than a PATH shim',async t=>{
+ if(process.platform!=='darwin') return t.skip('macOS retired-group EPERM behavior')
+ const {killOwnedGroup,ownedGroupAlive}=await import('../src/process-group.mjs')
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-group-observer-')),prior=process.env.PATH
+ t.after(async()=>{process.env.PATH=prior;await fs.rm(root,{recursive:true,force:true})})
+ await fs.writeFile(path.join(root,'ps'),'#!/bin/sh\necho "2147483646 2147483646 R"\n',{mode:0o755})
+ process.env.PATH=root+path.delimiter+prior
+ t.mock.method(process,'kill',()=>{const error=Error('synthetic retired-group EPERM');error.code='EPERM';throw error})
+ assert.equal(ownedGroupAlive(2147483646),false)
+ assert.doesNotThrow(()=>killOwnedGroup(2147483646,'SIGKILL'))
 })

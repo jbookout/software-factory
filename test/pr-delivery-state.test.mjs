@@ -5,6 +5,17 @@ import os from "node:os"
 import path from "node:path"
 import { acquireLease, withLease } from "../src/pr-delivery-state.mjs"
 
+test('lease recovery does not kill a live job when only its wall deadline moved',async t=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-lease-clock-'));t.after(()=>fs.rm(root,{recursive:true,force:true}))
+ const release=await acquireLease(root,'slot')
+ try {
+  await release.bindJob({pid:process.pid,groupPid:123456,deadline:Date.now()-1000})
+  const signals=[];t.mock.method(process,'kill',(pid,signal)=>{signals.push(signal)})
+  assert.equal(await acquireLease(root,'slot'),null)
+  assert.equal(signals.filter(signal=>signal==='SIGKILL').length,0)
+ } finally {await release()}
+})
+
 for (const name of ["budget", "merge-owner", "queue-state"]) test(`dead ${name} and reaper recover without a second call`, async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "factory-lease-"))
   t.after(() => fs.rm(root, { recursive: true, force: true }))

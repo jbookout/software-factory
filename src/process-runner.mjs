@@ -1,4 +1,5 @@
 import { killOwnedGroup } from './process-group.mjs'
+import { monotonicNow } from './deadline.mjs'
 import { fork } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
 
@@ -11,7 +12,8 @@ export function runProcess(argv, { cwd, env = process.env, input = '', timeoutMs
   if (signal?.aborted) return Promise.resolve({ code: 130, cancelled: true, timedOut: false,
     uncertain: false, stdout: '', stderr: '', started: false })
   return new Promise((resolve, reject) => {
-    const deadline = Date.now() + timeoutMs, grace = Math.min(100, Math.floor(timeoutMs / 5))
+    const deadline = Date.now() + timeoutMs, elapsedDeadline = monotonicNow() + timeoutMs
+    const grace = Math.min(100, Math.floor(timeoutMs / 5))
     const child = fork(new URL('./process-supervisor.mjs', import.meta.url), [], {
       stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: []
     })
@@ -30,8 +32,8 @@ export function runProcess(argv, { cwd, env = process.env, input = '', timeoutMs
       child.kill('SIGTERM')
     }
     const abort = () => { cancelled = true; stop() }
-    const timer = setTimeout(() => { timedOut = true; stop() }, Math.max(0, timeoutMs - grace))
-    const hardStop = setTimeout(hardKill, timeoutMs)
+    const timer = setTimeout(() => { timedOut = true; stop() }, Math.max(0, elapsedDeadline - monotonicNow() - grace))
+    const hardStop = setTimeout(hardKill, Math.max(0, elapsedDeadline - monotonicNow()))
     signal?.addEventListener('abort', abort, { once: true })
     if (signal?.aborted) abort()
     const collect = (stream, chunk) => {
@@ -72,7 +74,7 @@ export function runProcess(argv, { cwd, env = process.env, input = '', timeoutMs
     })
     Promise.resolve().then(() => onSpawn?.({ pid: child.pid, deadline })).then(bindings => {
       if (child.connected && !timedOut && !cancelled && !launchError)
-        child.send({ argv, cwd, env, input, deadline, grace, bindings: bindings ?? [] }, error => {
+        child.send({ argv, cwd, env, input, elapsedDeadline, grace, bindings: bindings ?? [] }, error => {
           if (error) { launchError = new Error('process launch binding failed'); stop() }
         })
     }).catch(() => { launchError = new Error('process launch binding failed'); stop() })

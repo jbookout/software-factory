@@ -43,7 +43,9 @@ export async function acquireLease(root, name, { budget } = {}) {
       // A supervised job keeps its slot even after its controller dies.
       const group = peer.job?.groupPid
       const groupAlive = group && ownedGroupAlive(group)
-      if (groupAlive && (Date.now() >= peer.job.deadline || (!alive(peer.pid) && !alive(peer.job.pid)))) {
+      // The independent supervisor owns elapsed expiry. A wall-clock correction
+      // in persisted metadata must not terminate an active supervised mutation.
+      if (groupAlive && !alive(peer.pid) && !alive(peer.job.pid)) {
         try { killOwnedGroup(group, "SIGKILL") }
         catch (error) { if (error.code !== "ESRCH") throw error }
       }
@@ -87,37 +89,41 @@ export async function withLease(root, name, fn, { waitMs = 0, pollMs = 30, budge
 
 export async function reserveCodex(config, repo, pr, kind, budget = new Deadline(config.queueTimeoutMs ?? config.limits.timeoutMs, { phase: "queue" })) {
   const root = path.join(config.stateDir, "locks")
-  while (true) {
-    budget.check()
-    const result = await withLease(root, "budget", async () => {
-      const file = path.join(config.stateDir, "usage.json")
-      const usage = (await readJson(file, [])).filter(r => r.at >= Date.now() - 86400_000)
-      if (usage.filter(r => r.repo === repo && r.pr === pr).length >= config.limits.runsPer24h)
-        {
-          const error = new DeliveryError(`BUDGET-STOP ${repo}#${pr}: runs per 24h exhausted`, 75)
-          const records = usage.filter(r => r.repo === repo && r.pr === pr).sort((a, b) => a.at - b.at)
-          error.resetAt = records[records.length - config.limits.runsPer24h].at + 86400_001
-          error.cause = "budget-exhausted"
-          throw error
+  try {
+    while (true) {
+      budget.check()
+      const result = await withLease(root, "budget", async () => {
+        const file = path.join(config.stateDir, "usage.json")
+        const usage = (await readJson(file, [])).filter(r => r.at >= Date.now() - 86400_000)
+        if (usage.filter(r => r.repo === repo && r.pr === pr).length >= config.limits.runsPer24h)
+          {
+            const error = new DeliveryError(`BUDGET-STOP ${repo}#${pr}: runs per 24h exhausted`, 75)
+            const records = usage.filter(r => r.repo === repo && r.pr === pr).sort((a, b) => a.at - b.at)
+            error.resetAt = records[records.length - config.limits.runsPer24h].at + 86400_001
+            error.cause = "budget-exhausted"
+            throw error
+          }
+        for (let i = 0; i < config.limits.slots; i++) {
+          const release = await acquireLease(root, `codex-slot-${i}`, { budget })
+          if (release) {
+            try { budget.check(); await writeJson(file, [...usage, { repo, pr, kind, at: Date.now() }]) }
+            catch (e) { await release(); throw e }
+            return release
+          }
         }
-      for (let i = 0; i < config.limits.slots; i++) {
-        const release = await acquireLease(root, `codex-slot-${i}`, { budget })
-        if (release) {
-          try { await writeJson(file, [...usage, { repo, pr, kind, at: Date.now() }]) }
-          catch (e) { await release(); throw e }
-          return release
-        }
+        return null
+      }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget })
+      if (result) {
+        try { budget.check(); return result }
+        catch (error) { await result(); throw error }
       }
-      return null
-    }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget })
-    if (result) return result
-    try { await budget.sleep(config.pollMs) }
-    catch (error) {
-      if (error.code !== 142) throw error
-      const stop = new DeliveryError(`SLOT-STOP ${repo}#${pr}: concurrency wait timed out`, 75)
-      stop.cause = "slot-wait"; stop.phase = "queue"
-      throw stop
+      await budget.sleep(config.pollMs)
     }
+  } catch (error) {
+    if (error.code !== 142) throw error
+    const stop = new DeliveryError(`SLOT-STOP ${repo}#${pr}: concurrency wait timed out`, 75)
+    stop.cause = "slot-wait"; stop.phase = "queue"
+    throw stop
   }
 }
 

@@ -6,13 +6,27 @@ import path from 'node:path'
 import { fakeClock, never } from './helpers/deadline-and-process.mjs'
 import { Deadline, waitForCondition } from '../src/deadline.mjs'
 
+test('Codex slot queue exhaustion retains its typed refusal at every deadline boundary',async t=>{
+ const {reserveCodex,acquireLease}=await import('../src/pr-delivery-state.mjs')
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-slot-boundary-'));t.after(()=>fs.rm(root,{recursive:true,force:true}))
+ const config={stateDir:root,limits:{runsPer24h:8,slots:1,timeoutMs:500},queueTimeoutMs:100,commandTimeoutMs:500,pollMs:5}
+ const occupied=await acquireLease(path.join(root,'locks'),'codex-slot-0'),clock=fakeClock(),budget=new Deadline(100,{clock,phase:'queue'})
+ clock.advance(100)
+ try {await assert.rejects(reserveCodex(config,'fixture/repo',1,'review',budget),{code:75,cause:'slot-wait',phase:'queue'})}
+ finally {await occupied()}
+ const healthy=await reserveCodex(config,'fixture/repo',1,'review',new Deadline(500,{phase:'queue'}));await healthy()
+})
+
 test('admission scans stop at their queue deadline and dispose partial claims',async t=>{
  const {reserveCompute}=await import('../src/process-capacity.mjs')
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-election-deadline-'));t.after(()=>fs.rm(root,{recursive:true,force:true}))
  const config={stateDir:root,resources:{capacity:250,browserConcurrency:1},pollMs:5}
+ const clock=fakeClock(),mkdir=fs.mkdir.bind(fs)
+ // Storage work consumes the queue clock without depending on host speed.
+ t.mock.method(fs,'mkdir',async(...args)=>{clock.advance(1);return mkdir(...args)})
  let release,observed=false
  try {
-  await assert.rejects(async()=>{release=await reserveCompute(config,1,new Deadline(50,{phase:'queue'}),{snapshot:async()=>{observed=true;return []}})},{code:142})
+  await assert.rejects(async()=>{release=await reserveCompute(config,1,new Deadline(50,{clock,phase:'queue'}),{snapshot:async()=>{observed=true;return []}})},{code:142})
   assert.equal(observed,false,'expired scans must not reach the process observation')
  } finally {if(release) await release()}
  for(const dir of await fs.readdir(path.join(root,'locks'))) assert.deepEqual(await fs.readdir(path.join(root,'locks',dir)),[])
