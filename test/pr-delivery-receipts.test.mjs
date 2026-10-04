@@ -152,3 +152,18 @@ test("builder runs the identical full checklist before PR creation, with no appr
   for (const word of ["failing control", "consumers", "pending", "empty exit-zero", "canary", "current source", "instruction eval", "fixture ownership"])
     assert.ok(local.includes(word), word)
 })
+
+test('blocking 3: local original source must be the reviewed head before any replay',async()=>{
+ const input=inputs();input.brief.findings[0].originalHead=C;input.brief.findings[0].contractPin=C
+ let calls=0
+ await assert.rejects(prove(input,async()=>{calls++;return {code:calls===1?1:0,stdout:'property-checked',pid:42}}),/reviewed|source|binding/i)
+ assert.equal(calls,0)
+})
+test('blocking 4: foreign repair retains original consumer but replays the current PR consumer',async()=>{
+ const input=inputs(consumer),finding=input.brief.findings[0]
+ finding.consumer={repo,head:A};input.receipt.resolutions[0].consumer={repo,head:B}
+ const calls=[];assert.equal((await prove(input,async args=>{calls.push(args);return replay(args)})).status,'resolved')
+ assert.deepEqual(calls.map(c=>c.consumer.head),[A,B])
+ input.receipt.resolutions[0].consumer.head=A
+ await assert.rejects(prove(input),/consumer|binding/i)
+})

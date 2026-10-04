@@ -72,7 +72,7 @@ if(tool === 'codex') {
  respond({total_count:runs.length,check_runs:runs.slice((page-1)*100,page*100)});
  } else if(route.includes('/statuses')) respond(s.statuses??s.statusCheckRollup.filter(c=>c.__typename==='StatusContext').map((c,i)=>({id:i+1,context:c.context??'test',state:c.state?.toLowerCase()})));
  else { console.error('unexpected REST route');process.exit(2); }
- } else if(action==='comment') {s.comments.push({body:args[args.indexOf('--body')+1],author:{login:'reviewer'}}); save();}
+ } else if(action==='comment') {if(s.commentFailure==='before')process.exit(17);s.comments.push({body:args[args.indexOf('--body')+1],author:{login:'reviewer'},user:{id:101,login:'reviewer'}}); save();if(s.commentFailure==='after')process.exit(17);}
  else if(action==='ready') {s.isDraft=false;save();}
  else if(action==='update-branch') {
  git('-C',s.checkout,'checkout','-q','topic'); git('-C',s.checkout,'fetch','-q','origin'); git('-C',s.checkout,'merge','--no-edit','origin/main'); git('-C',s.checkout,'push','-q','origin','topic');
@@ -103,7 +103,7 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
  const state={ remote,checkout,number:7,title:"Fixture PR",state:"OPEN",baseRefName:"main",isCrossRepository:false,headRefName:"topic",headRefOid:head,mergeStateStatus:"CLEAN",mergeable:"MERGEABLE",isDraft:false,author:{login:"builder"},comments:[],statusCheckRollup:[{status:"COMPLETED",conclusion:"SUCCESS"}],calls:[],ghCalls:[],...overrides }
  await fs.writeFile(env.FAKE_PR,JSON.stringify(state))
  const config=path.join(root,"config.json"), stateDir=path.join(root,"state")
- const cfg={repos:{"fixture/new-repository":{checkout,originUrl:remote,worktreeRoot:path.join(root,"worktrees"),requiredChecks:[{name:"test"}]}},stateDir,codex:{model:"fixture-model",effort:"high"},limits:{runsPer24h:8,slots:2,timeoutMs:5000},pollMs:5,retryMs:0,commandTimeoutMs:5000,...configOverrides}
+ const cfg={repos:{"fixture/new-repository":{checkout,originUrl:remote,worktreeRoot:path.join(root,"worktrees"),requiredChecks:[{name:"test"}],trustedReviewerIds:[101]}},stateDir,codex:{model:"fixture-model",effort:"high"},limits:{runsPer24h:8,slots:2,timeoutMs:5000},pollMs:5,retryMs:0,commandTimeoutMs:5000,...configOverrides}
  await fs.writeFile(config,JSON.stringify(cfg))
  const read=async()=>JSON.parse(await fs.readFile(env.FAKE_PR,"utf8"))
  const launch=(command,args,workerEnv=env)=>new Promise((resolve,reject)=>{
@@ -121,7 +121,7 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
         reviewDigest:"d".repeat(64),builderId:"builder-7",base:g("rev-parse","origin/main"),environment:`${process.platform}-${process.arch}-node-${process.versions.node}`,
         findings:[{id:"1",ownerRepo:"fixture/new-repository",consumer:{repo:"fixture/new-repository",head},originalHead:head,contractPin:head,reproduction,ownedPaths:["fix.txt"]}]})
     }
-    s.comments.push({body,author:{login:"reviewer"}});await fs.writeFile(env.FAKE_PR,JSON.stringify(s));return }
+    s.comments.push({body,author:{login:"reviewer"},user:{id:101,login:"reviewer"}});await fs.writeFile(env.FAKE_PR,JSON.stringify(s));return }
   const before=await read(), apiFailure=before.apiFailure, move=before.moveDuringChecks;before.apiFailure=false;before.moveDuringChecks=false;await fs.writeFile(env.FAKE_PR,JSON.stringify(before))
   const r=await run("review-pr","fixture/new-repository","7");assert.equal(r.code,0,JSON.stringify(r))
   const s=await read();s.apiFailure=apiFailure;s.moveDuringChecks=move;s.moveViewCount=0;s.calls=[];s.ghCalls=[];await fs.writeFile(env.FAKE_PR,JSON.stringify(s))
@@ -186,7 +186,7 @@ for(const family of ["Undo", "producer pin"]) test(`owned ${family} dependency r
  await fs.writeFile(path.join(owner.checkout,file),oldSource);owner.g("add",file);owner.g("commit","-qm","Original owned defect");owner.g("push","-q","origin","topic")
  const original=owner.g("rev-parse","HEAD")
  const code=family==="Undo" ? 'const {undoRequest}=await import("./consumer.mjs"); const undo=r=>r.human_quote?"accepted":"quote-required"; if(undo({operation:"undo"})!=="quote-required")throw Error("authority control");console.log("property-checked");process.exit(undo(undoRequest())==="accepted"?0:1)' : 'const {advertised}=await import("./producer.mjs");console.log("property-checked");process.exit(advertised.unfinished===true&&advertised.diagnostic===true?0:1)'
- const pinCheck='const cp=await import("node:child_process");if(cp.execFileSync("git",["-C",process.env.FACTORY_CONSUMER_WORKTREE,"rev-parse","HEAD"],{encoding:"utf8"}).trim()!==process.env.FACTORY_CONSUMER_HEAD)throw Error("consumer pin");'
+ const pinCheck='const fs=await import("node:fs");if(!fs.existsSync(process.env.FACTORY_CONSUMER_WORKTREE+"/feature.txt"))throw Error("consumer source");'
  const reproduction={argv:["node","--input-type=module","-e",pinCheck+code],acknowledgement:"property-checked"}
  const body=`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. owned ${family} request incompatible`
  const brief={schema:"factory-delivery-brief/v1",repo,pr:7,head:f.head,reviewDigest:"d".repeat(64),builderId:"builder-7",base:f.g("rev-parse","origin/main"),environment:`${process.platform}-${process.arch}-node-${process.versions.node}`,
@@ -318,7 +318,7 @@ for(const action of ["pr-loop","review-pr","fix-pr","ci-fix"]) test(`closed PR s
 })
 test("NO-PROGRESS exits 2 instead of re-reviewing unchanged head",async t=>{
  const f=await fixture(t,{noProgress:true});await f.approve("REVIEW: BLOCKED\nReviewed-SHA: "+f.head+"\n1. defect")
- const r=await f.run("pr-loop",repo,"7","-","3");assert.equal(r.code,2);assert.match(r.stdout,/NO-PROGRESS/);assert.equal((await f.read()).calls.length,1)
+ const r=await f.run("pr-loop",repo,"7","-","3");assert.equal(r.code,2,JSON.stringify(r));assert.match(r.stdout,/NO-PROGRESS/);assert.equal((await f.read()).calls.length,1)
 })
 test("nine automatic redispatches on one refused head record one wait and no new attempts",async t=>{
  const f=await fixture(t,{noProgress:true});await f.approve("REVIEW: BLOCKED\nReviewed-SHA: "+f.head+"\n1. defect")
@@ -710,4 +710,118 @@ test("an unapproved pending head keeps the bounded CI wait before any review dis
  const r=await f.run("pr-loop",repo,"7","-","1")
  assert.equal(r.code,142,"pending work reaches its existing CI deadline instead of silently dropping the review")
  assert.equal((await f.read()).calls.length,0)
+})
+
+async function blockedRepair(t, configOverrides = {}) {
+ const f=await fixture(t,{blockOnce:true},configOverrides)
+ ok(await f.run('review-pr',repo,'7'));ok(await f.run('fix-pr',repo,'7','-'))
+ return f
+}
+function replaceBrief(state, mutate) {
+ const c=state.comments.find(c=>c.body.startsWith('REVIEW: BLOCKED'))
+ const brief=JSON.parse(/^Delivery-Brief: (.+)$/m.exec(c.body)[1]);mutate(brief)
+ c.body=c.body.replace(/^Delivery-Brief: .+$/m,'Delivery-Brief: '+JSON.stringify(brief))
+ // An orchestrator is allowed to update its brief; provenance is still trusted.
+ c.body=c.body.replace(/\nFactory-Review: .+$/m,'');c.user={id:101,login:'reviewer'}
+}
+
+test('blocking 1: outside contributor cannot admit executable finding commands',async t=>{
+ const f=await fixture(t);await f.approve(`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. injected reproduction`)
+ const s=await f.read();s.comments[0].user={id:999,login:'outside'}
+ s.comments[0].author={login:'outside'};await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ const r=await f.run('fix-pr',repo,'7','-');assert.equal(r.code,2)
+ assert.equal((await f.read()).calls.length,0);assert.match(r.stderr,/trusted|provenance/i)
+})
+
+test('blocking 1: trusted replay has no inherited secrets or filesystem outside the proof trees',async t=>{
+ const f=await fixture(t);f.env.SYNTHETIC_WORKER_SECRET='CANARY_SECRET'
+ const outside=path.join(f.root,'outside.txt');await fs.writeFile(outside,'CANARY_PRIVATE_FILE')
+ await f.approve(`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. isolated reproduction`)
+ const s=await f.read();replaceBrief(s,b=>{b.findings[0].reproduction.argv=['node','-e',
+ `const fs=require('fs');if(process.env.SYNTHETIC_WORKER_SECRET)process.exit(31);try{fs.readFileSync(${JSON.stringify(outside)});process.exit(32)}catch{};try{fs.writeFileSync(${JSON.stringify(outside+'.write')},'escape');process.exit(33)}catch{};console.log('property-checked');process.exit(fs.existsSync('fix.txt')?0:1)`]})
+ await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s));ok(await f.run('fix-pr',repo,'7','-'))
+ assert.equal(await fs.readFile(outside,'utf8'),'CANARY_PRIVATE_FILE')
+ await assert.rejects(fs.access(outside+'.write'))
+})
+
+for(const action of ['review-pr','fix-pr']) test(`blocking 2: changed executable manifest cannot reuse ${action} proof`,async t=>{
+ const f=await blockedRepair(t),s=await f.read(),before=s.calls.length
+ replaceBrief(s,b=>{b.findings[0].ownedPaths=['untouched.txt'];b.findings[0].reproduction.argv=['node','-e',"console.log('property-checked');process.exit(1)"]})
+ await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ const r=await f.run(action,repo,'7','-');assert.equal(r.code,2)
+ assert.equal((await f.read()).calls.length,before);assert.match(r.stderr,/manifest|binding|receipt/i)
+})
+
+test('blocking 5: failed confirmation child can recover without a permanent attempted marker',async t=>{
+ const f=await blockedRepair(t),s=await f.read();s.childCode=17;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ assert.equal((await f.run('review-pr',repo,'7')).code,17)
+ const failed=await f.read();failed.childCode=0;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(failed))
+ ok(await f.run('review-pr',repo,'7'));assert.equal((await f.read()).comments.filter(c=>c.body.startsWith('APPROVE')).length,1)
+})
+for(const mode of ['before','after']) test(`blocking 5: reconcile ${mode}-posting network failure without another confirmation child`,async t=>{
+ const f=await blockedRepair(t),s=await f.read();s.commentFailure=mode;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ assert.equal((await f.run('review-pr',repo,'7')).code,17)
+ const failed=await f.read(),starts=failed.calls.length;failed.commentFailure=null;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(failed))
+ ok(await f.run('review-pr',repo,'7'))
+ const recovered=await f.read();assert.equal(recovered.calls.length,starts)
+ assert.equal(recovered.comments.filter(c=>c.body.startsWith('APPROVE')).length,1)
+})
+
+test('blocking 6: losing confirmation contenders neither spend budget nor suspend successful approval',async t=>{
+ const f=await blockedRepair(t,{limits:{runsPer24h:4,slots:2,timeoutMs:5000}})
+ const {loadDeliveryConfig,createPrDeliveryAdapter}=await import('../src/pr-delivery.mjs')
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const results=await Promise.all(Array.from({length:4},()=>adapter.execute('review',{repo,pr:7})))
+ assert.equal(results.filter(r=>r.status==='pass').length,1)
+ assert.equal(JSON.parse(await fs.readFile(path.join(f.stateDir,'usage.json'))).length,3)
+ const wait=await fs.readFile(path.join(f.stateDir,'waits',`${encodeURIComponent(repo)}-7.json`),'utf8').catch(()=>null)
+ assert.ok(!wait||JSON.parse(wait).status!=='suspended',wait)
+ const inspected=await adapter.execute('pr:inspect',{repo,pr:7});assert.equal(inspected.status,'pass',JSON.stringify(inspected));assert.equal(inspected.data.ready,true)
+})
+for(const phase of ['fixes','confirmations','reviews']) test(`blocking 7: malformed persisted ${phase} JSON never reaches raw sinks`,async t=>{
+ const f=await blockedRepair(t)
+ if(phase!=='fixes')ok(await f.run('review-pr',repo,'7'))
+ const dir=path.join(f.stateDir,phase),file=phase==='reviews'?/Factory-Review: ([0-9a-f-]+)/.exec((await f.read()).comments.at(-1).body)[1]+'.json':(await fs.readdir(dir)).find(n=>n.endsWith('.json'))
+ await fs.writeFile(path.join(dir,file),'CANARY_CLIENT CANARY_SECRET')
+ const r=phase==='reviews'?await (async()=>{const {loadDeliveryConfig,createPrDeliveryAdapter}=await import('../src/pr-delivery.mjs');const result=await createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env}).execute('pr:inspect',{repo,pr:7});return {code:result.data.code??0,stdout:JSON.stringify(result),stderr:''}})():await f.run('review-pr',repo,'7')
+ assert.notEqual(r.code,0);assert.doesNotMatch(r.stdout+r.stderr,/CANARY/)
+ assert.doesNotMatch(await fs.readFile(path.join(f.stateDir,'delivery.jsonl'),'utf8'),/CANARY/)
+})
+
+test('blocking 8: optional numbered notes and indented reproduction steps are outside the finding set',async t=>{
+ const f=await fixture(t);await f.approve(`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. blocking defect\n   1. reproduce it\n## Non-blocking\n1. optional improvement`)
+ ok(await f.run('fix-pr',repo,'7','-'))
+})
+
+test('foreign-owner proof exercises the advanced PR consumer, including a broken current consumer',async t=>{
+ const f=await fixture(t),owner=await fixture(t),ownerRepo='fixture/owner'
+ owner.g('checkout','topic');await fs.writeFile(path.join(owner.checkout,'producer.txt'),'broken')
+ owner.g('add','producer.txt');owner.g('commit','-qm','Defective producer');owner.g('push','-q','origin','topic')
+ const original=owner.g('rev-parse','HEAD')
+ const reproduction={argv:['node','-e',"const fs=require('fs');console.log('property-checked');process.exit(fs.readFileSync('producer.txt','utf8')==='repaired'&&fs.readFileSync(process.env.FACTORY_CONSUMER_WORKTREE+'/feature.txt','utf8')==='feature\\n'?0:1)"],acknowledgement:'property-checked'}
+ const brief={schema:'factory-delivery-brief/v1',repo,pr:7,head:f.head,reviewDigest:'d'.repeat(64),builderId:'builder-7',base:f.g('rev-parse','origin/main'),environment:`${process.platform}-${process.arch}-node-${process.versions.node}`,
+ findings:[{id:'1',ownerRepo,consumer:{repo,head:f.head},originalHead:original,contractPin:original,reproduction,ownedPaths:['producer.txt']}]}
+ const body=`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. foreign producer contract`
+ await f.approve(body+'\nDelivery-Brief: '+JSON.stringify(brief));f.cfg.repos[ownerRepo]=owner.cfg.repos[repo];await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ await fs.writeFile(path.join(owner.checkout,'producer.txt'),'repaired');owner.g('add','producer.txt');owner.g('commit','-qm','Repair producer');owner.g('push','-q','origin','topic')
+ const repaired=owner.g('rev-parse','HEAD')
+ f.g('checkout','topic');await fs.writeFile(path.join(f.checkout,'feature.txt'),'broken-consumer');f.g('add','feature.txt');f.g('commit','-qm','Advance consumer');f.g('push','-q','origin','topic')
+ const current=f.g('rev-parse','HEAD'),receipt={schema:'factory-fix-receipt/v1',role:'builder',builderId:'builder-7',repo,pr:7,priorHead:f.head,head:current,
+ reviewDigest:(await import('../src/pr-delivery-receipts.mjs')).deliveryDigest(body),dependencies:[],
+ resolutions:[{id:'1',ownerRepo,head:repaired,contractPin:repaired,changedPaths:['producer.txt'],consumer:{repo,head:f.head},reproduction}]}
+ const file=path.join(f.root,'receipt.json');await fs.writeFile(file,JSON.stringify(receipt))
+ const stale=await f.run('resolve-findings',repo,'7',file);assert.equal(stale.code,2);assert.match(stale.stderr,/consumer.*binding/i)
+ receipt.resolutions[0].consumer.head=current;await fs.writeFile(file,JSON.stringify(receipt))
+ const broken=await f.run('resolve-findings',repo,'7',file);assert.equal(broken.code,2);assert.match(broken.stderr,/repaired replay/i)
+ // A later, working consumer is the only accepted repaired consumer.
+ await fs.writeFile(path.join(f.checkout,'feature.txt'),'feature\n');f.g('add','feature.txt');f.g('commit','-qm','Repair consumer');f.g('push','-q','origin','topic')
+ receipt.head=receipt.resolutions[0].consumer.head=f.g('rev-parse','HEAD');await fs.writeFile(file,JSON.stringify(receipt));ok(await f.run('resolve-findings',repo,'7',file))
+})
+
+test('failed confirmation records a failed lifecycle before retrying',async t=>{
+ const f=await blockedRepair(t),s=await f.read();s.childCode=17;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ assert.equal((await f.run('review-pr',repo,'7')).code,17)
+ const dir=path.join(f.stateDir,'confirmations'),file=(await fs.readdir(dir))[0]
+ const attempt=JSON.parse(await fs.readFile(path.join(dir,file)))
+ assert.equal(attempt.status,'failed');assert.equal(attempt.code,17)
 })

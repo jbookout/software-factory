@@ -1,11 +1,12 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 import { createHash, randomUUID } from "node:crypto"
+import { runProofReplay } from "./pr-proof-replay.mjs"
 import { runProcess } from "./process-runner.mjs"
 import { createCodexExecArgs } from "./codex-build.mjs"
 import { normalizeResult } from "./adapters.mjs"
 import { deliveryPrompt } from "./pr-delivery-prompts.mjs"
-import { deliveryDigest, validateDeliveryReceipt, proveFixReceipt, proveSelfReview } from "./pr-delivery-receipts.mjs"
+import { deliveryDigest, validateDeliveryReceipt, proveFixReceipt, proveSelfReview, validateResolutionProof } from "./pr-delivery-receipts.mjs"
 import { classifyChecks, validRequiredChecks } from "./pr-readiness.mjs"
 import { DeliveryError, pause, keyFor, readJson, writeJson, withLease, reserveCodex, deliveryWait, completeDeliveryWait } from "./pr-delivery-state.mjs"
 
@@ -31,6 +32,8 @@ export async function loadDeliveryConfig(file) {
     repos: Object.fromEntries(Object.entries(value.repos).map(([repo, local]) => {
       if (!REPO.test(repo)) throw new DeliveryError("invalid repository in config", 9)
       if (!validRequiredChecks(local.requiredChecks)) throw new DeliveryError("config repo requiredChecks must name the expected checks", 9)
+      if (local.trustedReviewerIds !== undefined && (!Array.isArray(local.trustedReviewerIds) || local.trustedReviewerIds.some(id => !Number.isSafeInteger(id) || id <= 0)))
+        throw new DeliveryError("config trustedReviewerIds must contain GitHub numeric user IDs", 9)
       if (local.instructionSurfaces !== undefined) validateDeliveryReceipt("paths", local.instructionSurfaces)
       if (local.dependencyRevision !== undefined && (typeof local.dependencyRevision !== "string" || !local.dependencyRevision.trim()))
         throw new DeliveryError("config dependencyRevision must be a nonempty owned input pin", 9)
@@ -56,7 +59,7 @@ function reviews(pr) {
     const [verdict, line] = (c.body ?? "").split(/\r?\n/)
     const sha = /^Reviewed-SHA: ([0-9a-f]{40})$/.exec(line ?? "")?.[1]
     if (!sha || !["APPROVE", "REVIEW: BLOCKED", "CHANGES REQUESTED"].includes(verdict)) return null
-    return { verdict, sha, body: c.body }
+    return { verdict, sha, body: c.body, reviewerId: c.user?.id }
   }).filter(Boolean)
 }
 
@@ -150,14 +153,12 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
   function requireOpen(pr) {
     if (pr.state !== "OPEN") throw new DeliveryError(`NOT OPEN (${pr.state}): no repair or review work`, 8)
   }
-  async function latestReview(repo, pr, current) {
-    const candidate = reviews(current).at(-1)
-    if (!candidate || candidate.verdict !== "APPROVE") return candidate
+  async function verifiedReview(repo, pr, candidate) {
     const id = /^Factory-Review: ([0-9a-f-]{36})$/m.exec(candidate.body)?.[1]
-    if (!id) return null // Imported/handwritten approvals require a new factory review.
+    if (!id) return null
     const receipt = await readJson(path.join(config.stateDir, "reviews", `${id}.json`), null)
     if (!receipt || receipt.schema !== "factory-review/v1" || receipt.repo !== repo || receipt.pr !== pr ||
-        receipt.head !== candidate.sha || receipt.verdict !== "APPROVE" || receipt.commentDigest !== digestOf(candidate.body) ||
+        receipt.head !== candidate.sha || receipt.verdict !== candidate.verdict || receipt.commentDigest !== digestOf(candidate.body) ||
         receipt.role !== "independent-reviewer" || receipt.executorId !== `review-${id}` ||
         receipt.execution?.code !== 0 || !receipt.execution?.pid || !receipt.sourceVerified) return null
     const artifacts = path.join(config.stateDir, "reviews", id)
@@ -165,7 +166,17 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     const output = await fs.readFile(receipt.output, "utf8").catch(() => null)
     if (prompt === null || output === null || digestOf(prompt) !== receipt.promptDigest || digestOf(output) !== receipt.outputDigest) return null
     if (await git(getRepo(repo).checkout, "rev-parse", `${receipt.head}^{tree}`) !== receipt.tree) return null
-    return candidate
+    return receipt
+  }
+  async function latestReview(repo, pr, current) {
+    const candidate = reviews(current).at(-1)
+    if (!candidate || candidate.verdict !== "APPROVE") return candidate
+    return await verifiedReview(repo, pr, candidate) ? candidate : null
+  }
+  async function admittedBrief(prior, repo, pr) {
+    if (!(getRepo(repo).trustedReviewerIds ?? []).includes(prior.reviewerId) && !await verifiedReview(repo, pr, prior))
+      throw new DeliveryError("executable finding brief lacks trusted reviewer/orchestrator provenance", 2)
+    return findingBrief(prior, repo, pr)
   }
   async function log(event) {
     await fs.mkdir(config.stateDir, { recursive: true, mode: 0o700 })
@@ -241,7 +252,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     if (await git(worktree, "rev-parse", "HEAD") !== remoteHead) throw new DeliveryError("repair source binding mismatch; retained")
     return worktree
   }
-  async function guarded(repo, pr, kind, argv, cwd, input, head, onAdmit) {
+  async function guarded(repo, pr, kind, argv, cwd, input, head, attemptLease) {
     if (!["review", "fix", "ci-fix", "rescope"].includes(kind)) throw new DeliveryError("invalid guarded delivery kind", 9)
     head ??= (await view(repo, pr)).headRefOid
     await eligible(repo, pr, head)
@@ -251,12 +262,12 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       const admitted = await view(repo, pr)
       requireOpen(admitted)
       if (admitted.headRefOid !== head) throw new DeliveryError("SUPERSEDED: HEAD MOVED before child dispatch; observe current head", 1)
-      await onAdmit?.()
       await log({ repo, pr, step: kind, status: "started" })
       const digest = createHash("sha256")
       const result = await command(argv, cwd, { input, timeoutMs: config.limits.timeoutMs, allowFailure: true,
         captureOutput: false, onOutput: chunk => digest.update(chunk), onSpawn: async job => {
           const bindings = [await release.bindJob(job)]
+          if (attemptLease) bindings.push(await attemptLease.bindJob(job))
           const prLease = prLeases.get(keyFor(repo, pr))
           if (prLease) bindings.push(await prLease.bindJob(job))
           return bindings
@@ -280,7 +291,8 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     try { brief = JSON.parse(line[1]) } catch { throw new DeliveryError("invalid finding brief JSON", 2) }
     brief.reviewDigest = deliveryDigest(prior.body.split(/^Delivery-Brief: /m)[0].trimEnd())
     validateDeliveryReceipt("brief", brief)
-    const numbered = [...prior.body.split(/^Delivery-Brief: /m)[0].matchAll(/^(\d+)\.\s/gm)].map(m => m[1])
+    const blocking = prior.body.split(/^Delivery-Brief: /m)[0].split(/^(?:#{1,6}\s*)?(?:Non-blocking|Follow-ups\s*\(non-blocking\))\b.*$/mi)[0]
+    const numbered = [...blocking.matchAll(/^(\d+)\.\s/gm)].map(m => m[1])
     if (brief.repo !== repo || brief.pr !== pr || brief.head !== prior.sha ||
         numbered.length !== brief.findings.length || new Set(numbered).size !== numbered.length ||
         brief.findings.some(f => !numbered.includes(f.id))) throw new DeliveryError("original finding brief binding mismatch", 2)
@@ -308,7 +320,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       }
       const tree = await git(dir, "rev-parse", "HEAD^{tree}")
       const consumerTree = consumerDir && await git(consumerDir, "rev-parse", "HEAD^{tree}")
-      const result = await runProcess(argv, { cwd: dir, env: { ...env,
+      const result = await runProofReplay(argv, { cwd: dir, consumerDir: consumerDir ?? dir, pins: {
         FACTORY_PROOF_HEAD: head, FACTORY_CONTRACT_PIN: contractPin ?? head,
         FACTORY_CONSUMER_HEAD: consumer?.head ?? head, FACTORY_CONSUMER_WORKTREE: consumerDir ?? dir }, timeoutMs: config.commandTimeoutMs })
       sourceChanged = await git(dir, "rev-parse", "HEAD") !== head || await git(dir, "write-tree") !== tree ||
@@ -325,12 +337,9 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     }
   }
   async function confirmation(repo, pr, current, prior) {
-    const brief = findingBrief(prior, repo, pr)
+    const brief = await admittedBrief(prior, repo, pr)
     const proof = await readJson(path.join(config.stateDir, "fixes", `${keyFor(repo, pr)}.json`), null)
-    if (!proof || proof.schema !== "factory-resolution-proof/v1" || !/^[a-f0-9]{64}$/.test(proof.evidenceDigest ?? "") || proof.head !== current.headRefOid ||
-        proof.reviewDigest !== brief.reviewDigest || proof.priorHead !== prior.sha || proof.builderId !== brief.builderId ||
-        proof.resolutions.length + proof.dependencies.length !== brief.findings.length)
-      throw new DeliveryError("missing exact-head executor resolution receipt", 2)
+    validateResolutionProof(proof, brief, current.headRefOid)
     if (proof.status !== "resolved") {
       const error = new DeliveryError("owned finding dependency: wait for tested pin receipt", 2)
       error.dependencies = proof.dependencies; throw error
@@ -361,7 +370,38 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     const prior = reviews(current).filter(r => ["REVIEW: BLOCKED", "CHANGES REQUESTED"].includes(r.verdict)).at(-1)
     const resolution = prior ? await confirmation(repo, pr, current, prior) : null
     const confirmationKey = resolution && path.join(config.stateDir, "confirmations", `${keyFor(repo, pr)}-${head}-${resolution.evidenceDigest}.json`)
-    if (confirmationKey && await readJson(confirmationKey, null)) throw new DeliveryError("unchanged head/finding resolution already confirmed or attempted", 2)
+    if (confirmationKey) return withLease(locks, `confirmation-${keyFor(repo, pr)}-${head}-${resolution.evidenceDigest}`,
+      async lease => {
+        const previous = await readJson(confirmationKey, null)
+        if (previous?.status === "complete") throw new DeliveryError("unchanged head/finding resolution already confirmed", 2)
+        // A posting interruption is reconciled from verified execution artifacts
+        // and remote comments while this owner holds the attempt lease.
+        if (previous?.attempt) {
+          const file = path.join(config.stateDir, "reviews", `${previous.attempt}.json`)
+          const receipt = await readJson(file, null)
+          if (receipt) {
+            const body = await fs.readFile(receipt.output, "utf8").catch(() => null)
+            const comment = body === null ? null : `${body}\nFactory-Review: ${previous.attempt}`
+            const candidate = comment && reviews({ comments: [{ body: comment }] })[0]
+            if (!candidate || !await verifiedReview(repo, pr, candidate) || candidate.sha !== head ||
+                previous.head !== head || previous.evidenceDigest !== resolution.evidenceDigest)
+              throw new DeliveryError("interrupted confirmation execution binding mismatch", 2)
+            const observed = await view(repo, pr); requireOpen(observed)
+            if (observed.headRefOid !== head) throw new DeliveryError("HEAD MOVED before confirmation reconciliation", 2)
+            if (!observed.comments.some(c => c.body === comment)) await gh(repo, pr, "comment", "--body", comment)
+            await writeJson(confirmationKey, { ...previous, status: "complete" })
+            await completeDeliveryWait(config, repo, pr)
+            return { head, verdict: candidate.verdict, reconciled: true }
+          }
+          // No durable successful execution exists. The lease ensures the
+          // previous supervised process group has ended before a new attempt.
+        }
+        return performReview(repo, pr, current, prior, resolution, confirmationKey, lease)
+      })
+    return performReview(repo, pr, current, prior, resolution, null, null)
+  }
+  async function performReview(repo, pr, current, prior, resolution, confirmationKey, lease) {
+    const local = getRepo(repo), head = current.headRefOid
     await git(local.checkout, "fetch", "-q", "origin", head)
     const attempt = randomUUID()
     const dir = path.join(local.worktreeRoot, `review-${pr}-${head}-${attempt}`)
@@ -378,16 +418,8 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       await fs.rm(output, { force: true })
       const argv = [config.codex.command ?? "codex", ...createCodexExecArgs(config.codex),
         "--sandbox", "danger-full-access", "--output-last-message", output, "-"]
-      const execution = await guarded(repo, pr, "review", argv, dir, prompt, head, async () => {
-        if (confirmationKey) {
-          await fs.mkdir(path.dirname(confirmationKey), { recursive: true, mode: 0o700 })
-          try { await fs.writeFile(confirmationKey, JSON.stringify({ status: "attempted", head, evidenceDigest: resolution.evidenceDigest }), { flag: "wx", mode: 0o600 }) }
-          catch (error) {
-            if (error.code !== "EEXIST") throw error
-            throw new DeliveryError("unchanged head/finding resolution already attempted", 2)
-          }
-        }
-      })
+      if (confirmationKey) await writeJson(confirmationKey, { status: "running", attempt, head, evidenceDigest: resolution.evidenceDigest })
+      const execution = await guarded(repo, pr, "review", argv, dir, prompt, head, lease)
       if (!(await unchanged()))
         throw new DeliveryError("reviewer changed pinned source; refusing approval, worktree retained")
       const body = await fs.readFile(output, "utf8")
@@ -405,8 +437,17 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       await writeJson(`${artifacts}.json`, { schema: "factory-review/v1", role: "independent-reviewer", executorId: `review-${attempt}`, repo, pr, head, tree,
         verdict: parsed.verdict, sourceVerified: true, cwd: dir, argv, execution,
         promptDigest: digestOf(prompt), output, outputDigest: digestOf(body), commentDigest: digestOf(comment) })
+      if (confirmationKey) await writeJson(confirmationKey, { status: "posting", attempt, head, evidenceDigest: resolution.evidenceDigest })
       await gh(repo, pr, "comment", "--body", comment)
+      if (confirmationKey) await writeJson(confirmationKey, { status: "complete", attempt, head, evidenceDigest: resolution.evidenceDigest })
+      await completeDeliveryWait(config, repo, pr)
       return { head, verdict: parsed.verdict }
+    } catch (error) {
+      // A successful execution receipt belongs to posting reconciliation. Only
+      // attempts without that evidence are failed and eligible for reexecution.
+      if (confirmationKey && !await readJson(path.join(config.stateDir, "reviews", `${attempt}.json`), null))
+        await writeJson(confirmationKey, { status: "failed", attempt, head, evidenceDigest: resolution.evidenceDigest, code: error.code ?? 1 })
+      throw error
     } finally {
       // Test artifacts may be untracked; keep a modified tracked source tree for
       // diagnosis rather than silently discarding an agent's prohibited edit.
@@ -419,11 +460,12 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     requireOpen(current)
     await eligible(repo, pr, current.headRefOid)
     const prior = reviews(current).filter(r => ["REVIEW: BLOCKED", "CHANGES REQUESTED"].includes(r.verdict)).at(-1)
-    const brief = prior ? findingBrief(prior, repo, pr) : null
+    const brief = prior ? await admittedBrief(prior, repo, pr) : null
     const proofFile = path.join(config.stateDir, "fixes", `${keyFor(repo, pr)}.json`)
     if (brief && kind === "fix") {
       const existing = await readJson(proofFile, null)
-      if (existing?.head === current.headRefOid && existing.reviewDigest === brief.reviewDigest) {
+      if (existing?.head === current.headRefOid) {
+        validateResolutionProof(existing, brief, current.headRefOid)
         if (existing.status === "resolved") return { head: current.headRefOid, resolution: existing }
         const error = new DeliveryError("owned finding dependency: wait for tested pin receipt", 2)
         error.dependencies = existing.dependencies; throw error
@@ -682,7 +724,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
             const current = await view(repo, pr); requireOpen(current)
             const prior = reviews(current).filter(r => ["REVIEW: BLOCKED", "CHANGES REQUESTED"].includes(r.verdict)).at(-1)
             if (!prior) throw new DeliveryError("no original finding set", 2)
-            const brief = findingBrief(prior, repo, pr)
+            const brief = await admittedBrief(prior, repo, pr)
             const proof = await proveFixReceipt({ brief, receipt: request.receipt, expectedHead: current.headRefOid }, replay)
             if ((await view(repo, pr)).headRefOid !== current.headRefOid) throw new DeliveryError("HEAD MOVED during resolution proof", 2)
             await writeJson(path.join(config.stateDir, "fixes", `${keyFor(repo, pr)}.json`), proof)

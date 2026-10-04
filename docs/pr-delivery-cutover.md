@@ -205,3 +205,45 @@ satisfy approval provenance. Earlier reviewer receipts without that role require
 a new independent review. These are source capabilities and replay evidence;
 installation into the active orchestration directory remains the orchestrator's
 cutover operation.
+
+
+### Executable finding admission and replay isolation
+
+A blocked comment is executable input only when its exact bytes have a verified
+local independent-review receipt, or GitHub REST attributes it to a numeric user
+ID in that repository's `trustedReviewerIds`. This optional allowlist admits
+external orchestrator briefs; an empty list permits only verified factory
+reviews. A login, association, quoted marker or syntactically valid brief alone
+cannot grant executable admission. Approvals still require factory execution
+provenance, even for allowlisted users.
+
+All receipt replay uses a clean environment and a platform sandbox:
+macOS Seatbelt (`/usr/bin/sandbox-exec`) or Linux Bubblewrap (`bwrap` with working
+unprivileged user namespaces). CI installs Bubblewrap. Unsupported or unavailable
+isolation refuses proof. Replay can read system tooling and its pinned producer
+and consumer worktrees, and write only in those disposable trees. It cannot read
+the worker's home or shared Git metadata, inherit its credential environment, or
+use the network. Checks must use source files and `FACTORY_PROOF_HEAD`,
+`FACTORY_CONSUMER_HEAD`, `FACTORY_CONSUMER_WORKTREE`, and `FACTORY_CONTRACT_PIN`;
+network fetches, credential access and Git commands requiring the shared `.git`
+directory cannot serve as proof. Tracked source mutations still refuse proof and
+retain the affected trees for diagnosis. This execution contract applies to
+builder preflight as well as original/repaired finding replay.
+
+Both repair and confirmation use the same cached-proof validator. It binds the
+canonical finding manifest and rederives the semantic evidence digest from the
+current findings and the recorded repaired pins. Local findings must fail on the
+reviewed head. A repaired consumer in the reviewed repository must use the
+current PR head; the original failing replay retains the original consumer.
+Optional notes after `Non-blocking` or `Follow-ups (non-blocking)` do not become
+executable findings. Keep reproduction instructions indented beneath their
+finding.
+
+Confirmation takes an owned lease before reserving a model run. Its persisted
+attempt moves from running to posting to complete, or failed when execution produces no verified receipt. A failed child with no
+verified successful execution can be retried after the prior process group has
+ended. A posting interruption first verifies the saved execution artifacts and
+observes remote comments: an existing exact comment completes the attempt, and
+an absent comment is reposted with the same attempt identity without rerunning
+the model. Successful attempts remain deduplicated. Malformed persisted JSON
+produces a fixed diagnostic without its input bytes.
