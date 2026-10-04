@@ -19,6 +19,10 @@
     "./design-verify": {
       "types": "./src/design-verify.d.mts",
       "import": "./src/design-verify.mjs"
+    },
+    "./design-journal": {
+      "types": "./src/design-journal.d.mts",
+      "import": "./src/design-journal.mjs"
     }
   },
   "engines": {

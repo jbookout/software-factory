@@ -1,0 +1,410 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jbookout/software-factory/schemas/design-journal.schema.json",
+  "title": "Factory journal records: provenance and reported evidence, never acceptance authority",
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ref",
+        "digest"
+      ],
+      "properties": {
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "source",
+        "label",
+        "origin",
+        "platform",
+        "viewport",
+        "state",
+        "artifacts",
+        "observedProperty",
+        "inference",
+        "claim",
+        "userDecision",
+        "borrowedProperty",
+        "adaptation",
+        "mismatch",
+        "rejectionTest",
+        "reviewerOutcome",
+        "limits",
+        "reuse",
+        "experiment"
+      ],
+      "properties": {
+        "schema": {
+          "const": "design-reference.v1"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "url",
+            "author",
+            "revision",
+            "sourceDate",
+            "inspectedAt",
+            "availability"
+          ],
+          "properties": {
+            "url": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "author": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "revision": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sourceDate": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "inspectedAt": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "availability": {
+              "enum": [
+                "available",
+                "blocked",
+                "unavailable",
+                "unverified"
+              ]
+            }
+          }
+        },
+        "label": {
+          "enum": [
+            "still",
+            "recording",
+            "live",
+            "inspected-source",
+            "vendor-claim"
+          ]
+        },
+        "origin": {
+          "enum": [
+            "captured",
+            "generated",
+            "reconstructed"
+          ]
+        },
+        "platform": {
+          "enum": [
+            "web",
+            "ios",
+            "android",
+            "desktop"
+          ]
+        },
+        "viewport": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "width",
+            "height"
+          ],
+          "properties": {
+            "width": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "height": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "state": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "artifacts": {
+          "type": "array",
+          "minItems": 0,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "ref",
+              "digest"
+            ],
+            "properties": {
+              "ref": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            }
+          }
+        },
+        "observedProperty": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "inference": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "claim": {
+          "enum": [
+            "appearance",
+            "transition",
+            "behavior",
+            "implementation",
+            "vendor-claim",
+            "unverified"
+          ]
+        },
+        "userDecision": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "borrowedProperty": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "adaptation": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "mismatch": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "rejectionTest": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "reviewerOutcome": {
+          "enum": [
+            "pending",
+            "accepted",
+            "rejected",
+            "blocked"
+          ]
+        },
+        "limits": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "reuse": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "license",
+            "permission"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "link-only",
+                "permission-unverified",
+                "copied"
+              ]
+            },
+            "license": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "permission": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "experiment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "hypothesis",
+            "failedProperty",
+            "replacement"
+          ],
+          "properties": {
+            "hypothesis": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "failedProperty": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "replacement": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "id",
+        "sourceRevision",
+        "decision",
+        "rationale",
+        "alternatives",
+        "limits",
+        "artifacts"
+      ],
+      "properties": {
+        "schema": {
+          "const": "design-decision.v1"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "sourceRevision": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "decision": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "alternatives": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "limits": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "ref",
+              "digest"
+            ],
+            "properties": {
+              "ref": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

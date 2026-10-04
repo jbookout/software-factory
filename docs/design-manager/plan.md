@@ -10,7 +10,10 @@ Its live account/background-runtime qualification remains incomplete. Slice 4 no
 has the criterion evidence gate (`software-factory/design-verify`, tested by AW-4),
 a sample-app VERIFY skill/runner and the [e2e wrapper](../../capabilities/agentic-ui-evaluation/README.md)
 as a non-blocking pilot. Live e2e qualification with Joe's attended ChatGPT login
-remains incomplete. Later slices remain planned; none is qualified by this text or pure replay.
+remains incomplete. Slice 5 supplies the [private SQLite journal, reference records
+and scoped backup/restore commands](journal.md), tested against actual files by
+AW-5. Persistent-host choice/cost and laptop-off qualification remain blocked.
+Later slices remain planned; none is qualified by this text or pure replay.
 
 ## Purpose and ownership
 
@@ -839,7 +842,9 @@ and Claude Design. Slices 4, 9 and 10 retain their requested numbers.
 AW-2 is implemented in `test/acceptance/design-layer-diagnosis.test.mjs`. AW-4's gate
 rules are implemented in `test/acceptance/design-verify.test.mjs` with synthetic store
 records; the sample-app run is `test/acceptance/verify-sample-app.test.mjs`. AW-4's live
-e2e qualification and the other rows remain future slice acceptance tests. Use
+e2e qualification remains incomplete. AW-5 runs in
+`test/acceptance/design-journal.test.mjs`; the other rows remain future slice
+acceptance tests. Use
 both unrelated synthetic sample projects and the existing mobile trigger when
 applicable. Each row requires its passing case and deliberately failing case;
 retain the actual artifact/observation, expected outcome and source binding.
