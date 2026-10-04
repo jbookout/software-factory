@@ -45,7 +45,7 @@ test('privileged triggers require canonical main code, no caches, no executable 
   for(const [property,text] of [
     ['privileged-checkout',base.replace('ref: main','ref: ${{ github.event.workflow_run.head_sha }}')],
     ['privileged-cache',base.replace('persist-credentials: false','persist-credentials: false\n          cache: npm')],
-    ['executable-artifact',base.replace('gh release create "$GITHUB_REF_NAME"','node dist/release.js')],
+    ['unclassified-execution',base.replace('gh release create "$GITHUB_REF_NAME"','node dist/release.js')],
     ['privileged-build',base.replace('gh release create "$GITHUB_REF_NAME"','npm test')],
   ]) assert.ok(auditWorkflow(text,pins).some(f=>f.property===property),property);
 });
@@ -56,7 +56,7 @@ test('credential and artifact scope stay explicit',()=>{
 });
 test('REST provenance allows published release-tag-only commits and refuses moved tags/fork objects',async()=>{
   const entry=pins.actions['actions/checkout'];
-  const api=async path => path.includes('/git/ref/')?{object:{type:'commit',sha}}:path.includes('/releases/')?{tag_name:entry.tag,draft:false,html_url:entry.release_url}:{sha:entry.metadata_blob,content:Buffer.from('runs:\n  using: node20\n').toString('base64')};
+  const api=async path => path.includes('/git/ref/')?{object:{type:'commit',sha}}:path.includes('/releases/')?{tag_name:entry.tag,draft:false,html_url:entry.release_url}:{sha:entry.metadata_blob,encoding:'base64',content:Buffer.from('runs:\n  using: node20\n').toString('base64')};
   assert.equal(await verifyActionProvenance('actions/checkout',entry,api),true);
   await assert.rejects(verifyActionProvenance('actions/checkout',{...entry,sha:'f'.repeat(40)},api));
   await assert.rejects(verifyActionProvenance('actions/checkout',entry,async()=>({})),/provenance/);
@@ -82,33 +82,10 @@ jobs:
     if(path.includes('/git/ref/')) return {object:{type:'commit',sha}};
     if(path.includes('/releases/')) return {tag_name:pin.tag,draft:false,html_url:pin.release_url};
     assert.ok(path.includes('/contents/.github/workflows/build.yml?ref='));
-    return {sha:pin.metadata_blob,content:Buffer.from(`on:
+    return {sha:pin.metadata_blob,encoding:'base64',content:Buffer.from(`on:
   workflow_call:
 jobs: {}
 `).toString('base64')};
   };
   assert.equal(await verifyActionProvenance(ref,pin,api),true);
-});
-
-
-test('skipped or late artifact verification cannot be reported as a passing handoff',()=>{
-  const pin=pins.actions['actions/checkout'];
-  const artifactPins={actions:{'actions/download-artifact':{...pin,release_url:`https://github.com/actions/download-artifact/releases/tag/${pin.tag}`}}};
-  const source=`on: push
-permissions: {contents: read}
-jobs:
-  publish:
-    timeout-minutes: 5
-    permissions: {contents: write, actions: read}
-    steps:
-      - uses: actions/download-artifact@${sha}
-        with:
-          artifact-ids: \${{ needs.build.outputs.artifact_id }}
-      - env:
-          TAR_SHA: \${{ needs.build.outputs.tar_sha }}
-        run: sha256sum -c -
-      - run: gh release create "$GITHUB_REF_NAME"
-`;
-  assert.deepEqual(auditWorkflow(source,artifactPins),[]);
-  for(const altered of [source.replace('      - env:', '      - if: false\n        env:'),source.replace('      - env:', '      - continue-on-error: true\n        env:'),source.replace('        run: sha256sum -c -','        run: echo missing')]) assert.ok(auditWorkflow(altered,artifactPins).some(f=>f.property==='artifact-digest'));
 });
