@@ -19,6 +19,7 @@ const tool = require('node:path').basename(process.argv[1]);
 if(tool === 'codex') {
  let prompt=''; process.stdin.on('data',b=>prompt+=b); process.stdin.on('end',()=>{
  s.calls.push({prompt,cwd:process.cwd(),args}); save();
+ if(s.childCode) { console.error(s.childError??'synthetic child refusal');process.exit(s.childCode); }
  if(s.hang) { process.on('SIGTERM',()=>{}); setInterval(()=>{},1000); return; }
  if(prompt.includes('REVIEW MODE:')) {
  if(s.reviewerCommit) { fs.writeFileSync('feature.txt','prohibited');git('add','feature.txt');git('commit','-qm','Prohibited reviewer edit'); }
@@ -31,24 +32,29 @@ if(tool === 'codex') {
  });
 } else {
  s.ghCalls.push(args); save(); const action=args[1];
- if(action==='view') {
- if(s.apiFailure) {console.error('GraphQL rate limit');process.exit(1);}
+ if(args[0]==='api') {
+ const route=args[1], page=Number(new URL('https://fixture.invalid/'+route).searchParams.get('page')||1);
+ const respond=value=>console.log('HTTP/2.0 200 OK\\n\\n'+JSON.stringify(value));
+ if(s.restCodes?.length) {const code=s.restCodes.shift();save();console.log('HTTP/2.0 '+code+' synthetic\\nRetry-After: 0\\n'+(s.quotaEvidence?'X-RateLimit-Remaining: 0\\n':'')+'\\n{}');process.exit(1);}
+ if(s.apiFailure) { console.log('HTTP/2.0 403 Forbidden\\nx-ratelimit-remaining: 0\\n\\n{}');console.error('provider unavailable');process.exit(1); }
+ if(s.restFault) { if(s.restFault==='exception') process.exit(2); if(s.restFault==='refusal') {console.log('HTTP/2.0 401 Unauthorized\\n\\n{}');process.exit(1);}
+ console.log('HTTP/2.0 200 OK\\n\\n'+s.restFault);process.exit(0); }
+ const pr=()=>({number:s.number,title:s.title,state:s.state==='OPEN'?'open':'closed',merged:s.state==='MERGED',draft:s.isDraft,
+ head:{sha:s.headRefOid,ref:s.headRefName,repo:{full_name:s.isCrossRepository?'fixture/fork':'fixture/new-repository'}},
+ base:{ref:s.baseRefName,repo:{full_name:'fixture/new-repository'}},mergeable:s.mergeable==='UNKNOWN'?null:s.mergeable!=='CONFLICTING',mergeable_state:s.mergeStateStatus.toLowerCase(),merge_commit_sha:s.mergeCommit?.oid});
+ if(/pulls\\/[0-9]+$/.test(route)) {
  if(s.moveDuringChecks && ++s.moveViewCount>1) {
  git('-C',s.checkout,'checkout','-q','topic');fs.writeFileSync(s.checkout+'/moved.txt','moved');git('-C',s.checkout,'add','moved.txt');git('-C',s.checkout,'commit','-qm','Move head');git('-C',s.checkout,'push','-q','origin','topic');
- s.headRefOid=git('--git-dir',s.remote,'rev-parse','refs/heads/topic');s.moveDuringChecks=false;
- }
- save();console.log(JSON.stringify(s));
- }
- else if(action==='list') {
- const limit=Number(args[args.indexOf('--limit')+1]);
- const prs=s.listCount?Array.from({length:s.listCount},(_,i)=>({...s,number:i===s.listCount-1?7:i+100,comments:i===s.listCount-1?s.comments:[]})):[s];
- console.log(JSON.stringify(prs.slice(0,limit)));
- }
- else if(action==='checks') {
- if(s.apiFailure) {console.error('GraphQL rate limit'); process.exit(1);}
- if(s.moveDuringChecks) { git('-C',s.checkout,'checkout','-q','topic'); fs.writeFileSync(s.checkout+'/moved.txt','moved'); git('-C',s.checkout,'add','moved.txt'); git('-C',s.checkout,'commit','-qm','Move head'); git('-C',s.checkout,'push','-q','origin','topic'); s.moveDuringChecks=false; save(); }
- if(args.includes('--json')) console.log(JSON.stringify(s.statusCheckRollup.map(c=>({state:c.conclusion==='SUCCESS'?'SUCCESS':c.status==='COMPLETED'?'FAILURE':'PENDING'}))));
- if(s.statusCheckRollup.some(c=>c.conclusion!=='SUCCESS')) process.exit(1);
+ s.headRefOid=git('--git-dir',s.remote,'rev-parse','refs/heads/topic');s.moveDuringChecks=false;save(); }
+ save();respond({...pr(),number:Number(route.split('/').at(-1))});
+ } else if(route.includes('/pulls?')) {
+ const prs=s.listCount?Array.from({length:s.listCount},(_,i)=>({...pr(),number:i===s.listCount-1?7:i+100})):[pr()];respond(prs.slice((page-1)*100,page*100));
+ } else if(route.includes('/comments')) respond(/issues\\/7\\//.test(route)?s.comments.slice((page-1)*100,page*100):[]);
+ else if(route.includes('/check-runs')) {
+ const runs=s.checkRuns??s.statusCheckRollup.filter(c=>c.__typename!=='StatusContext').map((c,i)=>({id:i+1,name:c.name??(i?'optional-'+i:'test'),head_sha:s.headRefOid,status:c.status?.toLowerCase(),conclusion:c.conclusion?.toLowerCase()??null,app:{id:15368}}));
+ respond({total_count:runs.length,check_runs:runs.slice((page-1)*100,page*100)});
+ } else if(route.includes('/statuses')) respond(s.statuses??s.statusCheckRollup.filter(c=>c.__typename==='StatusContext').map((c,i)=>({id:i+1,context:c.context??'test',state:c.state?.toLowerCase()})));
+ else { console.error('unexpected REST route');process.exit(2); }
  } else if(action==='comment') {s.comments.push({body:args[args.indexOf('--body')+1],author:{login:'reviewer'}}); save();}
  else if(action==='ready') {s.isDraft=false;save();}
  else if(action==='update-branch') {
@@ -80,22 +86,25 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
  const state={ remote,checkout,number:7,title:"Fixture PR",state:"OPEN",baseRefName:"main",isCrossRepository:false,headRefName:"topic",headRefOid:head,mergeStateStatus:"CLEAN",mergeable:"MERGEABLE",isDraft:false,author:{login:"builder"},comments:[],statusCheckRollup:[{status:"COMPLETED",conclusion:"SUCCESS"}],calls:[],ghCalls:[],...overrides }
  await fs.writeFile(env.FAKE_PR,JSON.stringify(state))
  const config=path.join(root,"config.json"), stateDir=path.join(root,"state")
- const cfg={repos:{"fixture/new-repository":{checkout,originUrl:remote,worktreeRoot:path.join(root,"worktrees")}},stateDir,codex:{model:"fixture-model",effort:"high"},limits:{runsPer24h:8,slots:2,timeoutMs:5000},pollMs:5,commandTimeoutMs:5000,...configOverrides}
+ const cfg={repos:{"fixture/new-repository":{checkout,originUrl:remote,worktreeRoot:path.join(root,"worktrees"),requiredChecks:[{name:"test"}]}},stateDir,codex:{model:"fixture-model",effort:"high"},limits:{runsPer24h:8,slots:2,timeoutMs:5000},pollMs:5,retryMs:0,commandTimeoutMs:5000,...configOverrides}
  await fs.writeFile(config,JSON.stringify(cfg))
  const read=async()=>JSON.parse(await fs.readFile(env.FAKE_PR,"utf8"))
- const run=(...args)=>new Promise((resolve,reject)=>{
-  const child=spawn(process.execPath,[cli,config,...args],{env,stdio:["ignore","pipe","pipe"]});let stdout="",stderr=""
+ const launch=(command,args,workerEnv=env)=>new Promise((resolve,reject)=>{
+  const child=spawn(command,args,{env:workerEnv,stdio:["ignore","pipe","pipe"]});let stdout="",stderr=""
   child.stdout.on("data",b=>stdout+=b);child.stderr.on("data",b=>stderr+=b);child.on("error",reject);child.on("close",code=>resolve({code,stdout,stderr}))
  })
+ const run=(...args)=>launch(process.execPath,[cli,config,...args])
+ const wrapper=(name,...args)=>launch("sh",[fileURLToPath(new URL(`../deploy/orch/${name}.sh`,import.meta.url)),...args],
+   {...env,FACTORY_ROOT:fileURLToPath(new URL("../",import.meta.url)),FACTORY_PR_CONFIG:config})
  const approve=async body=>{
   if(body) { const s=await read();s.comments.push({body,author:{login:"reviewer"}});await fs.writeFile(env.FAKE_PR,JSON.stringify(s));return }
   const before=await read(), apiFailure=before.apiFailure, move=before.moveDuringChecks;before.apiFailure=false;before.moveDuringChecks=false;await fs.writeFile(env.FAKE_PR,JSON.stringify(before))
   const r=await run("review-pr","fixture/new-repository","7");assert.equal(r.code,0,JSON.stringify(r))
-  const s=await read();s.apiFailure=apiFailure;s.moveDuringChecks=move;s.moveViewCount=0;s.calls=[];await fs.writeFile(env.FAKE_PR,JSON.stringify(s))
+  const s=await read();s.apiFailure=apiFailure;s.moveDuringChecks=move;s.moveViewCount=0;s.calls=[];s.ghCalls=[];await fs.writeFile(env.FAKE_PR,JSON.stringify(s))
   await fs.writeFile(path.join(stateDir,"usage.json"),"[]") // approval is fixture setup, outside the exercised budget.
  }
 
- return {root,checkout,remote,head,stateDir,read,run,approve,g,config,cfg,env}
+ return {root,checkout,remote,head,stateDir,read,run,wrapper,approve,g,config,cfg,env}
 }
 const repo="fixture/new-repository"
 const ok = r => assert.equal(r.code,0,JSON.stringify(r))
@@ -142,7 +151,7 @@ for(const action of ["merge-one-core","review-pr","fix-pr"]) test(`unsupported P
  const r=await f.run(action,repo,"7",f.head)
  assert.notEqual(r.code,0);assert.match(r.stderr,/base|target/i)
  const s=await f.read();assert.equal(s.state,"OPEN");assert.equal(s.calls.length,0)
- assert.ok(s.ghCalls.every(a=>a[1]==="view"),"no update, comment or merge")
+ assert.ok(s.ghCalls.every(a=>a[0]==="api" && !a.includes("-X")),"no update, comment or merge")
 })
 for(const action of ["pr-loop","review-pr","fix-pr","ci-fix"]) test(`closed PR stops ${action} before work or success claims`,async t=>{
  const f=await fixture(t,{state:"CLOSED"});await f.approve(`APPROVE\nReviewed-SHA: ${f.head}`)
@@ -153,6 +162,21 @@ for(const action of ["pr-loop","review-pr","fix-pr","ci-fix"]) test(`closed PR s
 test("NO-PROGRESS exits 2 instead of re-reviewing unchanged head",async t=>{
  const f=await fixture(t,{noProgress:true});await f.approve("REVIEW: BLOCKED\nReviewed-SHA: "+f.head+"\n1. defect")
  const r=await f.run("pr-loop",repo,"7","-","3");assert.equal(r.code,2);assert.match(r.stdout,/NO-PROGRESS/);assert.equal((await f.read()).calls.length,1)
+})
+test("nine automatic redispatches on one refused head record one wait and no new attempts",async t=>{
+ const f=await fixture(t,{noProgress:true});await f.approve("REVIEW: BLOCKED\nReviewed-SHA: "+f.head+"\n1. defect")
+ assert.equal((await f.run("pr-loop",repo,"7","-","3")).code,2)
+ for(let i=0;i<9;i++) assert.equal((await f.run("pr-loop",repo,"7","-","3")).code,2)
+ assert.equal((await f.read()).calls.length,1)
+ const events=(await fs.readFile(path.join(f.stateDir,"delivery.jsonl"),"utf8")).trim().split("\n").map(JSON.parse)
+ assert.equal(events.filter(e=>e.status==="suspended").length,1)
+})
+test("concurrent recovery writers cannot redispatch an unchanged deterministic stop",async t=>{
+ const f=await fixture(t,{noProgress:true});await f.approve("REVIEW: BLOCKED\nReviewed-SHA: "+f.head+"\n1. defect")
+ assert.equal((await f.run("pr-loop",repo,"7","-","3")).code,2)
+ const results=await Promise.all([f.run("pr-loop",repo,"7","-","3"),f.run("pr-loop",repo,"7","-","3")])
+ assert.ok(results.every(r=>[2,75].includes(r.code)))
+ assert.equal((await f.read()).calls.length,1)
 })
 test("CHANGES REQUESTED starts a repair round before re-review",async t=>{
  const f=await fixture(t,{noProgress:true});await f.approve(`CHANGES REQUESTED\nReviewed-SHA: ${f.head}\n1. fix defect`)
@@ -391,4 +415,142 @@ for(const missing of ["root","merge-queue.txt","merge-queue.done","budget"]) tes
 })
 test("API errors on approved PR stop without spending a CI-fix run",async t=>{
  const f=await fixture(t,{apiFailure:true});await f.approve();const r=await f.run("pr-loop",repo,"7");assert.notEqual(r.code,0);assert.equal((await f.read()).calls.length,0)
+})
+test("missing required check cannot authorize enqueue or merge and spends no fixer",async t=>{
+ const f=await fixture(t,{}, {checksTimeoutMs:80});await f.approve()
+ const s=await f.read();s.statusCheckRollup=[{name:"unrelated",status:"COMPLETED",conclusion:"SUCCESS"}]
+ await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ ok(await f.run("auto-enqueue","--once"))
+ await assert.rejects(fs.readFile(path.join(f.stateDir,"queue.json")),{code:"ENOENT"})
+ assert.notEqual((await f.run("merge-one-core",repo,"7",f.head)).code,0)
+ assert.notEqual((await f.run("pr-loop",repo,"7","-","1")).code,0)
+ assert.equal((await f.read()).calls.length,0)
+})
+test("app refusal replay: nine launches across deployed recovery writers preserve exit 75 and one wait",async t=>{
+ const f=await fixture(t,{}, {limits:{runsPer24h:1,slots:1,timeoutMs:5000}})
+ await fs.mkdir(f.stateDir,{recursive:true})
+ await fs.writeFile(path.join(f.stateDir,"usage.json"),JSON.stringify([{repo,pr:7,kind:"review",at:Date.now()}]))
+ assert.equal((await f.wrapper("pr-loop",repo,"7","-","3")).code,75)
+ for(const name of ["review-pr","fix-pr","codex-guard","unstick","stall-watch","unstick","stall-watch","pr-loop"]) {
+   const args=["unstick","stall-watch"].includes(name)?["--once"]:name==="codex-guard"?[repo,"7","review",process.execPath,"-e","process.exit(0)"]:[repo,"7","-","3"]
+   assert.equal((await f.wrapper(name,...args)).code,75,name)
+ }
+ assert.equal((await f.read()).calls.length,0)
+ const events=(await fs.readFile(path.join(f.stateDir,"delivery.jsonl"),"utf8")).trim().split("\n").map(JSON.parse)
+ assert.equal(events.filter(e=>e.status==="suspended").length,1)
+ assert.equal(events.filter(e=>e.status==="started").length,0)
+ const wait=JSON.parse(await fs.readFile(path.join(f.stateDir,"waits",encodeURIComponent(repo)+"-7.json")))
+ assert.equal(wait.cause,"budget-exhausted");assert.ok(wait.resetAt>Date.now())
+ await fs.writeFile(path.join(f.stateDir,"usage.json"),"[]")
+ const results=await Promise.all([f.wrapper("unstick","--once"),f.wrapper("stall-watch","--once")])
+ assert.ok(results.some(r=>r.code===0),JSON.stringify(results))
+ assert.equal((await f.read()).calls.length,1,"budget reopening permits exactly one review")
+})
+test("named actionable dependency and new head each allow one start after no progress",async t=>{
+ const f=await fixture(t,{noProgress:true});await f.approve("REVIEW: BLOCKED\nReviewed-SHA: "+f.head+"\n1. defect")
+ assert.equal((await f.wrapper("pr-loop",repo,"7","-","3")).code,2)
+ f.cfg.repos[repo].dependencyRevision="tested-contract-revision-two";await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ assert.equal((await f.wrapper("unstick","--once")).code,2)
+ assert.equal((await f.wrapper("stall-watch","--once")).code,2)
+ assert.equal((await f.read()).calls.length,2)
+ const wt=path.join(f.root,"worktrees","fix-7")
+ await fs.writeFile(path.join(wt,"feature.txt"),"changed\n")
+ for(const args of [["add","feature.txt"],["commit","-qm","New actionable head"],["push","-q","origin","topic"]]) execFileSync("git",args,{cwd:wt,env:f.env,stdio:"ignore"})
+ ok(await f.wrapper("unstick","--once"))
+ ok(await f.wrapper("stall-watch","--once"))
+ assert.equal((await f.read()).calls.length,3,"stale blocking evidence starts only a fresh review")
+})
+for(const code of [75,17]) test(`deployed review and fix wrappers preserve child exit ${code}`,async t=>{
+ const f=await fixture(t,{childCode:code})
+ assert.equal((await f.wrapper("review-pr",repo,"7")).code,code)
+ // Give the separate fix a new declared dependency after the explicit refusal.
+ f.cfg.repos[repo].dependencyRevision="fix-input";await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ assert.equal((await f.wrapper("fix-pr",repo,"7","-")).code,code)
+})
+for(const fault of ["", "{}", "{", "null", "refusal", "exception"])
+ test(`REST terminal result ${JSON.stringify(fault)} never authorizes or dispatches`,async t=>{
+  const f=await fixture(t);const s=await f.read();s.restFault=fault||" ";await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+  assert.notEqual((await f.run("pr-loop",repo,"7","-","1")).code,0)
+  assert.equal((await f.read()).calls.length,0)
+  assert.equal((await f.read()).ghCalls.length,1,"permanent or malformed input has no blind retry")
+ })
+test("subprocess and provider canaries do not reach persisted wait/events or CLI errors",async t=>{
+ const canary='synthetic-client-canary https://user:secret-canary@example.invalid/?token=secret-canary\\ncredential=secret-canary'
+ const f=await fixture(t,{childCode:75,childError:canary})
+ const result=await f.wrapper("review-pr",repo,"7")
+ assert.equal(result.code,75)
+ assert.ok(!JSON.stringify(result).includes("secret-canary"))
+ const events=await fs.readFile(path.join(f.stateDir,"delivery.jsonl"),"utf8")
+ const wait=await fs.readFile(path.join(f.stateDir,"waits",encodeURIComponent(repo)+"-7.json"),"utf8")
+ for(const bytes of [events,wait]) { assert.ok(!bytes.includes("secret-canary"));assert.ok(!bytes.includes("synthetic-client-canary")) }
+ const s=await f.read();s.restFault=JSON.stringify({identity:{client:canary},token:canary});await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ const failure=await f.run("pr-loop",repo,"7","-","1")
+ assert.notEqual(failure.code,0);assert.ok(!JSON.stringify(failure).includes("secret-canary"))
+ assert.ok(!(await fs.readFile(path.join(f.stateDir,"delivery.jsonl"),"utf8")).includes("secret-canary"))
+})
+test("close/reopen preserves unchanged refusal; recovery completion retires waits and disposes claims",async t=>{
+ const f=await fixture(t,{noProgress:true});await f.approve(`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. defect`)
+ assert.equal((await f.run("pr-loop",repo,"7","-","1")).code,2)
+ const file=f.env.FAKE_PR,s=await f.read();s.state="CLOSED";await fs.writeFile(file,JSON.stringify(s))
+ assert.equal((await f.wrapper("unstick","--once")).code,8)
+ s.state="OPEN";await fs.writeFile(file,JSON.stringify(s))
+ assert.equal((await f.wrapper("stall-watch","--once")).code,2)
+ assert.equal((await f.read()).calls.length,1)
+ f.cfg.repos[repo].dependencyRevision="repaired-actionable-input";await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ s.noProgress=false;await fs.writeFile(file,JSON.stringify(s))
+ ok(await f.wrapper("unstick","--once"))
+ const wait=JSON.parse(await fs.readFile(path.join(f.stateDir,"waits",encodeURIComponent(repo)+"-7.json")))
+ assert.equal(wait.status,"complete")
+ const count=(await f.read()).calls.length;ok(await f.wrapper("stall-watch","--once"));assert.equal((await f.read()).calls.length,count)
+ for(const dir of await fs.readdir(path.join(f.stateDir,"locks")))
+   if(dir.endsWith(".claims")) assert.deepEqual(await fs.readdir(path.join(f.stateDir,"locks",dir)),[],"claims disposed")
+})
+test("current cancelled CI is refused by loop/review/scan/merge without fixer dispatch",async t=>{
+ const f=await fixture(t);await f.approve()
+ const s=await f.read();s.statusCheckRollup=[{status:"COMPLETED",conclusion:"CANCELLED"}];await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ for(const name of ["pr-loop","review-pr","merge-one-core"]) assert.equal((await f.wrapper(name,repo,"7",name==="merge-one-core"?f.head:"-","1")).code,3)
+ ok(await f.wrapper("auto-enqueue","--once"))
+ await assert.rejects(fs.readFile(path.join(f.stateDir,"queue.json")),{code:"ENOENT"})
+ assert.equal((await f.read()).calls.length,0)
+ assert.ok((await f.read()).ghCalls.every(a=>a[0]==="api"),"new reads never call GraphQL")
+})
+test("provider-unknown mergeability cannot send a green approved head to a code fixer",async t=>{
+ const f=await fixture(t);await f.approve()
+ const s=await f.read();s.mergeable="UNKNOWN";await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ assert.equal((await f.run("pr-loop",repo,"7","-","1")).code,75)
+ assert.equal((await f.read()).calls.length,0)
+})
+test("obsolete A/B cancellation is superseded for all callers while current C passes",async t=>{
+ const f=await fixture(t);await f.approve()
+ const s=await f.read(),A="a".repeat(40),B="b".repeat(40)
+ s.checkRuns=[A,B,f.head].map((head,i)=>({id:i+1,name:"test",head_sha:head,app:{id:15368},status:"completed",conclusion:i===2?"success":"cancelled"}))
+ await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ for(const head of [A,B]) {const r=await f.run("readiness",repo,"7",head);ok(r);assert.equal(JSON.parse(r.stdout).state,"superseded")}
+ ok(await f.wrapper("pr-loop",repo,"7","-","1"));ok(await f.wrapper("auto-enqueue","--once"))
+ assert.equal((await f.read()).calls.length,0)
+ assert.equal(JSON.parse(await fs.readFile(path.join(f.stateDir,"queue.json")))[0].head,f.head)
+})
+for(const [code,quotaEvidence,retries] of [[401,false,1],[403,false,1],[403,true,3],[429,false,3],[502,false,3]])
+ test(`REST ${code} quota=${quotaEvidence} distinguishes bounded transient reads from refusal`,async t=>{
+   const f=await fixture(t,{restCodes:Array(5).fill(code),quotaEvidence})
+   assert.notEqual((await f.run("readiness",repo,"7")).code,0)
+   assert.equal((await f.read()).ghCalls.length,retries)
+   assert.equal((await f.read()).calls.length,0)
+ })
+test("transient read recovery resumes the observation without a duplicate model phase",async t=>{
+ const f=await fixture(t,{restCodes:[502,429]})
+ const r=await f.run("readiness",repo,"7");ok(r);assert.equal(JSON.parse(r.stdout).state,"success")
+ assert.equal((await f.read()).calls.length,0)
+})
+test("deployed guard keeps the existing rescope caller in the shared budget",async t=>{
+ const f=await fixture(t,{}, {limits:{runsPer24h:1,slots:1,timeoutMs:5000}})
+ ok(await f.wrapper("codex-guard",repo,"7","rescope",process.execPath,"-e","process.exit(0)"))
+ assert.equal((await f.wrapper("codex-guard",repo,"7","review",process.execPath,"-e","process.exit(0)")).code,75)
+ assert.equal(JSON.parse(await fs.readFile(path.join(f.stateDir,"usage.json")))[0].kind,"rescope")
+})
+test("an unapproved pending head keeps the bounded CI wait before any review dispatch",async t=>{
+ const f=await fixture(t,{statusCheckRollup:[{status:"IN_PROGRESS",conclusion:null}]},{checksTimeoutMs:80})
+ const r=await f.run("pr-loop",repo,"7","-","1")
+ assert.equal(r.code,142,"pending work reaches its existing CI deadline instead of silently dropping the review")
+ assert.equal((await f.read()).calls.length,0)
 })

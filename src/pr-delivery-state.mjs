@@ -86,7 +86,13 @@ export async function reserveCodex(config, repo, pr, kind) {
       const file = path.join(config.stateDir, "usage.json")
       const usage = (await readJson(file, [])).filter(r => r.at >= Date.now() - 86400_000)
       if (usage.filter(r => r.repo === repo && r.pr === pr).length >= config.limits.runsPer24h)
-        throw new DeliveryError(`BUDGET-STOP ${repo}#${pr}: runs per 24h exhausted`, 75)
+        {
+          const error = new DeliveryError(`BUDGET-STOP ${repo}#${pr}: runs per 24h exhausted`, 75)
+          const records = usage.filter(r => r.repo === repo && r.pr === pr).sort((a, b) => a.at - b.at)
+          error.resetAt = records[records.length - config.limits.runsPer24h].at + 86400_001
+          error.cause = "budget-exhausted"
+          throw error
+        }
       for (let i = 0; i < config.limits.slots; i++) {
         const release = await acquireLease(root, `codex-slot-${i}`)
         if (release) {
@@ -101,4 +107,37 @@ export async function reserveCodex(config, repo, pr, kind) {
     if (Date.now() >= until) throw new DeliveryError(`SLOT-STOP ${repo}#${pr}: concurrency wait timed out`, 75)
     await pause(config.pollMs)
   }
+}
+
+// All recovery writers use the same record. Reading eligibility is advisory;
+// callers still take the PR lease and reserve the budget at dispatch time.
+export async function deliveryWait(config, repo, pr, input, stop = null) {
+  return withLease(path.join(config.stateDir, "locks"), `wait-${keyFor(repo, pr)}`, async () => {
+    const file = path.join(config.stateDir, "waits", `${keyFor(repo, pr)}.json`)
+    const prior = await readJson(file, null)
+    if (stop) {
+      const record = { schema: "factory-delivery-wait/v1", status: "suspended", ...input, ...stop }
+      if (prior?.status === "suspended" && JSON.stringify(prior) === JSON.stringify(record)) return { ...prior, recorded: false }
+      await writeJson(file, record)
+      return { ...record, recorded: true }
+    }
+    if (!prior || prior.status !== "suspended") return null
+    const changed = prior.head !== input.head || prior.dependency !== input.dependency
+    const budgetOpen = prior.cause === "budget-exhausted" && input.budgetAvailable
+    if (changed || budgetOpen || (prior.resetAt && Date.now() >= prior.resetAt)) {
+      await writeJson(file, { ...prior, status: "resumable" })
+      return null
+    }
+    const error = new DeliveryError(prior.message, prior.code)
+    error.wait = prior
+    throw error
+  }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs })
+}
+
+export async function completeDeliveryWait(config, repo, pr) {
+  return withLease(path.join(config.stateDir, "locks"), `wait-${keyFor(repo, pr)}`, async () => {
+    const file = path.join(config.stateDir, "waits", `${keyFor(repo, pr)}.json`)
+    const prior = await readJson(file, null)
+    if (prior) await writeJson(file, { ...prior, status: "complete" })
+  }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs })
 }

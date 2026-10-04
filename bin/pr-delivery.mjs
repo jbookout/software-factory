@@ -9,7 +9,7 @@ try {
   const adapter = createPrDeliveryAdapter(await loadDeliveryConfig(configPath))
   const [repo, number, extra, fourth] = args
   const once = args.includes("--once"), pr = Number(number)
-  const daemons = ["merge-queue", "auto-enqueue"]
+  const daemons = ["merge-queue", "auto-enqueue", "recover"]
   if (!daemons.includes(action) && !["branch-wt", "import-legacy"].includes(action) && (!Number.isSafeInteger(pr) || pr <= 0)) throw new Error("PR number must be a positive integer")
   const request = { repo, pr }
   const loop = () => runPrDelivery({ ...request, worktree: extra, rounds: Number(fourth ?? 3) }, adapter)
@@ -20,6 +20,17 @@ try {
     process.exitCode = data.code ?? (result.status === "fail" ? 1 : 0)
   }
   if (action === "pr-loop") report(await adapter.exclusive(repo, pr, loop))
+  else if (action === "recover") {
+    do {
+      for (const candidate of await adapter.recoveryCandidates()) {
+        try { report(await adapter.exclusive(candidate.repo, candidate.pr, () => runPrDelivery(candidate, adapter))) }
+        catch (e) { if (e.code !== 75) throw e }
+      }
+      if (once) break
+      process.exitCode = 0
+      await pause(adapter.config.autoPollMs)
+    } while (true)
+  }
   else if (daemons.includes(action)) {
     do {
       const result = await adapter.execute(action)
@@ -37,7 +48,8 @@ try {
     })
   } else if (action === "import-legacy") report(await adapter.execute(action, { root: repo }))
   else if (action === "branch-wt") report(await adapter.execute(action, { repo, branch: number, fallback: extra }))
-  else if (action === "codex-guard") report(await adapter.execute(action, { ...request, kind: extra, argv: args.slice(3) }))
+  else if (action === "codex-guard") report(await adapter.exclusive(repo, pr, () => adapter.execute(action, { ...request, kind: extra, argv: args.slice(3) })))
+  else if (action === "readiness") report(await adapter.execute(action, { ...request, head: extra }))
   else if (["merge-enqueue", "merge-one-core"].includes(action))
     report(await adapter.execute(action === "merge-enqueue" ? "enqueue" : action, { ...request, head: extra, note: fourth }))
   else throw new Error(`unknown delivery action: ${action}`)
