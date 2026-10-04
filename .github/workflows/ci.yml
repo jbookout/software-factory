@@ -2,14 +2,22 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review, closed]
   push:
     branches: [main]
+
+concurrency:
+  # PR validation supersedes by workflow + PR. Non-PR verdicts are independent:
+  # sharing a non-cancelling group would still replace older pending runs.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
   test:
+    if: ${{ github.event_name != 'pull_request' || github.event.action != 'closed' }}
     # Ubuntu 24's runner policy denies Bubblewrap private-loopback setup.
     # Qualify replay on this fixed image; never fall back to unrestricted exec.
     runs-on: ubuntu-22.04
