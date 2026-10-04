@@ -453,8 +453,11 @@ cannot override a failed blocking criterion or an unresolved required row.
 
 Bind each record to project/version, accepted design-contract revision/digest,
 source commit, **immutable build artifact digest**, build configuration and fixture
-digests, platform/engine version and inspected target identity. A commit alone
-does not distinguish two builds with different bytes or configuration. Reviewer
+digests, platform/engine version and inspected target identity. The target
+declares one engine per evidence kind on each platform, so an honest manual row
+names its inspection method rather than borrowing the e2e engine, and it names
+the digest of the build's own feature map, which the frozen manifest must match.
+A commit alone does not distinguish two builds with different bytes or configuration. Reviewer
 identity, fresh-context receipt and review evidence are separate from maker identity
 and self-critique. The core authenticates them and reads the bound bytes; supplied
 IDs/digests do not establish independence or correctness. For stored changes,

@@ -9,6 +9,7 @@
     "text": { "type": "string", "minLength": 1, "maxLength": 2000 },
     "texts": { "type": "array", "items": { "$ref": "#/$defs/text" } },
     "platform": { "enum": ["web", "ios", "android", "desktop"] },
+    "evidence": { "enum": ["e2e", "manual", "judgment"] },
     "artifact": {
       "type": "object",
       "additionalProperties": false,
@@ -95,7 +96,7 @@
         "id": { "$ref": "#/$defs/id" },
         "expectation": { "$ref": "#/$defs/text" },
         "blocking": { "type": "boolean" },
-        "evidence": { "enum": ["e2e", "manual", "judgment"] },
+        "evidence": { "$ref": "#/$defs/evidence" },
         "platforms": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/platform" } },
         "featureId": { "$ref": "#/$defs/id" },
         "entryPoints": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
@@ -139,7 +140,7 @@
     "target": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["projectId", "version", "contract", "sourceCommit", "buildDigest", "buildConfigDigest", "fixtures", "platforms", "makers"],
+      "required": ["projectId", "version", "contract", "sourceCommit", "buildDigest", "buildConfigDigest", "featureMapDigest", "fixtures", "platforms", "makers"],
       "properties": {
         "projectId": { "$ref": "#/$defs/id" },
         "version": { "type": "integer", "minimum": 1 },
@@ -147,6 +148,7 @@
         "sourceCommit": { "$ref": "#/$defs/commit" },
         "buildDigest": { "$ref": "#/$defs/sha256" },
         "buildConfigDigest": { "$ref": "#/$defs/sha256" },
+        "featureMapDigest": { "$ref": "#/$defs/sha256" },
         "fixtures": {
           "type": "object",
           "propertyNames": { "$ref": "#/$defs/id" },
@@ -159,8 +161,16 @@
           "additionalProperties": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["engine", "targetId"],
-            "properties": { "engine": { "$ref": "#/$defs/text" }, "targetId": { "$ref": "#/$defs/text" } }
+            "required": ["targetId", "engines"],
+            "properties": {
+              "targetId": { "$ref": "#/$defs/text" },
+              "engines": {
+                "type": "object",
+                "minProperties": 1,
+                "propertyNames": { "$ref": "#/$defs/evidence" },
+                "additionalProperties": { "$ref": "#/$defs/text" }
+              }
+            }
           }
         },
         "makers": {

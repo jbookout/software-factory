@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import Ajv2020 from 'ajv/dist/2020.js'
+import { canonicalDigest, deepFreeze } from './canonical.mjs'
 import { DESIGN_STATIONS, MODEL_MODES } from './design-manager.mjs'
 
 const schema = JSON.parse(readFileSync(new URL('../schemas/design-settings.schema.json', import.meta.url)))
@@ -11,18 +11,6 @@ const ajv = new Ajv2020({ strict: true })
 const validate = ajv.compile(schema)
 const routeProviders = Object.freeze({ 'codex-cloud': 'codex', 'claude-subscription': 'claude',
   'dot-chatgpt': 'dot', 'grok-research': 'grok' })
-
-function freeze(value) {
-  if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value) }
-  return value
-}
-
-// Canonical key order binds meaning, independent of JSON whitespace/key ordering.
-function canonical(value) {
-  if (Array.isArray(value)) return value.map(canonical)
-  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(k => [k, canonical(value[k])]))
-  return value
-}
 
 export function resolveDesignSettings(profile) {
   if (!validate(profile)) throw new Error(`invalid design settings: ${ajv.errorsText(validate.errors)}`)
@@ -47,9 +35,8 @@ export function resolveDesignSettings(profile) {
       if (!Object.hasOwn(profile.workers, workerId)) throw new Error(`${mode}: unknown worker ${workerId}`)
     }
   }
-  const snapshot = canonical(profile)
-  const digest = `sha256:${createHash('sha256').update(JSON.stringify(snapshot)).digest('hex')}`
-  return freeze({ profile: snapshot, digest })
+  const snapshot = structuredClone(profile)
+  return deepFreeze({ profile: snapshot, digest: `sha256:${canonicalDigest(snapshot)}` })
 }
 
 export async function loadDesignSettings(file = join(homedir(), '.config/software-factory/design-manager/settings.json')) {
@@ -63,7 +50,7 @@ export function resolveDesignAssignment(settings, { station, mode }) {
   const checked = resolveDesignSettings(settings.profile)
   if (checked.digest !== settings.digest) throw new Error('settings digest mismatch')
   const profile = checked.profile
-  return freeze({ userId: profile.userId, version: profile.version, settingsDigest: checked.digest, station, mode,
+  return deepFreeze({ userId: profile.userId, version: profile.version, settingsDigest: checked.digest, station, mode,
     assignments: profile.stations[station].map(assignment => {
       const worker = profile.workers[assignment.workerId]
       return { ...assignment, provider: worker.provider, model: worker.model, effort: worker.effort,

@@ -22,11 +22,13 @@ export interface VerifyTrap { id: string; criterionId: string; fixture: FixtureR
 export interface VerifyCriteriaInput {
   projectId: string; version: number; contract: ContractRef; criteria: VerifyCriterion[]; traps: VerifyTrap[];
 }
-export type FrozenVerifyCriteria = Readonly<VerifyCriteriaInput & { schema: 'design-verify-criteria.v1'; digest: string }>
+export type FrozenVerifyCriteria = Readonly<VerifyCriteriaInput & {
+  schema: 'design-verify-criteria.v1'; featureMapDigest: string; digest: string }>
 export interface VerifyTarget {
   projectId: string; version: number; contract: ContractRef; sourceCommit: string;
-  buildDigest: string; buildConfigDigest: string; fixtures: Record<string, string>;
-  platforms: Partial<Record<ProjectPlatform, { engine: string; targetId: string }>>;
+  buildDigest: string; buildConfigDigest: string; featureMapDigest: string; fixtures: Record<string, string>;
+  platforms: Partial<Record<ProjectPlatform, { targetId: string;
+    engines: Partial<Record<VerifyCriterion['evidence'], string>> }>>;
   makers: { ids: string[]; sessions: string[] };
 }
 export interface DesignCheckRecord {
@@ -56,6 +58,7 @@ export type RepairPlan =
   | { action: 'escalate'; diagnosis: { failedRounds: number; failing: string[] }; question: string }
 
 export function validateFeatureMap(map: VerifyFeatureMap): string[];
+export function verifyFeatureMapDigest(map: VerifyFeatureMap): string;
 export function freezeVerifyCriteria(input: VerifyCriteriaInput & { featureMap: VerifyFeatureMap }): FrozenVerifyCriteria;
 export function verifyTargetDigest(target: VerifyTarget): string;
 export function signReviewReceipt(payload: DesignReviewPayload, key: string): SignedDesignReview;

@@ -22,12 +22,15 @@ export function e2eEnvironment(env = {}, mode = 'run') {
   return { ...env, E2E_TELEMETRY_DISABLED: '1' }
 }
 
+const holdsCredential = value => value !== null && typeof value === 'object' &&
+  Object.entries(value).some(([key, inner]) => CREDENTIAL_FIELDS.test(key) || holdsCredential(inner))
+
 /**
  * Model-backed e2e runs are attended only. Health carries expiry and refresh
  * status, never token contents; any doubt blocks with one login action.
  */
 export function attendedEvaluationStatus({ attended, health, now = Date.now(), warningMs = EXPIRY_WARNING_MS }) {
-  if (health && Object.keys(health).some(key => CREDENTIAL_FIELDS.test(key)))
+  if (holdsCredential(health))
     throw new Error('credential contents must not reach the factory')
   const blocked = reason => ({ status: 'blocked', reason, action: LOGIN_ACTION })
   if (attended !== true) return blocked('model-backed e2e runs are attended only; waiting at the attended-evaluation checkpoint')
@@ -78,16 +81,23 @@ const sameTest = (a, b) => a?.test?.ref === b?.test?.ref && a?.test?.digest === 
  */
 export async function qualifyAgenticEvaluation({ manifest, broken, repaired, replay, archive }) {
   const reasons = []
+  // Nothing planted, nothing guarded or nothing archived proves nothing.
+  if (!manifest.defects.length) reasons.push('no planted defect to catch')
+  if (!manifest.traps.length) reasons.push('no trap to stay clean on')
+  if (!archive.refs.length) reasons.push('no archived evidence to survive cleanup')
   const triage = triageFindings(broken)
   if (triage.blocked) reasons.push(triage.blocked)
+  const catches = (finding, defect) => finding.repro.assertion === defect.assertion && finding.repro.route === defect.route
   const repros = new Map()
   for (const defect of manifest.defects) {
-    const caught = triage.confirmed.find(finding => finding.repro.assertion === defect.assertion && finding.repro.route === defect.route)
+    const caught = triage.confirmed.find(finding => catches(finding, defect))
     if (!caught) { reasons.push(`planted defect ${defect.id} missed`); continue }
     repros.set(defect.id, caught.repro)
   }
+  // Traps sit on the routes they guard: only a finding that catches no planted defect flags one.
+  const unplanted = triage.confirmed.filter(finding => !manifest.defects.some(defect => catches(finding, defect)))
   for (const trap of manifest.traps) {
-    if (triage.confirmed.some(finding => finding.repro.route === trap.route)) reasons.push(`trap ${trap.id} flagged`)
+    if (unplanted.some(finding => finding.repro.route === trap.route)) reasons.push(`trap ${trap.id} flagged`)
   }
   if (sameBuild(repaired.candidate, broken.candidate)) reasons.push('repaired build must differ from the broken build')
   for (const [id, repro] of repros) {

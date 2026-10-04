@@ -90,8 +90,9 @@ test('model-backed runs are attended only and block on login, missing expiry, fa
     assert.match(status.reason, pattern)
     assert.equal(status.action, 'Sign in to e2e with ChatGPT (attended)')
   }
-  assert.throws(() => e2e.attendedEvaluationStatus({ attended: true, now,
-    health: { ...healthy, accessToken: 'secret' } }), /credential contents/)
+  for (const health of [{ ...healthy, accessToken: 'secret' }, { ...healthy, provider: { access_token: 'x' } },
+    { ...healthy, sessions: [{ cookie: 'x' }] }])
+    assert.throws(() => e2e.attendedEvaluationStatus({ attended: true, now, health }), /credential contents/)
 })
 
 test('a finding counts only when its repro fails with an assertion on the exact candidate', () => {
@@ -140,4 +141,32 @@ test('qualification disqualifies missed defects, flagged traps, missing repros, 
     assert.equal(result.status, 'disqualified', pattern.source)
     assert.match(result.reasons.join('\n'), pattern)
   }
+})
+
+test('qualification refuses an empty defect manifest, an empty trap list and an empty archive', async () => {
+  const result = await e2e.qualifyAgenticEvaluation({ manifest: { defects: [], traps: [] },
+    broken: { candidate: brokenBuild, findings: [] }, repaired: { candidate: cleanBuild, reruns: [] },
+    replay: { reruns: [], providerInvocations: 0 }, archive: { refs: [], readArtifact: () => null } })
+  assert.equal(result.status, 'disqualified')
+  for (const pattern of [/no planted defect/, /no trap/, /no archived evidence/]) assert.match(result.reasons.join('\n'), pattern)
+})
+
+test('a trap on the route it guards is not flagged by the correct defect finding on that route', async () => {
+  const [defect] = manifest.defects
+  const result = await qualification(input => ({ ...input,
+    manifest: { defects: [defect], traps: [{ id: 'blank-refusal', kind: 'intended-refusal', route: defect.route }] },
+    broken: { ...input.broken, findings: input.broken.findings.filter(f => f.id !== 'f-dead-filter') },
+    repaired: { ...input.repaired, reruns: input.repaired.reruns.slice(0, 1) },
+    replay: { ...input.replay, reruns: input.replay.reruns.slice(0, 1) } }))
+  assert.deepEqual(result.reasons, [])
+  assert.equal(result.status, 'qualified')
+  const flagged = await qualification(input => ({ ...input,
+    manifest: { defects: [defect], traps: [{ id: 'blank-refusal', kind: 'intended-refusal', route: defect.route }] },
+    broken: { ...input.broken, findings: [...input.broken.findings.filter(f => f.id !== 'f-dead-filter'),
+      { id: 'f-false', charter: 'save-journey', story: 'refusal looked like a bug', explanation: null,
+        repro: { ...repro(defect), test: { ref: 'repro-false.spec.ts', digest: sha('false') }, assertion: 'expect(error).toBeHidden()' } }] },
+    repaired: { ...input.repaired, reruns: input.repaired.reruns.slice(0, 1) },
+    replay: { ...input.replay, reruns: input.replay.reruns.slice(0, 1) } }))
+  assert.equal(flagged.status, 'disqualified')
+  assert.match(flagged.reasons.join('\n'), /trap blank-refusal flagged/)
 })

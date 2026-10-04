@@ -49,8 +49,9 @@ const criteriaInput = {
 }
 const buildA = { projectId: 'synthetic-task-web', version: 1, contract: { revision: 3, digest: sha('contract r3') },
   sourceCommit: 'a'.repeat(40), buildDigest: sha('build A bytes'), buildConfigDigest: sha('production config'),
-  fixtures: { 'tasks-seed': sha('seed tasks') },
-  platforms: { web: { engine: verify.ACCEPTANCE_ENGINE, targetId: 'chromium-headless/sample-1' } },
+  fixtures: { 'tasks-seed': sha('seed tasks') }, featureMapDigest: verify.verifyFeatureMapDigest(featureMap),
+  platforms: { web: { targetId: 'chromium-headless/sample-1',
+    engines: { e2e: verify.ACCEPTANCE_ENGINE, manual: 'human-inspection@1' } } },
   makers: { ids: ['codex-maker'], sessions: ['maker-session-1'] } }
 
 async function world({ edit = () => {}, target = buildA, reviewEdit = p => p, sign = verify.signReviewReceipt, manifestInput = criteriaInput } = {}) {
@@ -63,14 +64,14 @@ async function world({ edit = () => {}, target = buildA, reviewEdit = p => p, si
   const manifest = verify.freezeVerifyCriteria({ ...manifestInput, featureMap })
   const oracles = {}
   for (const c of manifest.criteria) oracles[c.id] = await put(`oracle-${c.id}.txt`, `assert ${c.expectation}`)
-  const binding = (platform = 'web') => ({ projectId: buildA.projectId, version: buildA.version,
+  const binding = (evidence, platform = 'web') => ({ projectId: buildA.projectId, version: buildA.version,
     contractRevision: buildA.contract.revision, contractDigest: buildA.contract.digest,
     sourceCommit: buildA.sourceCommit, buildDigest: buildA.buildDigest, buildConfigDigest: buildA.buildConfigDigest,
-    platform, engine: buildA.platforms.web.engine, targetId: buildA.platforms.web.targetId })
+    platform, engine: buildA.platforms[platform].engines[evidence], targetId: buildA.platforms[platform].targetId })
   const rows = []
   for (const c of manifest.criteria) {
     const method = c.evidence
-    const base = { schema: 'design-check.v1', criterionId: c.id, binding: binding(), actor: 'synthetic owner',
+    const base = { schema: 'design-check.v1', criterionId: c.id, binding: binding(c.evidence), actor: 'synthetic owner',
       startingState: 'seeded with two tasks', steps: ['open entry', 'act', 'assert'], expected: c.expectation,
       method, oracle: oracles[c.id], finding: null, persistence: null }
     for (const entryPoint of c.entryPoints) {
@@ -92,7 +93,7 @@ async function world({ edit = () => {}, target = buildA, reviewEdit = p => p, si
   }
   for (const trap of manifest.traps) {
     const c = manifest.criteria.find(item => item.id === trap.criterionId)
-    rows.push({ schema: 'design-check.v1', criterionId: c.id, role: 'trap', trapId: trap.id, binding: binding(),
+    rows.push({ schema: 'design-check.v1', criterionId: c.id, role: 'trap', trapId: trap.id, binding: binding(c.evidence),
       fixture: trap.fixture, actor: 'synthetic owner', startingState: 'trap state', steps: ['open entry', 'assert'],
       expected: c.expectation, observed: 'intended behavior, no violation', method: c.evidence, oracle: oracles[c.id],
       entryPoint: c.entryPoints[0], entryPointStatus: 'exercised', outcome: 'passed', finding: null, persistence: null,
@@ -260,7 +261,7 @@ test('AW-4 evidence for build A never approves build B, even at the same source 
     { buildConfigDigest: sha('debug config') },
     { fixtures: { 'tasks-seed': sha('changed seed') } },
     { contract: { revision: 4, digest: sha('contract r4') } },
-    { platforms: { web: { engine: verify.ACCEPTANCE_ENGINE, targetId: 'chromium-headless/other' } } }
+    { platforms: { web: { ...buildA.platforms.web, targetId: 'chromium-headless/other' } } }
   ]) {
     const buildB = { ...buildA, ...change }
     assert.equal(buildB.sourceCommit, buildA.sourceCommit)
@@ -268,6 +269,52 @@ test('AW-4 evidence for build A never approves build B, even at the same source 
     assert.equal(result.gate, 'fail', JSON.stringify(change))
     for (const c of result.criteria) assert.match(c.reasons.join('\n'), /bound to another (build|fixture)|contract/)
   }
+})
+
+test('AW-4 the gate snapshots its inputs: a target mutated while the reader yields cannot pass build B evidence', async () => {
+  const buildB = sha('build B bytes')
+  const w = await world({ edit: rows => rows.forEach(r => { r.binding.buildDigest = buildB }) })
+  const target = structuredClone(buildA)
+  let reads = 0
+  const readArtifact = ref => { if (reads++ === 0) target.buildDigest = buildB; return w.readArtifact(ref) }
+  const result = await verify.evaluateVerification({ ...w, target, readArtifact })
+  assert.equal(result.targetDigest, verify.verifyTargetDigest(buildA))
+  assert.equal(result.gate, 'fail')
+  assert.match(reasons(result), /bound to another build: buildDigest/)
+})
+
+test('AW-4 each evidence kind binds its own engine: honest manual rows pass, relabelled engines fail', async () => {
+  const honest = await evaluate()
+  assert.equal(byId(honest, 'focus-visible').verdict, 'pass', reasons(honest))
+  const borrowed = await evaluate({ edit: rows => rows.filter(r => r.criterionId === 'focus-visible')
+    .forEach(r => { r.binding.engine = verify.ACCEPTANCE_ENGINE }) })
+  assert.equal(byId(borrowed, 'focus-visible').verdict, 'fail')
+  assert.match(reasons(borrowed), /focus-visible.*bound to another build: engine/)
+  const undeclared = await evaluate({ target: { ...buildA, platforms: { web: { ...buildA.platforms.web,
+    engines: { e2e: verify.ACCEPTANCE_ENGINE } } } } })
+  assert.equal(byId(undeclared, 'focus-visible').verdict, 'fail')
+  assert.match(reasons(undeclared), /focus-visible.*bound to another build: engine/)
+})
+
+test('AW-4 the feature map is bound to the target build: a stale map cannot hide a new entry point', async () => {
+  const newer = structuredClone(featureMap)
+  newer.features[0].entryPoints.push({ id: 'voice-add', route: '/voice', handles: ['button#voice-add'] })
+  const target = { ...buildA, featureMapDigest: verify.verifyFeatureMapDigest(newer) }
+  const stale = await evaluate({ target })
+  assert.equal(stale.gate, 'fail')
+  assert.match(reasons(stale), /feature map is not the target build's map/)
+  const current = await verify.evaluateVerification({ ...await world({ target }), featureMap: newer })
+  assert.equal(current.gate, 'fail')
+  assert.match(reasons(current), /omits feature entry point voice-add/)
+})
+
+test('AW-4 a criterion with no candidate rows yet is pending, not an oracle mismatch', async () => {
+  const result = await evaluate({ edit: rows => {
+    for (const row of rows.filter(r => r.criterionId === 'empty-copy' && r.role === 'candidate')) rows.splice(rows.indexOf(row), 1)
+  } })
+  assert.equal(byId(result, 'empty-copy').verdict, 'pending', reasons(result))
+  assert.doesNotMatch(reasons(result), /different oracle/)
+  assert.match(reasons(result), /missing required row empty-copy/)
 })
 
 test('AW-4 reviewer receipts are authenticated, independent, fresh and must read the evidence', async () => {

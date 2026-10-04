@@ -113,6 +113,25 @@ test('slice 4 sample: Doctor blocks a stale build and a convenience run records 
   assert.deepEqual(skippedRows.map(r => [r.entryPoint, r.entryPointStatus]), [['home-form', 'exercised'], ['quick-add', 'skipped']])
 })
 
+test('slice 4 sample: Cleanup still runs when Launch fails or times out', async () => {
+  const dirs = await workspace()
+  const map = await loadFeatureMap(skillDir)
+  const verifyWith = (build, options = {}) => runVerify({ build, feature: map.features[0], evidenceRoot: dirs.evidence,
+    scratchParent: dirs.scratch, criterionId: 'task-saved', role: 'candidate', ...options })
+  const exitsDir = path.join(dirs.builds, 'exits')
+  await fs.mkdir(exitsDir)
+  await fs.writeFile(path.join(exitsDir, 'server.mjs'), 'process.exit(3)\n')
+  await assert.rejects(verifyWith({ dir: exitsDir, revision }), /server exited 3/)
+  const hangsDir = path.join(dirs.builds, 'hangs')
+  await fs.mkdir(hangsDir)
+  await fs.writeFile(path.join(hangsDir, 'server.mjs'),
+    "import fs from 'node:fs'\nfs.writeFileSync(new URL('./pid', import.meta.url), String(process.pid))\nsetInterval(() => {}, 1000)\n")
+  await assert.rejects(verifyWith({ dir: hangsDir, revision }, { launchTimeoutMs: 2000 }), /launch timed out/)
+  const pid = Number(await fs.readFile(path.join(hangsDir, 'pid'), 'utf8'))
+  assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, 'the timed-out server is not left running')
+  assert.deepEqual(await fs.readdir(dirs.scratch), ['unrelated.txt'])
+})
+
 test('slice 4 sample: the gate refuses the sample HTTP driver as acceptance evidence for the clean build', async () => {
   const dirs = await workspace()
   const map = await loadFeatureMap(skillDir)
@@ -131,8 +150,8 @@ test('slice 4 sample: the gate refuses the sample HTTP driver as acceptance evid
   const target = { projectId: first.binding.projectId, version: 1,
     contract: { revision: first.binding.contractRevision, digest: first.binding.contractDigest },
     sourceCommit: revision, buildDigest: clean.buildDigest, buildConfigDigest: clean.buildConfigDigest,
-    fixtures: { [first.fixture.id]: first.fixture.digest },
-    platforms: { web: { engine: verify.ACCEPTANCE_ENGINE, targetId: first.binding.targetId } },
+    fixtures: { [first.fixture.id]: first.fixture.digest }, featureMapDigest: verify.verifyFeatureMapDigest(map),
+    platforms: { web: { targetId: first.binding.targetId, engines: { e2e: verify.ACCEPTANCE_ENGINE } } },
     makers: { ids: ['sample-maker'], sessions: ['sample-session'] } }
   const gate = await verify.evaluateVerification({ manifest, featureMap: map, target, records: result.records,
     review: null, reviewKey: 'unused-review-key-0123456789abcdefgh', readArtifact: createArtifactReader(dirs.evidence),

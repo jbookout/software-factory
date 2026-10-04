@@ -1,12 +1,12 @@
 // Prove's criterion evidence contract (Design Manager slice 4). It reads bound
 // artifact bytes through a caller-supplied store and reports a gate verdict;
 // it grants no merge, deployment or final acceptance authority.
-import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { isDeepStrictEqual } from 'node:util'
 import Ajv2020 from 'ajv/dist/2020.js'
 import { createBoundReader } from './evidence.mjs'
-import { canonicalJson, hmacSignature, hmacSignatureMatches } from './hmac-signature.mjs'
+import { canonicalDigest, deepFreeze } from './canonical.mjs'
+import { hmacSignature, hmacSignatureMatches } from './hmac-signature.mjs'
 
 const schema = JSON.parse(readFileSync(new URL('../schemas/design-verify.schema.json', import.meta.url)))
 const ajv = new Ajv2020({ strict: true, allErrors: true }).addSchema(schema)
@@ -22,13 +22,8 @@ const validateReview = validator('review')
 export const ACCEPTANCE_ENGINE = 'e2e@0.15.1'
 const MAX_FAILED_REPAIR_ROUNDS = 2
 
-const digestOf = value => createHash('sha256').update(canonicalJson(value)).digest('hex')
 const schemaErrors = (validate, label) => (validate.errors ?? [])
   .map(error => `${label}${error.instancePath} ${error.message}`)
-function deepFreeze(value) {
-  if (value && typeof value === 'object') Object.values(Object.freeze(value)).forEach(deepFreeze)
-  return value
-}
 function assertReviewKey(key) {
   if (typeof key !== 'string' || Buffer.byteLength(key) < 32) throw new Error('review key must be at least 32 bytes')
 }
@@ -54,6 +49,13 @@ export function validateFeatureMap({ index, features } = {}) {
   return errors
 }
 
+/** The product's map is part of the build: a target names the map its entry points come from. */
+export function verifyFeatureMapDigest(featureMap) {
+  const errors = validateFeatureMap(featureMap)
+  if (errors.length) throw new Error(`invalid feature map: ${errors.join('; ')}`)
+  return canonicalDigest(featureMap)
+}
+
 const manifestContent = ({ projectId, version, contract, criteria, traps }) => ({ projectId, version, contract, criteria, traps })
 
 /**
@@ -62,8 +64,7 @@ const manifestContent = ({ projectId, version, contract, criteria, traps }) => (
  * with its expected violation. The digest binds the frozen manifest.
  */
 export function freezeVerifyCriteria({ featureMap, ...input }) {
-  const mapErrors = validateFeatureMap(featureMap)
-  if (mapErrors.length) throw new Error(`invalid feature map: ${mapErrors.join('; ')}`)
+  const featureMapDigest = verifyFeatureMapDigest(featureMap)
   if (!validateCriteria(input)) throw new Error(`malformed criteria: ${schemaErrors(validateCriteria, 'criteria').join('; ')}`)
   const ids = input.criteria.map(criterion => criterion.id)
   for (const id of ids) if (ids.indexOf(id) !== ids.lastIndexOf(id)) throw new Error(`duplicate criterion ${id}`)
@@ -82,14 +83,14 @@ export function freezeVerifyCriteria({ featureMap, ...input }) {
     if (trapIds.indexOf(trap.id) !== trapIds.lastIndexOf(trap.id)) throw new Error(`duplicate trap ${trap.id}`)
     if (!ids.includes(trap.criterionId)) throw new Error(`trap ${trap.id} names unknown criterion ${trap.criterionId}`)
   }
-  const content = structuredClone(manifestContent(input))
-  return deepFreeze({ schema: 'design-verify-criteria.v1', ...content, digest: digestOf(content) })
+  const content = { ...structuredClone(manifestContent(input)), featureMapDigest }
+  return deepFreeze({ schema: 'design-verify-criteria.v1', ...content, digest: canonicalDigest(content) })
 }
 
 /** Full candidate identity: a commit alone does not distinguish two builds. */
 export function verifyTargetDigest(target) {
   if (!validateTarget(target)) throw new Error(`malformed verification target: ${schemaErrors(validateTarget, 'target').join('; ')}`)
-  return digestOf(target)
+  return canonicalDigest(target)
 }
 
 /** Signed by the core that launched the reviewer seat; a supplied string is not identity. */
@@ -170,13 +171,15 @@ async function criterionVerdict({ criterion, rows, traps, target, read }) {
   const candidates = rows.filter(row => row.role === 'candidate')
   const oracles = [...new Set(candidates.map(row => row.oracle.digest))]
   if (oracles.length > 1) failed.push(`${criterion.id}: candidate rows use different oracles`)
-  const oracle = oracles[0]
+  // With no candidate yet there is no oracle to compare; the missing rows are already pending.
+  const differentOracle = row => oracles.length > 0 && row.oracle.digest !== oracles[0]
   for (const row of candidates) {
-    const engine = target.platforms[row.binding.platform]
+    const platform = target.platforms[row.binding.platform]
     for (const field of ['sourceCommit', 'buildDigest', 'buildConfigDigest']) if (row.binding[field] !== target[field])
       failed.push(`${label(row)}: bound to another build: ${field}`)
-    if (row.binding.engine !== engine?.engine) failed.push(`${label(row)}: bound to another build: engine`)
-    if (row.binding.targetId !== engine?.targetId) failed.push(`${label(row)}: bound to another build: targetId`)
+    // Each evidence kind runs on its own declared engine; a manual check never borrows the e2e engine.
+    if (row.binding.engine !== platform?.engines[criterion.evidence]) failed.push(`${label(row)}: bound to another build: engine`)
+    if (row.binding.targetId !== platform?.targetId) failed.push(`${label(row)}: bound to another build: targetId`)
     if (target.fixtures[row.fixture.id] !== row.fixture.digest) failed.push(`${label(row)}: bound to another fixture: ${row.fixture.id}`)
   }
   for (const platform of criterion.platforms) {
@@ -200,7 +203,7 @@ async function criterionVerdict({ criterion, rows, traps, target, read }) {
         pending.push(`no ${role} fixture run for ${criterion.id}/${platform}`)
       for (const row of runs) {
         if (!isDeepStrictEqual(row.fixture, fixture)) failed.push(`${label(row)}: ${role} run used an unfrozen fixture`)
-        if (row.oracle.digest !== oracle) failed.push(`${label(row)}: ${role} run used a different oracle`)
+        if (differentOracle(row)) failed.push(`${label(row)}: ${role} run used a different oracle`)
         if (row.outcome === 'blocked' || row.entryPointStatus !== 'exercised') blocked.push(`${label(row)}: ${role} run did not complete`)
         else if (role === 'broken' && row.outcome === 'passed')
           failed.push(`${criterion.id}: check passed its broken fixture and is disqualified`)
@@ -215,7 +218,7 @@ async function criterionVerdict({ criterion, rows, traps, target, read }) {
     if (!runs.length) pending.push(`trap ${trap.id} has no run`)
     for (const row of runs) {
       if (!isDeepStrictEqual(row.fixture, trap.fixture)) failed.push(`trap ${trap.id} ran an unfrozen fixture`)
-      if (row.oracle.digest !== oracle) failed.push(`trap ${trap.id} used a different oracle`)
+      if (differentOracle(row)) failed.push(`trap ${trap.id} used a different oracle`)
       if (row.outcome === 'blocked') blocked.push(`trap ${trap.id} run did not complete`)
       else if (row.outcome === 'failed') failed.push(`trap ${trap.id} flagged (false positive): ${row.observed}`)
     }
@@ -232,7 +235,11 @@ async function criterionVerdict({ criterion, rows, traps, target, read }) {
  * criterion. Digests bind bytes, not truth; live independence of the reviewer
  * seat comes from the core's signing key, not from supplied IDs.
  */
-export async function evaluateVerification({ manifest, featureMap, target, records, review, reviewKey, readArtifact, limits }) {
+export async function evaluateVerification(input) {
+  // Judge snapshots: the injected reader yields control, so a live input could change mid-evaluation.
+  const { manifest, featureMap, target, records, review } = structuredClone({ manifest: input.manifest,
+    featureMap: input.featureMap, target: input.target, records: input.records, review: input.review })
+  const { reviewKey, readArtifact, limits } = input
   const failed = []
   const blocked = []
   const result = (criteria, reviewed = { status: 'missing', failed: [], blocked: [] }, targetDigest = null) => {
@@ -247,7 +254,12 @@ export async function evaluateVerification({ manifest, featureMap, target, recor
   let targetDigest
   try { targetDigest = verifyTargetDigest(target) } catch (error) { failed.push(error.message); return result([]) }
   try {
+    if (verifyFeatureMapDigest(featureMap) !== target.featureMapDigest) {
+      failed.push("feature map is not the target build's map")
+      return result([], undefined, targetDigest)
+    }
     const frozen = freezeVerifyCriteria({ featureMap, ...manifestContent(manifest ?? {}) })
+    if (manifest.featureMapDigest !== target.featureMapDigest) failed.push('manifest was frozen against another feature map')
     if (frozen.digest !== manifest.digest) failed.push('manifest digest does not match its frozen content')
   } catch (error) { failed.push(`manifest: ${error.message}`); return result([], undefined, targetDigest) }
   if (manifest.projectId !== target.projectId || manifest.version !== target.version ||

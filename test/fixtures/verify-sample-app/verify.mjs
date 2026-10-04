@@ -42,26 +42,36 @@ export async function loadFeatureMap(skillDir) {
   return { index, features }
 }
 
-async function launch(build, dataFile) {
+async function launch(build, dataFile, timeoutMs) {
   const child = spawn(process.execPath, [path.join(build.dir, 'server.mjs'), '--serve', '--data', dataFile],
     { stdio: ['ignore', 'pipe', 'inherit'] })
   const exited = once(child, 'exit')
   let output = ''
   const port = await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('launch timed out')), 10_000)
+    const timer = setTimeout(() => reject(new Error('launch timed out')), timeoutMs)
     child.stdout.on('data', chunk => {
       output += chunk
       const match = /listening (\d+)/.exec(output)
       if (match) { clearTimeout(timer); resolve(Number(match[1])) }
     })
     child.once('exit', code => { clearTimeout(timer); reject(new Error(`server exited ${code}`)) })
-  })
+  }).catch(async error => { child.kill(); await exited; throw error })
   return { child, exited, port }
 }
 
-export async function runVerify({ build, feature, evidenceRoot, scratchParent, criterionId, role, skip = [] }) {
+export async function runVerify({ build, feature, evidenceRoot, scratchParent, criterionId, role, skip = [],
+  launchTimeoutMs = 10_000 }) {
   const runId = randomUUID()
   const scratchDir = await fs.mkdtemp(path.join(scratchParent, 'verify-run-'))
+  // Cleanup: only the process and scratch directory this run created, whichever step fails.
+  try {
+    return await drive({ build, feature, evidenceRoot, criterionId, role, skip, launchTimeoutMs, runId, scratchDir })
+  } finally {
+    await fs.rm(scratchDir, { recursive: true })
+  }
+}
+
+async function drive({ build, feature, evidenceRoot, criterionId, role, skip, launchTimeoutMs, runId, scratchDir }) {
   const dataFile = path.join(scratchDir, 'tasks.json')
   await fs.mkdir(path.join(evidenceRoot, runId))
   const put = async (name, content) => {
@@ -80,7 +90,7 @@ export async function runVerify({ build, feature, evidenceRoot, scratchParent, c
     startingState: 'empty isolated task store', steps: feature.userRoute, expected: EXPECTATION,
     method: 'e2e', oracle, entryPoint: entry.id, finding: null, persistence: null, ...fields }))
 
-  const { child, exited, port } = await launch(build, dataFile)
+  const { child, exited, port } = await launch(build, dataFile, launchTimeoutMs)
   const base = `http://127.0.0.1:${port}`
   try {
     const health = await (await fetch(`${base}/health`)).json()
@@ -121,10 +131,8 @@ export async function runVerify({ build, feature, evidenceRoot, scratchParent, c
       })
     }
   } finally {
-    // Cleanup: only the process and scratch directory this run created.
     child.kill()
     await exited
-    await fs.rm(scratchDir, { recursive: true })
   }
   return { records, port, scratchDir }
 }

@@ -4,6 +4,7 @@ import { mkdir, open, lstat, realpath, rename, unlink } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { runProcess } from './process-runner.mjs'
 import { DESIGN_STATIONS, MODEL_MODES } from './design-manager.mjs'
+import { deepFreeze } from './canonical.mjs'
 
 export const CLOUD_SAMPLE_PROMPT = 'Synthetic factory runtime qualification only. Do not use subagents, credentials, external services, product data, commits, PRs or deployment. In this disposable workspace compute 19 + 23 and write qualification-result.json containing exactly {"sum":42}. Read it back and verify sum is 42. Report the result. Do not modify other files.'
 const check = (status, reason) => ({ status, reason })
@@ -108,10 +109,6 @@ function exactFields(value, fields, name, required = []) {
       Object.keys(value).some(key => !fields.includes(key)) ||
       required.some(key => !Object.hasOwn(value, key))) throw new Error(`unknown ${name} field or missing required field`)
 }
-function freeze(value) {
-  if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value) }
-  return value
-}
 function requestFor({ sourceRevision, model, effort, environment = null, settingsBinding = null }) {
   if (typeof sourceRevision !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(sourceRevision)) throw new Error('exact sourceRevision required')
   if (!validId(model) || !['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) throw new Error('invalid model or effort')
@@ -129,7 +126,7 @@ function requestFor({ sourceRevision, model, effort, environment = null, setting
       !DESIGN_STATIONS.includes(settingsBinding.station) || !MODEL_MODES.includes(settingsBinding.mode) ||
       typeof settingsBinding.settingsDigest !== 'string' ||
       !/^sha256:[a-f0-9]{64}$/.test(settingsBinding.settingsDigest))) throw new Error('invalid settings binding')
-  return freeze({ sourceRevision, model, effort, environment: environment && { ...environment },
+  return deepFreeze({ sourceRevision, model, effort, environment: environment && { ...environment },
     settingsBinding: settingsBinding && { ...settingsBinding }, sampleDigest: hashBytes(CLOUD_SAMPLE_PROMPT) })
 }
 

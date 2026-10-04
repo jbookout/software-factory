@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { askJev } from "./jev-usage.mjs"
-import { hmacSignature, hmacSignatureMatches } from "./hmac-signature.mjs"
+import { hmacSignature, hmacSignatureMatches, isHmacSignature } from "./hmac-signature.mjs"
 
 const execFileAsync = promisify(execFile)
 
@@ -24,13 +24,17 @@ function assertEvidenceKey(key) {
     throw new Error("model room evaluation key must be at least 32 bytes")
 }
 
-/** Sign independently checked observations with the evaluator's runtime key. */
-export function signEvaluationBundle({ control, observations }, key) {
-  assertEvidenceKey(key)
+function assertEvaluationContent({ control, observations }) {
   if (!control || control.task_class !== "doctorcre-build" ||
       control.mode !== "qualified_only" || !Number.isInteger(control.minimum_cases) ||
       control.minimum_cases < 3 || !Array.isArray(observations))
     throw new Error("invalid model room evaluation bundle")
+}
+
+/** Sign independently checked observations with the evaluator's runtime key. */
+export function signEvaluationBundle({ control, observations }, key) {
+  assertEvidenceKey(key)
+  assertEvaluationContent({ control, observations })
   const payload = { schema: MODEL_ROOM_EVIDENCE_SCHEMA, control, observations }
   return { ...payload, signature: hmacSignature(payload, key) }
 }
@@ -40,9 +44,9 @@ export function authenticateEvaluationBundle(bundle, key) {
   assertEvidenceKey(key)
   if (!bundle || typeof bundle !== "object" || Array.isArray(bundle) ||
       Object.keys(bundle).sort().join(",") !== "control,observations,schema,signature" ||
-      bundle.schema !== MODEL_ROOM_EVIDENCE_SCHEMA || !/^hmac-sha256:[0-9a-f]{64}$/.test(bundle.signature ?? ""))
+      bundle.schema !== MODEL_ROOM_EVIDENCE_SCHEMA || !isHmacSignature(bundle.signature))
     throw new Error("invalid model room evaluation bundle")
-  signEvaluationBundle(evidencePayload(bundle), key) // rejects an invalid control before comparison
+  assertEvaluationContent(bundle)
   if (!hmacSignatureMatches(evidencePayload(bundle), bundle.signature, key))
     throw new Error("model room evaluation signature mismatch")
   const authenticated = new WeakSet(bundle.observations.filter(value => value && typeof value === "object"))
