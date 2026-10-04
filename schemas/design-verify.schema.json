@@ -1,0 +1,269 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jbookout/software-factory/schemas/design-verify.schema.json",
+  "title": "Design Manager Prove criterion evidence contract",
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "commit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,79}$" },
+    "text": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "texts": { "type": "array", "items": { "$ref": "#/$defs/text" } },
+    "platform": { "enum": ["web", "ios", "android", "desktop"] },
+    "evidence": { "enum": ["e2e", "manual", "judgment"] },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "digest"],
+      "properties": {
+        "ref": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$" },
+        "digest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "revision", "digest"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "digest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "digest"],
+      "properties": {
+        "revision": { "type": "integer", "minimum": 1 },
+        "digest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "featureIndex": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "product", "features"],
+      "properties": {
+        "schema": { "const": "verify-feature-map.v1" },
+        "product": { "$ref": "#/$defs/id" },
+        "features": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "file"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "file": { "type": "string", "pattern": "^features/[a-z0-9-]+\\.md$" }
+            }
+          }
+        }
+      }
+    },
+    "feature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "entryPoints", "subFeatures", "userRoute", "observableEndState", "storedValues", "gotchas"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "title": { "$ref": "#/$defs/text" },
+        "entryPoints": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "route", "handles"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "route": { "$ref": "#/$defs/text" },
+              "handles": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/text" } }
+            }
+          }
+        },
+        "subFeatures": { "$ref": "#/$defs/texts" },
+        "userRoute": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/text" } },
+        "observableEndState": { "$ref": "#/$defs/text" },
+        "storedValues": { "$ref": "#/$defs/texts" },
+        "gotchas": { "$ref": "#/$defs/texts" }
+      }
+    },
+    "criterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "expectation", "blocking", "evidence", "platforms", "featureId", "entryPoints", "storedValue", "defect"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "expectation": { "$ref": "#/$defs/text" },
+        "blocking": { "type": "boolean" },
+        "evidence": { "$ref": "#/$defs/evidence" },
+        "platforms": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/platform" } },
+        "featureId": { "$ref": "#/$defs/id" },
+        "entryPoints": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "storedValue": { "type": "boolean" },
+        "defect": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["broken", "repaired", "expectedViolation"],
+          "properties": {
+            "broken": { "$ref": "#/$defs/fixture" },
+            "repaired": { "$ref": "#/$defs/fixture" },
+            "expectedViolation": { "$ref": "#/$defs/text" }
+          }
+        }
+      }
+    },
+    "criteria": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectId", "version", "contract", "criteria", "traps"],
+      "properties": {
+        "projectId": { "$ref": "#/$defs/id" },
+        "version": { "type": "integer", "minimum": 1 },
+        "contract": { "$ref": "#/$defs/contract" },
+        "criteria": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/criterion" } },
+        "traps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "criterionId", "fixture"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "criterionId": { "$ref": "#/$defs/id" },
+              "fixture": { "$ref": "#/$defs/fixture" }
+            }
+          }
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectId", "version", "contract", "sourceCommit", "buildDigest", "buildConfigDigest", "featureMapDigest", "fixtures", "platforms", "makers"],
+      "properties": {
+        "projectId": { "$ref": "#/$defs/id" },
+        "version": { "type": "integer", "minimum": 1 },
+        "contract": { "$ref": "#/$defs/contract" },
+        "sourceCommit": { "$ref": "#/$defs/commit" },
+        "buildDigest": { "$ref": "#/$defs/sha256" },
+        "buildConfigDigest": { "$ref": "#/$defs/sha256" },
+        "featureMapDigest": { "$ref": "#/$defs/sha256" },
+        "fixtures": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/id" },
+          "additionalProperties": { "$ref": "#/$defs/sha256" }
+        },
+        "platforms": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "$ref": "#/$defs/platform" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["targetId", "engines"],
+            "properties": {
+              "targetId": { "$ref": "#/$defs/text" },
+              "engines": {
+                "type": "object",
+                "minProperties": 1,
+                "propertyNames": { "$ref": "#/$defs/evidence" },
+                "additionalProperties": { "$ref": "#/$defs/text" }
+              }
+            }
+          }
+        },
+        "makers": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ids", "sessions"],
+          "properties": {
+            "ids": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/text" } },
+            "sessions": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/text" } }
+          }
+        }
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectId", "version", "contractRevision", "contractDigest", "sourceCommit", "buildDigest", "buildConfigDigest", "platform", "engine", "targetId"],
+      "properties": {
+        "projectId": { "$ref": "#/$defs/id" },
+        "version": { "type": "integer", "minimum": 1 },
+        "contractRevision": { "type": "integer", "minimum": 1 },
+        "contractDigest": { "$ref": "#/$defs/sha256" },
+        "sourceCommit": { "$ref": "#/$defs/commit" },
+        "buildDigest": { "$ref": "#/$defs/sha256" },
+        "buildConfigDigest": { "$ref": "#/$defs/sha256" },
+        "platform": { "$ref": "#/$defs/platform" },
+        "engine": { "$ref": "#/$defs/text" },
+        "targetId": { "$ref": "#/$defs/text" }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "criterionId", "role", "binding", "fixture", "actor", "startingState", "steps", "expected", "observed", "method", "oracle", "entryPoint", "entryPointStatus", "outcome", "finding", "artifacts", "persistence"],
+      "properties": {
+        "schema": { "const": "design-check.v1" },
+        "criterionId": { "$ref": "#/$defs/id" },
+        "role": { "enum": ["candidate", "broken", "repaired", "trap"] },
+        "trapId": { "$ref": "#/$defs/id" },
+        "binding": { "$ref": "#/$defs/binding" },
+        "fixture": { "$ref": "#/$defs/fixture" },
+        "actor": { "$ref": "#/$defs/text" },
+        "startingState": { "$ref": "#/$defs/text" },
+        "steps": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/text" } },
+        "expected": { "$ref": "#/$defs/text" },
+        "observed": { "$ref": "#/$defs/text" },
+        "method": { "enum": ["e2e", "unit", "component", "driver", "manual", "judgment"] },
+        "oracle": { "$ref": "#/$defs/artifact" },
+        "entryPoint": { "$ref": "#/$defs/id" },
+        "entryPointStatus": { "enum": ["exercised", "skipped", "blocked"] },
+        "outcome": { "enum": ["passed", "failed", "blocked"] },
+        "finding": { "anyOf": [{ "$ref": "#/$defs/text" }, { "type": "null" }] },
+        "artifacts": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/artifact" } },
+        "persistence": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["writtenValue", "independentReadback", "readbackMethod"],
+              "properties": {
+                "writtenValue": { "$ref": "#/$defs/artifact" },
+                "independentReadback": { "$ref": "#/$defs/artifact" },
+                "readbackMethod": { "$ref": "#/$defs/text" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "reviewerId", "sessionId", "freshContext", "targetDigest", "manifestDigest", "recordsRead", "verdict", "aggregateScore"],
+      "properties": {
+        "schema": { "const": "design-review.v1" },
+        "reviewerId": { "$ref": "#/$defs/text" },
+        "sessionId": { "$ref": "#/$defs/text" },
+        "freshContext": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["inheritedSessions", "receivedMakerScores"],
+          "properties": {
+            "inheritedSessions": { "$ref": "#/$defs/texts" },
+            "receivedMakerScores": { "type": "boolean" }
+          }
+        },
+        "targetDigest": { "$ref": "#/$defs/sha256" },
+        "manifestDigest": { "$ref": "#/$defs/sha256" },
+        "recordsRead": { "type": "array", "items": { "$ref": "#/$defs/sha256" } },
+        "verdict": { "enum": ["pass", "fail"] },
+        "aggregateScore": { "anyOf": [{ "type": "number", "minimum": 0, "maximum": 10 }, { "type": "null" }] }
+      }
+    }
+  }
+}

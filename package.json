@@ -15,6 +15,10 @@
     "./design-settings": {
       "types": "./src/design-settings.d.mts",
       "import": "./src/design-settings.mjs"
+    },
+    "./design-verify": {
+      "types": "./src/design-verify.d.mts",
+      "import": "./src/design-verify.mjs"
     }
   },
   "engines": {

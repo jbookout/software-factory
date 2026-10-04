@@ -83,3 +83,30 @@ test('inherited object names are not configured workers', async () => {
   profile.stations.design[0].workerId = 'constructor'
   assert.throws(() => resolveDesignSettings(profile), /unknown worker constructor/)
 })
+
+test('unchanged version-one profiles retain their original digest and assignment bindings with numeric worker IDs', async () => {
+  const baseline = JSON.parse(await readFile(new URL('../../config/design-manager/joe.example.json', import.meta.url)))
+  // Digests captured with the settings canonicalizer at bfc751, before its extraction.
+  for (const [numeric, digest] of [
+    [false, 'sha256:ed167358f2913f4d6a4a7ead287be4abca35212cbb8959d2f9f132363a50556b'],
+    [true, 'sha256:b98a7f653940264df216f4b82fefa7c2f167f3e9f0631194384bab2ddc8ecc35'],
+  ]) {
+    const profile = structuredClone(baseline)
+    if (numeric) {
+      for (const id of ['2', '10']) profile.workers[id] = { ...profile.workers.codex }
+      profile.stations.design[0].workerId = '2'
+      profile.modes.fast['2'] = { model: 'gpt-6.1-sol', effort: 'low' }
+      profile.modes.fast['10'] = { model: 'gpt-6.1-sol', effort: 'high' }
+    }
+    const previous = { profile, digest }
+    const assignment = resolveDesignAssignment(previous, { station: 'design', mode: 'fast' })
+    assert.equal(assignment.settingsDigest, digest)
+    assert.equal(assignment.assignments[0].workerId, numeric ? '2' : 'codex')
+    assert.equal(resolveDesignSettings(profile).digest, digest)
+    profile.workers = Object.fromEntries(Object.entries(profile.workers).reverse())
+    profile.modes.fast = Object.fromEntries(Object.entries(profile.modes.fast).reverse())
+    assert.equal(resolveDesignSettings(profile).digest, digest)
+    profile.workers[numeric ? '2' : 'codex'].concurrency = 2
+    assert.throws(() => resolveDesignAssignment(previous, { station: 'design', mode: 'fast' }), /settings digest mismatch/)
+  }
+})

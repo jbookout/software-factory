@@ -62,38 +62,16 @@ export function buildIdentity(data, sourceRevision) {
   return { candidate: Object.freeze(candidate), stopped: null }
 }
 
-// Decides whether a phase's evidence proves the criterion, asking in order:
-// 1. Can artifacts be read at all? If not, blocked.
-// 2. Is there an observation record for this criterion? If not, failed.
-// 3. For each record and attachment: readable (else blocked), non-empty, matching its
-//    recorded digest and not reused from an earlier phase (else failed)?
-// 4. Is the artifact a valid observation of this criterion on the bound revision/build?
-//    If not, failed.
-// 5. Did the observer report blocked? Then blocked. Otherwise its outcome must equal
-//    the phase's expected outcome, else failed.
-// Any failed reason makes the verdict failed; otherwise any blocked reason makes it blocked.
-// Digests bind bytes, not truth: this rejects labels and stale or copied artifacts, but
-// it does not authenticate who wrote the observation.
-export async function acceptEvidence({ phase, kind, criterionId, binding, records, readArtifact,
-  priorDigests = [], limits: inputLimits }) {
+// Reads artifacts under one shared deadline and checks each against its recorded digest.
+// Returns { bytes, digest } or a failed/blocked reason; never throws for a bad artifact.
+export function createBoundReader({ readArtifact, limits: inputLimits, priorDigests = [] }) {
   const limits = evidenceReadLimits(inputLimits)
   const deadline = Date.now() + limits.timeoutMs
-  // Acceptance uses snapshots even while an injected reader yields control.
-  binding = structuredClone(binding)
-  records = structuredClone(records)
   priorDigests = [...priorDigests]
-  const expected = phase === "after" ? ["passed"] : kind === "bug" ? ["failed"] : ["passed", "failed"]
-  const failed = []
-  const blocked = []
-  const artifacts = []
-  if (typeof readArtifact !== "function") {
-    return { result: "blocked", reasons: ["no artifact reader is configured"], artifacts }
-  }
-
-  async function read(artifact) {
-    if (!validateArtifact(artifact)) return void failed.push("malformed artifact reference")
+  return async artifact => {
+    if (!validateArtifact(artifact)) return { failed: "malformed artifact reference" }
     const remaining = deadline - Date.now()
-    if (remaining <= 0) return void blocked.push(`read deadline exceeded: ${artifact.ref}`)
+    if (remaining <= 0) return { blocked: `read deadline exceeded: ${artifact.ref}` }
     const controller = new AbortController()
     let timer
     let bytes
@@ -108,17 +86,51 @@ export async function acceptEvidence({ phase, kind, criterionId, binding, record
         }, remaining) })
       ])
     } catch (error) {
-      return void blocked.push(`${controller.signal.aborted ? "read deadline exceeded" : "unreadable"}: ${artifact.ref}`)
+      return { blocked: `${controller.signal.aborted ? "read deadline exceeded" : "unreadable"}: ${artifact.ref}` }
     } finally { clearTimeout(timer) }
-    if (bytes === null || bytes === undefined) return void blocked.push(`unreadable: ${artifact.ref}`)
-    if (!Buffer.isBuffer(bytes)) return void failed.push(`invalid reader byte contract: ${artifact.ref}`)
-    if (bytes.length > limits.maxBytes) return void failed.push(`artifact size limit exceeded: ${artifact.ref}`)
-    if (!bytes.length) return void failed.push(`empty: ${artifact.ref}`)
+    if (bytes === null || bytes === undefined) return { blocked: `unreadable: ${artifact.ref}` }
+    if (!Buffer.isBuffer(bytes)) return { failed: `invalid reader byte contract: ${artifact.ref}` }
+    if (bytes.length > limits.maxBytes) return { failed: `artifact size limit exceeded: ${artifact.ref}` }
+    if (!bytes.length) return { failed: `empty: ${artifact.ref}` }
     const digest = digestOf(bytes)
-    if (digest !== artifact.digest) return void failed.push(`digest mismatch: ${artifact.ref}`)
-    if (priorDigests.includes(digest)) return void failed.push(`reused from an earlier phase: ${artifact.ref}`)
-    artifacts.push({ ref: artifact.ref, digest })
-    return bytes
+    if (digest !== artifact.digest) return { failed: `digest mismatch: ${artifact.ref}` }
+    if (priorDigests.includes(digest)) return { failed: `reused from an earlier phase: ${artifact.ref}` }
+    return { bytes, digest }
+  }
+}
+
+// Decides whether a phase's evidence proves the criterion, asking in order:
+// 1. Can artifacts be read at all? If not, blocked.
+// 2. Is there an observation record for this criterion? If not, failed.
+// 3. For each record and attachment: readable (else blocked), non-empty, matching its
+//    recorded digest and not reused from an earlier phase (else failed)?
+// 4. Is the artifact a valid observation of this criterion on the bound revision/build?
+//    If not, failed.
+// 5. Did the observer report blocked? Then blocked. Otherwise its outcome must equal
+//    the phase's expected outcome, else failed.
+// Any failed reason makes the verdict failed; otherwise any blocked reason makes it blocked.
+// Digests bind bytes, not truth: this rejects labels and stale or copied artifacts, but
+// it does not authenticate who wrote the observation.
+export async function acceptEvidence({ phase, kind, criterionId, binding, records, readArtifact,
+  priorDigests = [], limits: inputLimits }) {
+  // Acceptance uses snapshots even while an injected reader yields control.
+  binding = structuredClone(binding)
+  records = structuredClone(records)
+  const expected = phase === "after" ? ["passed"] : kind === "bug" ? ["failed"] : ["passed", "failed"]
+  const failed = []
+  const blocked = []
+  const artifacts = []
+  if (typeof readArtifact !== "function") {
+    return { result: "blocked", reasons: ["no artifact reader is configured"], artifacts }
+  }
+  const readBound = createBoundReader({ readArtifact, limits: inputLimits, priorDigests })
+
+  async function read(artifact) {
+    const result = await readBound(artifact)
+    if (result.failed) return void failed.push(result.failed)
+    if (result.blocked) return void blocked.push(result.blocked)
+    artifacts.push({ ref: artifact.ref, digest: result.digest })
+    return result.bytes
   }
 
   const relevant = records.filter(record => record?.kind === "observation" && record.criterionId === criterionId)

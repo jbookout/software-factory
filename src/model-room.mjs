@@ -1,7 +1,8 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto"
+import { createHash } from "node:crypto"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { askJev } from "./jev-usage.mjs"
+import { hmacSignature, hmacSignatureMatches, isHmacSignature } from "./hmac-signature.mjs"
 
 const execFileAsync = promisify(execFile)
 
@@ -12,22 +13,10 @@ const MAX_BUILD_CONTRACTS = 8
 const MAX_OPTIONAL_CONTEXT = 4
 const VISIBILITY = ["hide", "short", "long", "full"]
 export const MODEL_ROOM_EVIDENCE_SCHEMA = "doctorcre-build-evaluation-bundle.v1"
-const EVIDENCE_SIGNATURE = /^hmac-sha256:[0-9a-f]{64}$/
-
-function canonical(value) {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`
-  if (value && typeof value === "object") return `{${Object.keys(value).sort()
-    .map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`
-  return JSON.stringify(value)
-}
 
 function evidencePayload(bundle) {
   return { schema: MODEL_ROOM_EVIDENCE_SCHEMA, control: bundle.control,
     observations: bundle.observations }
-}
-
-function evidenceSignature(payload, key) {
-  return `hmac-sha256:${createHmac("sha256", key).update(canonical(payload)).digest("hex")}`
 }
 
 function assertEvidenceKey(key) {
@@ -35,15 +24,19 @@ function assertEvidenceKey(key) {
     throw new Error("model room evaluation key must be at least 32 bytes")
 }
 
-/** Sign independently checked observations with the evaluator's runtime key. */
-export function signEvaluationBundle({ control, observations }, key) {
-  assertEvidenceKey(key)
+function assertEvaluationContent({ control, observations }) {
   if (!control || control.task_class !== "doctorcre-build" ||
       control.mode !== "qualified_only" || !Number.isInteger(control.minimum_cases) ||
       control.minimum_cases < 3 || !Array.isArray(observations))
     throw new Error("invalid model room evaluation bundle")
+}
+
+/** Sign independently checked observations with the evaluator's runtime key. */
+export function signEvaluationBundle({ control, observations }, key) {
+  assertEvidenceKey(key)
+  assertEvaluationContent({ control, observations })
   const payload = { schema: MODEL_ROOM_EVIDENCE_SCHEMA, control, observations }
-  return { ...payload, signature: evidenceSignature(payload, key) }
+  return { ...payload, signature: hmacSignature(payload, key) }
 }
 
 /** Authenticate one bundle and return identity-bound verifier callbacks. */
@@ -51,13 +44,10 @@ export function authenticateEvaluationBundle(bundle, key) {
   assertEvidenceKey(key)
   if (!bundle || typeof bundle !== "object" || Array.isArray(bundle) ||
       Object.keys(bundle).sort().join(",") !== "control,observations,schema,signature" ||
-      bundle.schema !== MODEL_ROOM_EVIDENCE_SCHEMA ||
-      !EVIDENCE_SIGNATURE.test(bundle.signature ?? ""))
+      bundle.schema !== MODEL_ROOM_EVIDENCE_SCHEMA || !isHmacSignature(bundle.signature))
     throw new Error("invalid model room evaluation bundle")
-  const signed = signEvaluationBundle(evidencePayload(bundle), key)
-  const actual = Buffer.from(bundle.signature.slice("hmac-sha256:".length), "hex")
-  const expected = Buffer.from(signed.signature.slice("hmac-sha256:".length), "hex")
-  if (actual.length !== expected.length || !timingSafeEqual(actual, expected))
+  assertEvaluationContent(bundle)
+  if (!hmacSignatureMatches(evidencePayload(bundle), bundle.signature, key))
     throw new Error("model room evaluation signature mismatch")
   const authenticated = new WeakSet(bundle.observations.filter(value => value && typeof value === "object"))
   const bundleDigest = digest(evidencePayload(bundle))
