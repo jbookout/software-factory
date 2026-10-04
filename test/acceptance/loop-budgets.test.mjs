@@ -9,7 +9,7 @@ const ready = {
   "environment:prepare": { status: "pass", data: { isolated: true, environmentId: "budget-tree" } },
   "environment:dispose": pass,
   "context:collect": pass,
-  build: pass,
+  build: { status: "pass", data: { candidateRevision: "b".repeat(40), buildDigest: "c".repeat(64) } },
   verify: pass,
   "risk:inspect": pass,
   "review:Test Engineer": pass,
@@ -146,4 +146,18 @@ test("each specialist shares the review-round budget and a missing specialist st
   assertStopped(second, missing, "review:missing")
   assert.equal(callsFor(missing, "review:Test Engineer").length, 1)
   assert.equal(callsFor(missing, "repair:review").length, 0)
+})
+
+test("review repairs cannot reset the job's verification budget for a new candidate", async () => {
+  let builds = 0
+  const adapter = createFixtureAdapter({ ...ready,
+    build: () => ({ status: "pass", data: { candidateRevision: (++builds).toString().repeat(40),
+      buildDigest: "d".repeat(64) } }),
+    "review:Test Engineer": changingFailure
+  })
+  const result = await createFactory().run({ ...job, budgets: { verificationRounds: 1 } }, adapter)
+  assertStopped(result, adapter, "verify:budget-exhausted")
+  assert.equal(callsFor(adapter, "verify").length, 1)
+  assert.equal(callsFor(adapter, "build").length, 2)
+  assert.equal(callsFor(adapter, "review:Test Engineer").length, 1)
 })

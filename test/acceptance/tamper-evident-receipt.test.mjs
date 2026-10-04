@@ -7,6 +7,7 @@ import * as factory from "../../src/index.mjs"
 const timestamp = "2026-10-03T00:00:00.000Z"
 const sourceRevision = "a".repeat(40)
 const evidenceRef = { kind: "check-output", ref: "fixture:verify-output", digest: "b".repeat(64) }
+const candidate = { revision: "c".repeat(40), buildDigest: "e".repeat(64) }
 const expectedBody = {
   contractVersion: 1,
   jobId: "receipt-job",
@@ -14,6 +15,7 @@ const expectedBody = {
   stopped: null,
   environmentId: "receipt-tree",
   sourceRevision,
+  candidate,
   risk: { level: "low", score: 0, signals: [] },
   riskRecommendation: null,
   reviewRoles: ["Test Engineer"],
@@ -26,6 +28,7 @@ const expectedBody = {
     ["learn:record", "skip"]
   ].map(([step, status]) => ({ step, status })),
   evidence: [{ step: "verify", ...evidenceRef }],
+  evidenceAcceptance: { before: null, after: null },
   findings: [],
   proposals: [],
   modelRoom: null,
@@ -42,7 +45,8 @@ async function receipt() {
     outcome: "verify synthetic receipt", sourceRevision
   }, factory.createFixtureAdapter({
     "environment:prepare": { status: "pass", data: { isolated: true, environmentId: "receipt-tree" } },
-    "context:collect": pass, build: pass,
+    "context:collect": pass,
+    build: { status: "pass", data: { candidateRevision: candidate.revision, buildDigest: candidate.buildDigest } },
     verify: { status: "pass", evidence: [evidenceRef] },
     "risk:inspect": pass, "review:Test Engineer": pass, "environment:dispose": pass
   }))
@@ -64,6 +68,8 @@ test("a JSON serialized round trip verifies against the trusted original digest"
 for (const [label, mutate] of [
   ["outcome", value => { value.outcome = "needs-attention" }],
   ["source revision", value => { value.sourceRevision = "c".repeat(40) }],
+  ["candidate build", value => { value.candidate.buildDigest = "f".repeat(64) }],
+  ["evidence acceptance", value => { value.evidenceAcceptance.after = { result: "passed", reasons: [], artifacts: [] } }],
   ["event status", value => { value.events[4].status = "fail" }],
   ["event step", value => { value.events[4].step = "forged-verify" }],
   ["event deletion", value => { value.events.pop() }],
