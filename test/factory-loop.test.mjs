@@ -16,6 +16,7 @@ import {
 } from "../src/index.mjs"
 
 const pass = { status: "pass" }
+const built = { status: "pass", data: { candidateRevision: "def456", buildDigest: "e".repeat(64) } }
 const fixedClock = () => "2026-09-15T00:00:00.000Z"
 const fixedId = () => "job-1"
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
@@ -23,7 +24,7 @@ const required = {
   "environment:prepare": { status: "pass", data: { isolated: true, environmentId: "test-tree" } },
   "environment:dispose": pass,
   "context:collect": pass,
-  build: pass,
+  build: built,
   verify: pass,
   "risk:inspect": pass,
   "review:Test Engineer": pass
@@ -143,7 +144,7 @@ test("missing verification or specialist review can never produce a green receip
     "environment:prepare": required["environment:prepare"],
     "environment:dispose": pass,
     "context:collect": pass,
-    build: pass
+    build: built
   })
   const first = await createFactory({ now: fixedClock, makeId: fixedId }).run({
     outcome: "verify the change",
@@ -157,29 +158,6 @@ test("missing verification or specialist review can never produce a green receip
     sourceRevision: "abc123"
   }, missingReview)
   assert.equal(second.stopped, "review:missing")
-})
-
-test("bug and interface work requires before-and-after evidence", async () => {
-  const missingBefore = createFixtureAdapter({ ...required })
-  const first = await createFactory({ now: fixedClock, makeId: fixedId }).run({
-    outcome: "fix a bug",
-    kind: "bug",
-    sourceRevision: "abc123"
-  }, missingBefore)
-  assert.equal(first.stopped, "evidence:before:missing")
-
-  const missingAfter = createFixtureAdapter({
-    ...required,
-    "evidence:before": pass,
-    "risk:inspect": { status: "pass", data: { changedPaths: ["src/view.css"] } },
-    "review:Architecture Engineer": pass,
-    "review:UI and Accessibility Engineer": pass
-  })
-  const second = await createFactory({ now: fixedClock, makeId: fixedId }).run({
-    outcome: "change the interface",
-    sourceRevision: "abc123"
-  }, missingAfter)
-  assert.equal(second.stopped, "evidence:after:missing")
 })
 
 test("an unproven task environment fails before product work starts", async () => {

@@ -9,12 +9,19 @@ export function normalizeResult(result, step) {
   if (!VALID_STATUS.has(value.status)) throw new Error(`${step} returned invalid status`)
   return {
     status: value.status,
-    evidence: Array.isArray(value.evidence) ? value.evidence : [],
-    findings: Array.isArray(value.findings) ? value.findings : [],
+    evidence: list(value.evidence, step, "evidence"),
+    findings: list(value.findings, step, "findings"),
     measurements: value.measurements ?? {},
-    proposals: Array.isArray(value.proposals) ? value.proposals : [],
+    proposals: list(value.proposals, step, "proposals"),
     data: value.data ?? {}
   }
+}
+
+// A malformed list is a broken claim, not an empty one.
+function list(value, step, field) {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) throw new Error(`${step} returned invalid ${field}`)
+  return value
 }
 
 export function createFixtureAdapter(steps = {}) {
@@ -85,8 +92,10 @@ export function createScriptAdapter({ root, commands, timeoutMs = 120_000, maxOu
             const stderrDigest = createHash("sha256").update(stderr).digest("hex")
             return resolve({ status: "fail", findings: [{ code, stderrDigest, stderrBytes: Buffer.byteLength(stderr) }] })
           }
+          // Exit code zero is not a result; the step must say what it observed.
+          if (!stdout.trim()) return reject(new Error(`${step} emitted no result`))
           try {
-            resolve(stdout.trim() ? JSON.parse(stdout) : { status: "pass" })
+            resolve(JSON.parse(stdout))
           } catch {
             reject(new Error(`${step} did not emit JSON`))
           }

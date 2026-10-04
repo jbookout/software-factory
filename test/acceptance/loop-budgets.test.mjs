@@ -9,7 +9,7 @@ const ready = {
   "environment:prepare": { status: "pass", data: { isolated: true, environmentId: "budget-tree" } },
   "environment:dispose": pass,
   "context:collect": pass,
-  build: pass,
+  build: { status: "pass", data: { candidateRevision: "b".repeat(40), buildDigest: "c".repeat(64) } },
   verify: pass,
   "risk:inspect": pass,
   "review:Test Engineer": pass,

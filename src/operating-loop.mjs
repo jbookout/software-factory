@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { readFileSync } from "node:fs"
 import Ajv2020 from "ajv/dist/2020.js"
 
+import { acceptEvidence, buildIdentity } from "./evidence.mjs"
 import { evaluatePerformance } from "./performance-factory.mjs"
 import { classifyRisk, reviewsFor } from "./risk-router.mjs"
 import { verifyPinnedBuildContext } from "./model-room.mjs"
@@ -11,6 +12,7 @@ const jobSchema = JSON.parse(readFileSync(new URL("../schemas/factory-job.schema
 const ajv = new Ajv2020({ strict: true })
 const validateBudgetInput = ajv.compile(jobSchema.properties.budgets)
 const validateBudgets = ajv.compile({ ...jobSchema.properties.budgets, required: Object.keys(DEFAULT_BUDGETS) })
+const validateCriterion = ajv.compile(jobSchema.properties.criterion)
 
 function resolveBudgets(input = {}) {
   if (!validateBudgetInput(input)) throw new Error(`invalid budgets: ${ajv.errorsText(validateBudgetInput.errors)}`)
@@ -48,12 +50,15 @@ function assertJob(job) {
 }
 
 export function createFactory({ now = () => new Date().toISOString(), makeId = randomUUID,
-  modelRoomAdvisor = null } = {}) {
+  modelRoomAdvisor = null, readArtifact = null } = {}) {
   return {
     async run(job, adapter) {
       assertJob(job)
       if (!adapter || typeof adapter.execute !== "function") throw new Error("adapter.execute is required")
       const budgets = resolveBudgets(job.budgets)
+      if (job.criterion !== undefined && !validateCriterion(job.criterion)) {
+        throw new Error(`invalid criterion: ${ajv.errorsText(validateCriterion.errors)}`)
+      }
 
       const startedAt = now()
       const jobId = job.id ?? makeId()
@@ -64,6 +69,10 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
       let stopped = null
       let prepared = false
       let environmentId = null
+      let candidate = null
+      const evidenceAcceptance = { before: null, after: null }
+      const criterion = job.criterion ?? null
+      const needsEvidence = risk => job.kind === "bug" || risk.signals.includes("interface")
 
       async function execute(step, input = {}) {
         let result
@@ -89,6 +98,14 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
         findings.push(...result.findings.map((item) => ({ step, ...item })))
         proposals.push(...result.proposals.map((item) => ({ step, ...item })))
         return result
+      }
+
+      // Phase evidence counts only when the factory reads the artifacts and accepts them.
+      async function accept(phase, result, binding, priorDigests) {
+        const verdict = await acceptEvidence({ phase, criterionId: criterion.id, binding,
+          records: result.evidence, readArtifact, priorDigests })
+        evidenceAcceptance[phase] = verdict
+        return verdict.result === "passed" ? null : `evidence:${phase}:${verdict.result}`
       }
 
       async function repairLoop(step, repairStep, limit) {
@@ -129,10 +146,14 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
       if (!stopped && context.status !== "pass") {
         stopped = context.status === "skip" ? "context:missing" : "context:collect"
       }
-      const declaredRisk = classifyRisk(job.risk)
-      const evidenceRequired = job.kind === "bug" || declaredRisk.signals.includes("interface")
-      const before = !stopped ? await execute("evidence:before", { required: evidenceRequired }) : { status: "skip" }
-      if (!stopped && evidenceRequired && before.status !== "pass") stopped = "evidence:before:missing"
+      const evidenceRequired = needsEvidence(classifyRisk(job.risk))
+      if (!stopped && evidenceRequired && !criterion) stopped = "evidence:criterion:missing"
+      const before = !stopped ? await execute("evidence:before", { required: evidenceRequired, criterion })
+        : { status: "skip" }
+      if (!stopped && evidenceRequired) {
+        stopped = before.status === "pass" ? await accept("before", before, { revision: job.sourceRevision })
+          : "evidence:before:missing"
+      }
       let modelRoom = null
       if (!stopped && job.product === "DoctorCRE" && modelRoomAdvisor) {
         try {
@@ -154,6 +175,7 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
           modelRoomStateDigest: modelRoom.state_digest,
           ...(modelRoom.build_context ? { pinnedBuildContext: modelRoom.build_context } : {}) } : {})
         if (build.status !== "pass") stopped = build.status === "skip" ? "build:missing" : "build"
+        else ({ candidate, stopped } = buildIdentity(build.data, job.sourceRevision))
       }
       if (!stopped) await repairLoop("verify", "repair:verification", budgets.verificationRounds)
 
@@ -166,8 +188,10 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
         signals: [...new Set([...(job.risk?.signals ?? []), ...(inspected.data.signals ?? [])])]
       })
       const reviewRoles = reviewsFor(risk)
-      if (!stopped && (job.kind === "bug" || risk.signals.includes("interface")) && before.status !== "pass") {
-        stopped = "evidence:before:missing-after-inspection"
+      if (!stopped && needsEvidence(risk) && !evidenceAcceptance.before) {
+        stopped = !criterion ? "evidence:criterion:missing"
+          : before.status !== "pass" ? "evidence:before:missing-after-inspection"
+            : await accept("before", before, { revision: job.sourceRevision })
       }
       if (!stopped) {
         let previous = null
@@ -202,12 +226,12 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
       }
 
       if (!stopped) {
-        const after = await execute("evidence:after", {
-          risk,
-          required: job.kind === "bug" || risk.signals.includes("interface")
-        })
-        if ((job.kind === "bug" || risk.signals.includes("interface")) && after.status !== "pass") {
-          stopped = "evidence:after:missing"
+        const required = needsEvidence(risk)
+        const after = await execute("evidence:after", { risk, required, criterion, candidate })
+        if (required) {
+          stopped = after.status === "pass"
+            ? await accept("after", after, candidate, evidenceAcceptance.before.artifacts.map(({ digest }) => digest))
+            : "evidence:after:missing"
         }
       }
 
@@ -264,6 +288,7 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
         stopped,
         environmentId,
         sourceRevision: job.sourceRevision,
+        candidate,
         risk,
         riskRecommendation: ["critical", "high"].includes(risk.level)
           ? { blocking: false, text: "Obtain explicit product-owner judgment after reviewing the evidence." }
@@ -272,6 +297,7 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
         performance,
         events,
         evidence,
+        evidenceAcceptance,
         findings,
         proposals,
         modelRoom: modelRoom ? (({ build_context, ...receipt }) => receipt)(modelRoom) : null,
