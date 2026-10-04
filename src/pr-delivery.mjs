@@ -1,6 +1,9 @@
+import { AsyncLocalStorage } from "node:async_hooks"
+import { Deadline, DeadlineError, waitForCondition } from "./deadline.mjs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { createHash, randomUUID } from "node:crypto"
+import { reserveCompute } from "./process-capacity.mjs"
 import { runProcess } from "./process-runner.mjs"
 import { createCodexExecArgs } from "./codex-build.mjs"
 import { normalizeResult } from "./adapters.mjs"
@@ -16,7 +19,9 @@ const digestOf = value => createHash("sha256").update(value).digest("hex")
 const pass = data => normalizeResult({ status: "pass", data }, "delivery")
 const fail = error => normalizeResult({ status: "fail",
   data: { code: Number.isInteger(error.code) ? error.code : 1, message: error.message, transient: error.transient ?? false,
-    ...(error.wait ? { cause: error.wait.cause, resetAt: error.wait.resetAt, head: error.wait.head, nextAction: "wait-for-input-or-reset", admitted: false } : {}) },
+    ...(error.phase ? { phase: error.phase, nextAction: error.nextAction } : {}),
+    ...(error.uncertain ? { uncertain: true, nextAction: "readback-before-retry" } : {}),
+    ...(error.wait ? { cause: error.wait.cause, resetAt: error.wait.resetAt, head: error.wait.head, nextAction: error.wait.cause === "mutation-uncertain" ? "readback-before-retry" : "wait-for-input-or-reset", admitted: false } : {}) },
   findings: [{ reason: error.message }] }, "delivery")
 
 export async function loadDeliveryConfig(file) {
@@ -39,9 +44,19 @@ export async function loadDeliveryConfig(file) {
     pollMs: value.pollMs ?? 30_000, commandTimeoutMs: value.commandTimeoutMs ?? 120_000,
     checksTimeoutMs: value.checksTimeoutMs ?? 3600_000, retryMs: value.retryMs ?? 120_000,
     autoPollMs: value.autoPollMs ?? 300_000, queueRunsPer24h: value.queueRunsPer24h ?? 4 }
-  for (const v of [...Object.values(config.limits), config.pollMs, config.commandTimeoutMs, config.checksTimeoutMs, config.autoPollMs, config.queueRunsPer24h])
+  config.queueTimeoutMs = value.queueTimeoutMs ?? config.limits.timeoutMs
+  config.apiTimeoutMs = value.apiTimeoutMs ?? config.commandTimeoutMs
+  config.attemptTimeoutMs = value.attemptTimeoutMs ?? config.checksTimeoutMs + config.queueTimeoutMs + config.limits.timeoutMs + 600_000
+  for (const v of [...Object.values(config.limits), config.pollMs, config.commandTimeoutMs, config.checksTimeoutMs, config.autoPollMs, config.queueRunsPer24h, config.queueTimeoutMs, config.apiTimeoutMs, config.attemptTimeoutMs])
     if (!Number.isSafeInteger(v) || v <= 0) throw new DeliveryError("config limits must be positive integers", 9)
   if (!Number.isSafeInteger(config.retryMs) || config.retryMs < 0) throw new DeliveryError("invalid retryMs", 9)
+  if (value.resources) {
+    config.resources = { browserConcurrency: 1, agentUnits: 1, ...value.resources }
+    for (const v of [config.resources.capacity, config.resources.browserConcurrency, config.resources.agentUnits]) if (!Number.isSafeInteger(v) || v <= 0)
+      throw new DeliveryError("resource limits must be positive integers", 9)
+    if (config.resources.agentUnits + config.resources.browserConcurrency > config.resources.capacity)
+      throw new DeliveryError("agent and child reservation exceeds capacity", 9)
+  }
   createCodexExecArgs(config.codex)
   config.holds = (value.holds ?? []).map(h => {
     if (!config.repos[h.repo] || typeof h.titlePattern !== "string") throw new DeliveryError("invalid config hold", 9)
@@ -62,12 +77,35 @@ function reviews(pr) {
 export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
   const locks = path.join(config.stateDir, "locks"), queueFile = path.join(config.stateDir, "queue.json")
   const prLeases = new Map()
+  const deadlines = new AsyncLocalStorage()
+  const inAttempt = fn => deadlines.getStore() ? fn() : deadlines.run(new Deadline(config.attemptTimeoutMs), fn)
+  const budget = () => deadlines.getStore()
+  async function measured(phase, repo, pr, fn) {
+    const start = budget().clock.now()
+    let code = 0
+    try { return await fn() } catch (error) { code = Number.isInteger(error.code) ? error.code : 1; throw error }
+    finally { await log({ repo, pr, step: phase, phase, status: code ? "stopped" : "complete", code,
+      durationMs: Math.round(budget().clock.now() - start) }) }
+  }
+
   const getRepo = repo => {
     if (!config.repos[repo]) throw new DeliveryError(`UNKNOWN REPO ${repo}: add checkout and worktreeRoot to config.repos`, 9)
     return config.repos[repo]
   }
   async function command(argv, cwd, { allowFailure = false, timeoutMs = config.commandTimeoutMs, input = "", ...streamOptions } = {}) {
-    const result = await runProcess(argv, { cwd, env, timeoutMs, input, ...streamOptions })
+    budget()?.check()
+    const boundedMs = Math.max(1, Math.floor(Math.min(timeoutMs, budget()?.remaining() ?? timeoutMs)))
+    const mutation = streamOptions.mutation ?? (argv[0] === "gh" && argv[1] !== "api" ||
+      argv[0] === "git" && !["rev-parse", "status", "show", "show-ref", "merge-base", "merge-tree", "check-ref-format", "symbolic-ref"].includes(argv[1]) && !(argv[1] === "worktree" && argv[2] === "list") && !(argv[1] === "remote" && argv[2] === "get-url"))
+    const result = await runProcess(argv, { cwd, env: { ...env, ...(config.resources ? {
+      FACTORY_BROWSER_CONCURRENCY: String(config.resources.browserConcurrency) } : {}) }, timeoutMs: boundedMs, input, signal: budget()?.signal, ...streamOptions, mutation })
+    if (result.timedOut || result.cancelled || result.uncertain) {
+      const error = result.cancelled ? new DeliveryError("ATTEMPT-CANCELLED", 130)
+        : result.timedOut ? new DeadlineError(budget()?.phase ?? "command")
+        : new DeliveryError("MUTATION OUTCOME UNKNOWN: readback required", result.code)
+      error.uncertain = result.uncertain
+      throw error
+    }
     if (result.code && !allowFailure) {
       const transient = result.timedOut || /GraphQL|rate limit|Something went wrong|timed out|502/i.test(result.stderr)
       // Diagnostics never echo credential-bearing command output.
@@ -78,26 +116,30 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
   const git = async (cwd, ...args) => (await command(["git", ...args], cwd)).stdout.trim()
   const gh = async (repo, pr, action, ...args) => (await command(["gh", "pr", action, String(pr), "-R", repo, ...args], getRepo(repo).checkout)).stdout
   async function api(repo, route) {
-    for (let attempt = 0; ; attempt++) {
-      // Full REST pages include long PR bodies, comments and check output.
-      // Pair smaller pages with the prior reader's 16 MB capture allowance.
-      const response = await command(["gh", "api", `repos/${repo}/${route}`, "--include"], getRepo(repo).checkout,
-        { allowFailure: true, maxOutputBytes: 16_000_000 })
-      const parts = response.stdout.split(/\r?\n\r?\n/), headers = parts.shift() ?? ""
-      const status = Number(/^HTTP\/[^ ]+ (\d+)/.exec(headers)?.[1])
-      if (!response.code && status === 200) {
-        try { return JSON.parse(parts.join("\n\n")) }
-        catch { throw new DeliveryError("invalid GitHub REST JSON", 1) }
+    const phase = budget().phaseBudget("api", config.apiTimeoutMs)
+    return measured("api", repo, undefined, () => deadlines.run(phase, async () => {
+      for (let attempt = 0; ; attempt++) {
+        // Full REST pages include long PR bodies, comments and check output.
+        // Pair smaller pages with the prior reader's 16 MB capture allowance.
+        const response = await command(["gh", "api", `repos/${repo}/${route}`, "--include"], getRepo(repo).checkout,
+          { allowFailure: true, maxOutputBytes: 16_000_000 })
+        const parts = response.stdout.split(/\r?\n\r?\n/), headers = parts.shift() ?? ""
+        const status = Number(/^HTTP\/[^ ]+ (\d+)/.exec(headers)?.[1])
+        if (!response.code && status === 200) {
+          try { return JSON.parse(parts.join("\n\n")) }
+          catch { throw new DeliveryError("invalid GitHub REST JSON", 1) }
+        }
+        const exhausted = status === 403 && /^x-ratelimit-remaining: 0\s*$/im.test(headers)
+        const transient = response.timedOut || exhausted || [429, 500, 502, 503, 504].includes(status)
+        if (!transient || attempt >= 2) throw new DeliveryError("GitHub REST observation unavailable", 1, transient)
+        const guidance = /^retry-after: ([^\r\n]+)/im.exec(headers)?.[1]
+        const retryAfter = guidance === undefined ? NaN : /^\d+$/.test(guidance) ? Number(guidance) * 1000 : Date.parse(guidance) - Date.now()
+        const reset = Number(/^x-ratelimit-reset: (\d+)/im.exec(headers)?.[1]) * 1000 - Date.now()
+        const delay = Number.isFinite(retryAfter) ? Math.max(0, retryAfter) : exhausted && Number.isFinite(reset) ? Math.max(0, reset) : config.retryMs
+        if (delay > config.commandTimeoutMs) throw new DeliveryError("GitHub REST waiting for provider reset", 1, true)
+        await phase.sleep(delay)
       }
-      const exhausted = status === 403 && /^x-ratelimit-remaining: 0\s*$/im.test(headers)
-      const transient = response.timedOut || exhausted || [429, 500, 502, 503, 504].includes(status)
-      if (!transient || attempt >= 2) throw new DeliveryError("GitHub REST observation unavailable", 1, transient)
-      const retryAfter = Number(/^retry-after: (\d+)/im.exec(headers)?.[1]) * 1000
-      const reset = Number(/^x-ratelimit-reset: (\d+)/im.exec(headers)?.[1]) * 1000 - Date.now()
-      const delay = Number.isFinite(retryAfter) ? retryAfter : exhausted && Number.isFinite(reset) ? Math.max(0, reset) : config.retryMs
-      if (delay > config.commandTimeoutMs) throw new DeliveryError("GitHub REST waiting for provider reset", 1, true)
-      await pause(delay)
-    }
+    }))
   }
   async function pages(repo, route, field) {
     const rows = []
@@ -187,23 +229,18 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     await deliveryWait(config, repo, pr, await waitInput(repo, pr, head))
   }
   async function waitChecks(repo, pr, head, completedOnly = false) {
-    const until = Date.now() + config.checksTimeoutMs
-    while (true) {
+    const phase = budget().phaseBudget("readiness", config.checksTimeoutMs)
+    return measured("readiness", repo, pr, () => deadlines.run(phase, () => waitForCondition(async () => {
       const current = await view(repo, pr)
       requireOpen(current)
       if (current.headRefOid !== head) throw new DeliveryError("HEAD MOVED during checks; needs fresh review", 1)
       const ci = await ciFor(repo, current, head)
       requireKnownCi(ci)
-      const outcome = ci.state
-      if (outcome !== "pending") {
-        if (outcome === "failure" && !ci.repairable) throw new DeliveryError("CI REQUIRED CHECK REFUSED: rerun current required check", 3)
-        if (!completedOnly && outcome !== "success") throw new DeliveryError(`NONGREEN on ${head}`, 3)
-        current.ci = ci
-        return current
-      }
-      if (Date.now() >= until) throw new DeliveryError("CI-WAIT-TIMEOUT", 142)
-      await pause(config.pollMs)
-    }
+      if (ci.state === "failure" && !ci.repairable) throw new DeliveryError("CI REQUIRED CHECK REFUSED: rerun current required check", 3)
+      if (ci.state !== "pending" && !completedOnly && ci.state !== "success") throw new DeliveryError(`NONGREEN on ${head}`, 3)
+      current.ci = ci
+      return current
+    }, { budget: phase, boundedProbe: true, ready: value => value.ci.state !== "pending", pollMs: config.pollMs })))
   }
   async function branchWorktree(repo, branch, fallback, observedHead) {
     const local = getRepo(repo)
@@ -245,31 +282,55 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     if (!["review", "fix", "ci-fix", "rescope"].includes(kind)) throw new DeliveryError("invalid guarded delivery kind", 9)
     head ??= (await view(repo, pr)).headRefOid
     await eligible(repo, pr, head)
-    let release
+    let release, compute
     try {
-      release = await reserveCodex(config, repo, pr, kind)
+      if (!config.resources) throw new DeliveryError("resource configuration required before child admission", 9)
+      const queue = budget().phaseBudget("queue", config.queueTimeoutMs)
+      await measured("queue", repo, pr, async () => {
+        compute = await reserveCompute(config,
+          config.resources.agentUnits + config.resources.browserConcurrency, queue, { agentUnits: config.resources.agentUnits })
+        release = await reserveCodex(config, repo, pr, kind, queue)
+      })
       const admitted = await view(repo, pr)
       requireOpen(admitted)
       if (admitted.headRefOid !== head) throw new DeliveryError("SUPERSEDED: HEAD MOVED before child dispatch; observe current head", 1)
       await log({ repo, pr, step: kind, status: "started" })
       const digest = createHash("sha256")
-      const result = await command(argv, cwd, { input, timeoutMs: config.limits.timeoutMs, allowFailure: true,
-        captureOutput: false, onOutput: chunk => digest.update(chunk), onSpawn: async job => {
-          const bindings = [await release.bindJob(job)]
+      // Persist before launch: if the controller disappears there is no final
+      // callback to write uncertainty. A completed child retires this marker.
+      if (kind !== "review") {
+        const { budgetAvailable, ...inputBinding } = await waitInput(repo, pr, head)
+        await deliveryWait(config, repo, pr, inputBinding, { repo, pr, cause: "mutation-uncertain", code: 130,
+          message: "MUTATION UNCERTAIN: readback required before retry", resetAt: null })
+      }
+      const runBudget = budget().phaseBudget("execution", config.limits.timeoutMs)
+      const result = await measured("execution", repo, pr, () => deadlines.run(runBudget, () => command(argv, cwd, { input, timeoutMs: config.limits.timeoutMs, allowFailure: true,
+        mutation: kind !== "review", captureOutput: false, onOutput: chunk => digest.update(chunk), onSpawn: async job => {
+          const bindings = [await release.bindJob(job), ...await compute.bindJob(job)]
           const prLease = prLeases.get(keyFor(repo, pr))
           if (prLease) bindings.push(await prLease.bindJob(job))
           return bindings
-        } })
+        } })))
+      if (kind !== "review") await completeDeliveryWait(config, repo, pr)
       const outputDigest = digest.digest("hex")
       await log({ repo, pr, step: kind, status: result.timedOut ? "TIMEOUT" : result.code ? "failed" : "complete", code: result.code,
         outputDigest })
       if (result.code) throw new DeliveryError(result.timedOut ? `TIMEOUT ${repo}#${pr}` : `${kind} exited ${result.code}`, result.code)
       return { ...result, outputDigest }
     } catch (error) {
+      if (error.phase === "queue" && error.code === 142)
+        error.wait = await suspend(repo, pr, head, { cause: "slot-wait", code: 142, message: error.message, resetAt: null })
+      if (error.uncertain)
+        error.wait = await suspend(repo, pr, head, { cause: "mutation-uncertain", code: error.code, message: "MUTATION UNCERTAIN: readback required before retry", resetAt: null })
       if (error.code === 75 && !error.message.startsWith("BUSY:"))
         error.wait = await suspend(repo, pr, head, { cause: error.cause ?? "capacity-refused", code: 75, message: error.message, resetAt: error.resetAt ?? null })
       throw error
-    } finally { if (release) await release() }
+    } finally {
+      await measured("cleanup", repo, pr, async () => {
+        if (release) await release()
+        if (compute) await compute()
+      })
+    }
   }
   async function review(repo, pr) {
     const initial = await view(repo, pr)
@@ -528,58 +589,60 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     },
     async exclusive(repo, pr, fn) {
       getRepo(repo)
-      return withLease(locks, `pr-${keyFor(repo, pr)}`, async release => {
+      return inAttempt(() => withLease(locks, `pr-${keyFor(repo, pr)}`, async release => {
         const key = keyFor(repo, pr)
         prLeases.set(key, release)
         try { return await fn() } finally { prLeases.delete(key) }
-      })
+      }))
     },
     async execute(step, request = {}) {
-      const { repo, pr, head, worktree, note } = request
-      try {
-        if (repo) getRepo(repo)
-        let data
-        switch (step) {
-          case "pr:inspect": {
-            let current = await view(repo, pr)
-            if (current.state === "MERGED") { data = await verifyDelivery(repo, pr, current, current.headRefOid); break }
-            requireOpen(current)
-            await eligible(repo, pr, current.headRefOid)
-            current = await waitChecks(repo, pr, current.headRefOid, true)
-            const review = await latestReview(repo, pr, current)
-            const approved = review?.verdict === "APPROVE" && review.sha === current.headRefOid
-            const ci = current.ci
-            if (ci.state === "success" && current.mergeable === "UNKNOWN") throw new DeliveryError("MERGEABILITY UNKNOWN: wait for provider observation", 75)
-            const ready = approved && current.mergeable === "MERGEABLE" && ci.state === "success"
-            data = { head: current.headRefOid, approved, ready, blocked: review?.sha === current.headRefOid && ["REVIEW: BLOCKED", "CHANGES REQUESTED"].includes(review?.verdict) }
+      return inAttempt(async () => {
+        const { repo, pr, head, worktree, note } = request
+        try {
+          if (repo) getRepo(repo)
+          let data
+          switch (step) {
+            case "pr:inspect": {
+              let current = await view(repo, pr)
+              if (current.state === "MERGED") { data = await verifyDelivery(repo, pr, current, current.headRefOid); break }
+              requireOpen(current)
+              await eligible(repo, pr, current.headRefOid)
+              current = await waitChecks(repo, pr, current.headRefOid, true)
+              const review = await latestReview(repo, pr, current)
+              const approved = review?.verdict === "APPROVE" && review.sha === current.headRefOid
+              const ci = current.ci
+              if (ci.state === "success" && current.mergeable === "UNKNOWN") throw new DeliveryError("MERGEABILITY UNKNOWN: wait for provider observation", 75)
+              const ready = approved && current.mergeable === "MERGEABLE" && ci.state === "success"
+              data = { head: current.headRefOid, approved, ready, blocked: review?.sha === current.headRefOid && ["REVIEW: BLOCKED", "CHANGES REQUESTED"].includes(review?.verdict) }
 
-            break
+              break
+            }
+            case "review": data = await review(repo, pr); break
+            case "readiness": {
+              const current = await view(repo, pr)
+              requireOpen(current)
+              const ci = await ciFor(repo, current, head ?? current.headRefOid)
+              data = { head: current.headRefOid, state: ci.state, missing: ci.missing ?? [], nextAction: ci.nextAction }
+              break
+            }
+            case "pr:suspend": data = await suspend(repo, pr, head, request.stop); break
+            case "pr:complete": await completeDeliveryWait(config, repo, pr); data = {}; break
+            case "fix": case "ci-fix": data = await fix(repo, pr, step, worktree); break
+            case "branch-wt": data = { worktree: await branchWorktree(repo, request.branch, request.fallback) }; break
+            case "codex-guard": data = await guarded(repo, pr, request.kind, request.argv, getRepo(repo).checkout, ""); break
+            case "enqueue": data = await enqueue(repo, pr, head, note); break
+            case "auto-enqueue": data = await autoEnqueue(); break
+            case "import-legacy": data = await importLegacy(request.root); break
+            case "merge-one-core": data = await withLease(locks, "merge-owner", () => mergeOne(repo, pr, head, note)); break
+            case "merge-queue": data = await withLease(locks, "merge-owner", consumeQueue); break
+            default: throw new DeliveryError(`unknown delivery step: ${step}`)
           }
-          case "review": data = await review(repo, pr); break
-          case "readiness": {
-            const current = await view(repo, pr)
-            requireOpen(current)
-            const ci = await ciFor(repo, current, head ?? current.headRefOid)
-            data = { head: current.headRefOid, state: ci.state, missing: ci.missing ?? [], nextAction: ci.nextAction }
-            break
-          }
-          case "pr:suspend": data = await suspend(repo, pr, head, request.stop); break
-          case "pr:complete": await completeDeliveryWait(config, repo, pr); data = {}; break
-          case "fix": case "ci-fix": data = await fix(repo, pr, step, worktree); break
-          case "branch-wt": data = { worktree: await branchWorktree(repo, request.branch, request.fallback) }; break
-          case "codex-guard": data = await guarded(repo, pr, request.kind, request.argv, getRepo(repo).checkout, ""); break
-          case "enqueue": data = await enqueue(repo, pr, head, note); break
-          case "auto-enqueue": data = await autoEnqueue(); break
-          case "import-legacy": data = await importLegacy(request.root); break
-          case "merge-one-core": data = await withLease(locks, "merge-owner", () => mergeOne(repo, pr, head, note)); break
-          case "merge-queue": data = await withLease(locks, "merge-owner", consumeQueue); break
-          default: throw new DeliveryError(`unknown delivery step: ${step}`)
+          return pass(data)
+        } catch (error) {
+          if (!error.wait) await log({ step, repo, pr, status: "failed", code: error.code ?? 1, message: error.message })
+          return fail(error)
         }
-        return pass(data)
-      } catch (error) {
-        if (!error.wait) await log({ step, repo, pr, status: "failed", code: error.code ?? 1, message: error.message })
-        return fail(error)
-      }
+      })
     }
   }
 }

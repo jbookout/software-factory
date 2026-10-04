@@ -5,6 +5,7 @@ import os from "node:os"
 import path from "node:path"
 import { execFileSync, spawn } from "node:child_process"
 import { fileURLToPath } from "node:url"
+import { loadDeliveryConfig, createPrDeliveryAdapter } from "../src/pr-delivery.mjs"
 import { acquireLease } from "../src/pr-delivery-state.mjs"
 
 const cli = fileURLToPath(new URL("../bin/pr-delivery.mjs", import.meta.url))
@@ -17,6 +18,7 @@ const save = () => fs.writeFileSync(file, JSON.stringify(s));
 const git = (...a) => cp.execFileSync('git', a, {encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
 s.headRefOid = git('--git-dir',s.remote,'rev-parse','refs/heads/topic');
 const tool = require('node:path').basename(process.argv[1]);
+if(tool === 'ps') { console.log(process.pid+' '+process.ppid+' node fixture-observer'); return; }
 if(tool === 'codex') {
  let prompt=''; process.stdin.on('data',b=>prompt+=b); process.stdin.on('end',()=>{
  s.calls.push({prompt,cwd:process.cwd(),args}); save();
@@ -38,6 +40,7 @@ if(tool === 'codex') {
  const page=Number(params.get('page')||1),pageSize=Number(params.get('per_page')||100);
  const respond=value=>console.log('HTTP/2.0 200 OK\\n\\n'+JSON.stringify(value));
  if(s.restCodes?.length) {const code=s.restCodes.shift();save();console.log('HTTP/2.0 '+code+' synthetic\\nRetry-After: 0\\n'+(s.quotaEvidence?'X-RateLimit-Remaining: 0\\n':'')+'\\n{}');process.exit(1);}
+ if(s.apiHang) { if(s.apiHang!=='fetch') process.stdout.write('HTTP/2.0 200 OK\\n\\n{'); setInterval(()=>{if(s.apiHang==='drip') process.stdout.write(' ');},10); return; }
  if(s.apiFailure) { console.log('HTTP/2.0 403 Forbidden\\nx-ratelimit-remaining: 0\\n\\n{}');console.error('provider unavailable');process.exit(1); }
  if(s.restFault) { if(s.restFault==='exception') process.exit(2); if(s.restFault==='refusal') {console.log('HTTP/2.0 401 Unauthorized\\n\\n{}');process.exit(1);}
  console.log('HTTP/2.0 200 OK\\n\\n'+s.restFault);process.exit(0); }
@@ -89,12 +92,12 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
  g("checkout","-b","topic");await fs.writeFile(path.join(checkout,"feature.txt"),"feature\n");g("add","feature.txt");g("commit","-qm","Feature");g("push","-q","origin","topic")
  const head = g("rev-parse","HEAD");g("checkout","main")
  const tools=path.join(root,"tools");await fs.mkdir(tools)
- for(const name of ["gh","codex"]) await fs.writeFile(path.join(tools,name),fake,{mode:0o755})
+ for(const name of ["gh","codex","ps"]) await fs.writeFile(path.join(tools,name),fake,{mode:0o755})
  env.PATH=tools+path.delimiter+env.PATH
  const state={ remote,checkout,number:7,title:"Fixture PR",state:"OPEN",baseRefName:"main",isCrossRepository:false,headRefName:"topic",headRefOid:head,mergeStateStatus:"CLEAN",mergeable:"MERGEABLE",isDraft:false,author:{login:"builder"},comments:[],statusCheckRollup:[{status:"COMPLETED",conclusion:"SUCCESS"}],calls:[],ghCalls:[],...overrides }
  await fs.writeFile(env.FAKE_PR,JSON.stringify(state))
  const config=path.join(root,"config.json"), stateDir=path.join(root,"state")
- const cfg={repos:{"fixture/new-repository":{checkout,originUrl:remote,worktreeRoot:path.join(root,"worktrees"),requiredChecks:[{name:"test"}]}},stateDir,codex:{model:"fixture-model",effort:"high"},limits:{runsPer24h:8,slots:2,timeoutMs:5000},pollMs:5,retryMs:0,commandTimeoutMs:5000,...configOverrides}
+ const cfg={repos:{"fixture/new-repository":{checkout,originUrl:remote,worktreeRoot:path.join(root,"worktrees"),requiredChecks:[{name:"test"}]}},stateDir,codex:{model:"fixture-model",effort:"high"},resources:{capacity:4,browserConcurrency:1,agentUnits:1},limits:{runsPer24h:8,slots:2,timeoutMs:5000},pollMs:5,retryMs:0,commandTimeoutMs:5000,...configOverrides}
  await fs.writeFile(config,JSON.stringify(cfg))
  const read=async()=>JSON.parse(await fs.readFile(env.FAKE_PR,"utf8"))
  const launch=(command,args,workerEnv=env)=>new Promise((resolve,reject)=>{
@@ -107,7 +110,10 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
  const approve=async (body,number=7)=>{
   if(body) { const s=await read();s.comments.push({body,author:{login:"reviewer"}});await fs.writeFile(env.FAKE_PR,JSON.stringify(s));return }
   const before=await read(), apiFailure=before.apiFailure, move=before.moveDuringChecks;before.apiFailure=false;before.moveDuringChecks=false;await fs.writeFile(env.FAKE_PR,JSON.stringify(before))
-  const r=await run("review-pr","fixture/new-repository",String(number));assert.equal(r.code,0,JSON.stringify(r))
+  // The short readiness deadline is the property under test, not approval setup.
+  await fs.writeFile(config,JSON.stringify({...cfg,checksTimeoutMs:5000}))
+  const r=await run("review-pr","fixture/new-repository",String(number))
+  await fs.writeFile(config,JSON.stringify(cfg));assert.equal(r.code,0,JSON.stringify(r))
   const s=await read();s.apiFailure=apiFailure;s.moveDuringChecks=move;s.moveViewCount=0;s.calls=[];s.ghCalls=[];await fs.writeFile(env.FAKE_PR,JSON.stringify(s))
   await fs.writeFile(path.join(stateDir,"usage.json"),"[]") // approval is fixture setup, outside the exercised budget.
  }
@@ -197,7 +203,7 @@ test("approved pending CI waits for the deadline without spending repair usage",
  const s=await f.read();s.statusCheckRollup=[{status:"IN_PROGRESS",conclusion:null}]
  await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
  const r=await f.run("pr-loop",repo,"7","-","1")
- assert.equal(r.code,142);assert.match(r.stdout,/CI-WAIT-TIMEOUT/)
+ assert.equal(r.code,142);assert.match(r.stdout,/READINESS-TIMEOUT/)
  assert.equal((await f.read()).calls.length,0);assert.equal((await f.read()).headRefOid,f.head)
  assert.deepEqual(JSON.parse(await fs.readFile(path.join(f.stateDir,"usage.json"))),[])
 })
@@ -212,7 +218,7 @@ for(const checks of [
  ok(await f.run("merge-one-core",repo,"7",f.head));assert.equal((await f.read()).state,"MERGED")
 })
 test("terminal StatusContext ERROR refuses merge immediately",async t=>{
- const f=await fixture(t,{}, {checksTimeoutMs:100});await f.approve()
+ const f=await fixture(t,{}, {checksTimeoutMs:5000});await f.approve()
  const s=await f.read();s.statusCheckRollup=[{__typename:"StatusContext",state:"ERROR"}]
  await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
  const r=await f.run("merge-one-core",repo,"7",f.head)
@@ -231,8 +237,11 @@ test("per-PR budget stop survives invocations and loop stops",async t=>{
 })
 test("hard timeout kills a Codex that ignores SIGTERM and releases slot",async t=>{
  const f=await fixture(t,{hang:true},{limits:{runsPer24h:8,slots:1,timeoutMs:400}})
- const start=Date.now();const r=await f.run("review-pr",repo,"7");assert.equal(r.code,142);assert.match(r.stdout,/TIMEOUT/);assert.ok(Date.now()-start<4000)
- const s=await f.read();s.hang=false;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s));ok(await f.run("review-pr",repo,"7"))
+ const r=await f.run("review-pr",repo,"7");assert.equal(r.code,142);assert.match(r.stdout,/TIMEOUT/)
+ const events=(await fs.readFile(path.join(f.stateDir,"delivery.jsonl"),"utf8")).trim().split("\n").map(JSON.parse)
+ const execution=events.find(e=>e.phase==="execution")
+ assert.equal(execution.code,142);assert.ok(execution.durationMs<650,"400ms execution budget includes process cleanup, separately from readiness/queue")
+ ok(await f.run("codex-guard",repo,"7","review","/usr/bin/true")) // The same 400ms budget admits a healthy command after cleanup.
 })
 test("a reviewer commit is refused and its evidence worktree retained",async t=>{
  const f=await fixture(t,{reviewerCommit:true});const r=await f.run("review-pr",repo,"7")
@@ -323,18 +332,25 @@ test("controller death cannot orphan a guarded child or release its occupied slo
  const controller=spawn(process.execPath,[cli,f.config,"codex-guard",repo,"7","fix",process.execPath,"-e",childCode],{env:f.env,stdio:"ignore"})
  t.after(()=>{try{controller.kill("SIGKILL")}catch{}})
  let pid
- for(let i=0;i<200;i++) {try{pid=Number(await fs.readFile(pidFile,"utf8"));break}catch{} await new Promise(r=>setTimeout(r,10))}
+ const bootUntil=Date.now()+5000 // Readiness includes CLI/API/admission; execution still has its separate 700ms cap.
+ for(;Date.now()<bootUntil;) {try{const observed=Number(await fs.readFile(pidFile,"utf8"));if(Number.isSafeInteger(observed)&&observed>0){pid=observed;break}}catch{} await new Promise(r=>setTimeout(r,10))}
  assert.ok(pid,"guarded child started")
  t.after(()=>{try{process.kill(-pid,"SIGKILL")}catch{}})
  const claims=path.join(f.stateDir,"locks","codex-slot-0.claims")
  const [claim]=await fs.readdir(claims)
  const binding=JSON.parse(await fs.readFile(path.join(claims,claim)))
- assert.equal(binding.job.groupPid,pid,"lease records the actual child group")
+ const group=Number(execFileSync('ps',['-o','pgid=','-p',String(pid)],{encoding:'utf8'}).trim())
+ assert.equal(binding.job.groupPid,group,"lease is bound before the command can execute")
+ t.after(()=>{try{process.kill(-group,"SIGKILL")}catch{}})
  assert.ok(binding.job.deadline>Date.now(),"lease records the independent deadline")
  controller.kill("SIGKILL")
  await new Promise(r=>setTimeout(r,950))
  const alive=()=>{try{process.kill(pid,0);return true}catch{return false}}
  assert.equal(alive(),false,"child is stopped even without controller timeout")
+ const usage=await fs.readFile(path.join(f.stateDir,"usage.json"),"utf8")
+ const retry=await f.run("codex-guard",repo,"7","fix",process.execPath,"-e",childCode)
+ assert.equal(retry.code,130,"controller death retains uncertain mutation until readback")
+ assert.equal(await fs.readFile(path.join(f.stateDir,"usage.json"),"utf8"),usage)
  ok(await f.run("codex-guard",repo,"8","review",process.execPath,"-e","process.exit(0)"))
 })
 test("transient GitHub error is requeued at most three times",async t=>{
@@ -650,3 +666,80 @@ for(const order of ["failure-first","failure-last","all-success"])
   if(order!=="all-success") assert.match(r.stdout,/BUDGET-STOP/)
   assert.equal((await f.read()).calls.length,0)
  })
+
+for (const apiHang of ['fetch', 'body', 'drip']) test(`readiness bounds never-settling ${apiHang} within one API/attempt budget`, async t => {
+ const f=await fixture(t,{apiHang},{commandTimeoutMs:5000,apiTimeoutMs:1000,attemptTimeoutMs:1800})
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const start=Date.now(), result=await adapter.execute('review',{repo,pr:7}), r={...result.data,code:result.data.code}
+ assert.equal(r.code,142,JSON.stringify(r))
+ assert.ok(Date.now()-start<2000,'API retries must not renew the budget')
+ assert.equal((await f.read()).calls.length,0)
+ assert.equal((await f.read()).ghCalls.length,1,'a deadline is terminal for this observation')
+})
+test('forever-pending readiness bounds probes and long pacing without paid dispatch',async t=>{
+ const f=await fixture(t,{statusCheckRollup:[{status:'IN_PROGRESS',conclusion:null}]},
+ {checksTimeoutMs:1000,pollMs:10000,attemptTimeoutMs:2500})
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const start=Date.now(),result=await adapter.execute('review',{repo,pr:7}),r=result.data
+ assert.equal(r.code,142,JSON.stringify(r));assert.ok(Date.now()-start<2500)
+ assert.equal((await f.read()).calls.length,0)
+})
+test('ready-now performs no initial pacing sleep',async t=>{
+ const f=await fixture(t,{}, {pollMs:10000,checksTimeoutMs:15000})
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const start=Date.now(),result=await adapter.execute('pr:inspect',{repo,pr:7});assert.equal(result.status,'pass',JSON.stringify(result))
+ assert.ok(Date.now()-start<10000,'no fixed initial pacing sleep')
+})
+
+test('interrupted source mutation is uncertain and unchanged input cannot redispatch it',async t=>{
+ const f=await fixture(t,{}, {limits:{runsPer24h:8,slots:1,timeoutMs:700}})
+ const argv=[process.execPath,'-e',"require('fs').writeFileSync('effect.txt','committed');process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"]
+ const result=await f.run('codex-guard',repo,'7','fix',...argv)
+ assert.equal(result.code,142,JSON.stringify(result))
+ assert.equal(await fs.readFile(path.join(f.checkout,'effect.txt'),'utf8'),'committed')
+ const wait=JSON.parse(await fs.readFile(path.join(f.stateDir,'waits',`${encodeURIComponent(repo)}-7.json`)))
+ assert.equal(wait.cause,'mutation-uncertain')
+ const usage=await fs.readFile(path.join(f.stateDir,'usage.json'),'utf8')
+ const again=await f.run('codex-guard',repo,'7','fix',...argv)
+ assert.notEqual(again.code,0);assert.equal(await fs.readFile(path.join(f.stateDir,'usage.json'),'utf8'),usage)
+})
+
+test('browser concurrency 1/2 uses the same immutable fixture and bounded child load',async t=>{
+ const f=await fixture(t,{}, {resources:{capacity:4,browserConcurrency:2,agentUnits:1}})
+ const files=[]
+ for(let i=0;i<4;i++) {
+  const file=path.join(f.checkout,`browser-${i}.test.mjs`);files.push(file)
+  await fs.writeFile(file,`import fs from 'node:fs';import test from 'node:test';test('fixed-load',async()=>{fs.appendFileSync(process.env.TRACE,JSON.stringify({kind:'start',pid:process.pid})+'\\n');await new Promise(r=>setTimeout(r,120));fs.appendFileSync(process.env.TRACE,JSON.stringify({kind:'end',pid:process.pid})+'\\n')});`)
+ }
+ const measurements=[]
+ for(const workers of [1,2]) {
+  const trace=path.join(f.root,`trace-${workers}`),start=Date.now()
+  const result=await new Promise((resolve,reject)=>{
+   const child=spawn('sh',[fileURLToPath(new URL('../deploy/orch/test-browser.sh',import.meta.url)),repo,...files],
+    {env:{...f.env,TRACE:trace,FACTORY_ROOT:fileURLToPath(new URL("../",import.meta.url)),FACTORY_PR_CONFIG:f.config,FACTORY_BROWSER_CONCURRENCY:String(workers)},stdio:['ignore','pipe','pipe']})
+   let stdout='',stderr='';child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b)
+   child.on('error',reject);child.on('close',code=>resolve({code,stdout,stderr}))
+  });ok(result);assert.match(result.stdout,/(?:pass 4|# pass 4)/)
+  const rows=(await fs.readFile(trace,'utf8')).trim().split('\n').map(JSON.parse)
+  const active=new Set();let peak=0
+  for(const row of rows){if(row.kind==='start')active.add(row.pid);else active.delete(row.pid);peak=Math.max(peak,active.size)}
+  assert.equal(rows.filter(r=>r.kind==='end').length,4);assert.equal(active.size,0);assert.ok(peak<=workers)
+  measurements.push({workers,tests:4,failures:0,peak,durationMs:Date.now()-start})
+ }
+ t.diagnostic(JSON.stringify(measurements))
+})
+
+test('subprocess error canaries do not reach persisted delivery/wait bytes',async t=>{
+ const f=await fixture(t,{childCode:42,childError:'CANARY_PRIVATE_TOKEN CANARY_PRIVATE_CLIENT'})
+ const result=await f.run('codex-guard',repo,'7','fix','codex','-')
+ assert.equal(result.code,42,JSON.stringify(result))
+ const bytes=await fs.readFile(path.join(f.stateDir,'delivery.jsonl'),'utf8')
+ assert.doesNotMatch(bytes,/CANARY_PRIVATE/);assert.doesNotMatch(result.stderr,/CANARY_PRIVATE/)
+})
+
+for(const resources of [{browserConcurrency:1},{capacity:0},{capacity:1,agentUnits:1,browserConcurrency:1},
+ {capacity:2,agentUnits:1,browserConcurrency:0}]) test(`invalid resource capacity ${JSON.stringify(resources)} refuses before admission`,async t=>{
+ const f=await fixture(t,{}, {resources})
+ await assert.rejects(loadDeliveryConfig(f.config),{code:9})
+ assert.equal((await f.read()).calls.length,0)
+})

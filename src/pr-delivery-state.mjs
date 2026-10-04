@@ -1,3 +1,5 @@
+import { killOwnedGroup, ownedGroupAlive } from "./process-group.mjs"
+import { Deadline } from "./deadline.mjs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
@@ -24,7 +26,7 @@ const alive = pid => { try { process.kill(pid, 0); return true } catch (e) { ret
 // Each contender owns a unique record: dead-owner recovery never unlinks a
 // successor's lock. A bounded bakery election retains its claim while peers
 // choose tickets, so simultaneous callers cannot both withdraw before election.
-export async function acquireLease(root, name) {
+export async function acquireLease(root, name, { budget } = {}) {
   const dir = path.join(root, `${name}.claims`)
   await fs.mkdir(dir, { recursive: true, mode: 0o700 })
   const token = randomUUID(), file = path.join(dir, `${token}.json`)
@@ -38,9 +40,9 @@ export async function acquireLease(root, name) {
       if (!peer) continue
       // A supervised job keeps its slot even after its controller dies.
       const group = peer.job?.groupPid
-      const groupAlive = group && alive(process.platform === "win32" ? group : -group)
+      const groupAlive = group && ownedGroupAlive(group)
       if (groupAlive && (Date.now() >= peer.job.deadline || (!alive(peer.pid) && !alive(peer.job.pid)))) {
-        try { process.kill(process.platform === "win32" ? group : -group, "SIGKILL") }
+        try { killOwnedGroup(group, "SIGKILL") }
         catch (error) { if (error.code !== "ESRCH") throw error }
       }
       if (alive(peer.pid) || (peer.job && alive(peer.job.pid)) || groupAlive) result.push(peer)
@@ -55,8 +57,9 @@ export async function acquireLease(root, name) {
     const choosingUntil = Date.now() + 1000
     let contenders = await peers()
     while (contenders.some(p => p.ticket === 0)) {
+      budget?.check()
       if (Date.now() >= choosingUntil) { await release(); return null }
-      await pause(10)
+      if (budget) await budget.sleep(10); else await pause(10)
       contenders = await peers()
     }
     const blocked = contenders.some(p => p.ticket < owner.ticket ||
@@ -69,19 +72,21 @@ export async function acquireLease(root, name) {
     return release
   } catch (error) { await release(); throw error }
 }
-export async function withLease(root, name, fn, { waitMs = 0, pollMs = 30 } = {}) {
+export async function withLease(root, name, fn, { waitMs = 0, pollMs = 30, budget } = {}) {
   const until = Date.now() + waitMs
   do {
-    const release = await acquireLease(root, name)
+    budget?.check()
+    const release = await acquireLease(root, name, { budget })
     if (release) { try { return await fn(release) } finally { await release() } }
     if (Date.now() >= until) throw new DeliveryError(`BUSY: ${name} already owned`, 75)
-    await pause(pollMs)
+    if (budget) await budget.sleep(pollMs); else await pause(pollMs)
   } while (true)
 }
 
-export async function reserveCodex(config, repo, pr, kind) {
-  const root = path.join(config.stateDir, "locks"), until = Date.now() + config.limits.timeoutMs
+export async function reserveCodex(config, repo, pr, kind, budget = new Deadline(config.queueTimeoutMs ?? config.limits.timeoutMs, { phase: "queue" })) {
+  const root = path.join(config.stateDir, "locks")
   while (true) {
+    budget.check()
     const result = await withLease(root, "budget", async () => {
       const file = path.join(config.stateDir, "usage.json")
       const usage = (await readJson(file, [])).filter(r => r.at >= Date.now() - 86400_000)
@@ -94,7 +99,7 @@ export async function reserveCodex(config, repo, pr, kind) {
           throw error
         }
       for (let i = 0; i < config.limits.slots; i++) {
-        const release = await acquireLease(root, `codex-slot-${i}`)
+        const release = await acquireLease(root, `codex-slot-${i}`, { budget })
         if (release) {
           try { await writeJson(file, [...usage, { repo, pr, kind, at: Date.now() }]) }
           catch (e) { await release(); throw e }
@@ -102,14 +107,15 @@ export async function reserveCodex(config, repo, pr, kind) {
         }
       }
       return null
-    }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs })
+    }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget })
     if (result) return result
-    if (Date.now() >= until) {
-      const error = new DeliveryError(`SLOT-STOP ${repo}#${pr}: concurrency wait timed out`, 75)
-      error.cause = "slot-wait"
-      throw error
+    try { await budget.sleep(config.pollMs) }
+    catch (error) {
+      if (error.code !== 142) throw error
+      const stop = new DeliveryError(`SLOT-STOP ${repo}#${pr}: concurrency wait timed out`, 75)
+      stop.cause = "slot-wait"; stop.phase = "queue"
+      throw stop
     }
-    await pause(config.pollMs)
   }
 }
 

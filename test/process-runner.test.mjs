@@ -60,3 +60,75 @@ fs.writeFileSync(args[args.indexOf('--output-last-message')+1],JSON.stringify({s
     outcome: "Fixture build", sourceRevision: "a".repeat(40), pinnedBuildContext }, { cwd: root, codex })
   assert.equal(result.status, "pass")
 })
+
+test('cancellation kills child/grandchild and returns uncertain for a mutation', async () => {
+  const { treeScript, waitGone } = await import('./helpers/deadline-and-process.mjs')
+  const controller = new AbortController()
+  let output = ''
+  const result = await runProcess([process.execPath, '-e', treeScript], {
+    timeoutMs: 1000, signal: controller.signal, mutation: true,
+    onOutput(chunk) { output += chunk; if (output.includes('DESCENDANT:')) controller.abort() }
+  })
+  assert.equal(result.cancelled, true)
+  assert.equal(result.uncertain, true)
+  assert.equal(result.nextAction, 'readback-before-retry')
+  assert.ok(await waitGone(Number(/DESCENDANT:(\d+)/.exec(output)[1])))
+})
+
+test('supervisor binding that never settles stays inside total process budget', async () => {
+  const start = Date.now()
+  const result = await runProcess([process.execPath, '-e', 'setInterval(()=>{},1000)'], {
+    timeoutMs: 250, onSpawn: () => new Promise(() => {})
+  })
+  assert.equal(result.timedOut, true)
+  assert.ok(Date.now() - start < 1500)
+})
+
+test('binding exception cleans supervisor without leaking raw error text', async () => {
+  const { waitGone } = await import('./helpers/deadline-and-process.mjs')
+  let pid
+  await assert.rejects(runProcess([process.execPath, '-e', ''], {
+    timeoutMs: 500, onSpawn(job) { pid = job.pid; throw Error('CANARY_PRIVATE_LAUNCH_ERROR') }
+  }), /process launch binding failed/)
+  assert.ok(await waitGone(pid))
+})
+
+test('missing executable fails without orphaning a supervisor',async()=>{
+ const {waitGone}=await import('./helpers/deadline-and-process.mjs')
+ const result=await runProcess(['/fixture/no-such-executable'],{timeoutMs:1000})
+ assert.notEqual(result.code,0);assert.equal(result.started,false);assert.ok(await waitGone(result.pid))
+})
+
+test('supervisor death stops its owned group and retains mutation uncertainty',async()=>{
+ const {treeScript,waitGone}=await import('./helpers/deadline-and-process.mjs')
+ let supervisor,output='',stopped=false
+ const result=await runProcess([process.execPath,'-e',treeScript],{timeoutMs:1500,mutation:true,
+  onSpawn(job){supervisor=job.pid;return []},
+  onOutput(chunk){output+=chunk;if(output.includes('DESCENDANT:')&&!stopped){stopped=true;process.kill(supervisor,'SIGKILL')}}
+ })
+ assert.equal(result.uncertain,true);assert.notEqual(result.code,0)
+ assert.ok(await waitGone(supervisor));assert.ok(await waitGone(Number(/DESCENDANT:(\d+)/.exec(output)[1])))
+})
+
+test('a stalled lease binding cannot run the command before the launch latch opens',async t=>{
+ if(process.platform==='win32') return t.skip('POSIX FIFO lease fixture')
+ const {execFileSync}=await import('node:child_process')
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-launch-latch-'));t.after(()=>fs.rm(root,{recursive:true,force:true}))
+ const fifo=path.join(root,'binding'),effect=path.join(root,'effect')
+ execFileSync('mkfifo',[fifo])
+ const start=Date.now()
+ const result=await runProcess([process.execPath,'-e',`require('fs').writeFileSync(${JSON.stringify(effect)},'ran')`],{
+  timeoutMs:500,onSpawn:()=>[{file:fifo,token:'fixture-token'}]
+ })
+ assert.equal(result.timedOut,true);assert.ok(Date.now()-start<1000)
+ await assert.rejects(fs.access(effect),{code:'ENOENT'})
+})
+
+test('a permission error on a live group remains a refusal',async t=>{
+ const {execFileSync}=await import('node:child_process')
+ const {killOwnedGroup,ownedGroupAlive}=await import('../src/process-group.mjs')
+ const group=Number(execFileSync('ps',['-o','pgid=','-p',String(process.pid)],{encoding:'utf8'}).trim())
+ t.mock.method(process,'kill',()=>{const error=Error('synthetic permission refusal');error.code='EPERM';throw error})
+ assert.equal(ownedGroupAlive(group),true)
+ assert.throws(()=>killOwnedGroup(group,'SIGKILL'),{code:'EPERM'})
+})

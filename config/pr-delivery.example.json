@@ -3,18 +3,38 @@
     "owner/repository": {
       "checkout": "/absolute/path/to/repository",
       "worktreeRoot": "/absolute/path/to/delivery-worktrees",
-      "requiredChecks": [{ "name": "test", "appId": 15368 }],
+      "requiredChecks": [
+        {
+          "name": "test",
+          "appId": 15368
+        }
+      ],
       "dependencyRevision": "owned-actionable-input-revision"
     }
   },
   "stateDir": "/absolute/path/to/private/factory-delivery-state",
-  "codex": { "model": "gpt-6.1-sol", "effort": "high" },
-  "limits": { "runsPer24h": 8, "slots": 4, "timeoutMs": 4500000 },
+  "codex": {
+    "model": "gpt-6.1-sol",
+    "effort": "high"
+  },
+  "limits": {
+    "runsPer24h": 8,
+    "slots": 4,
+    "timeoutMs": 4500000
+  },
   "commandTimeoutMs": 120000,
   "checksTimeoutMs": 3600000,
   "pollMs": 30000,
   "autoPollMs": 300000,
   "retryMs": 120000,
   "queueRunsPer24h": 4,
-  "holds": []
+  "holds": [],
+  "queueTimeoutMs": 900000,
+  "apiTimeoutMs": 120000,
+  "attemptTimeoutMs": 9600000,
+  "resources": {
+    "capacity": 8,
+    "agentUnits": 1,
+    "browserConcurrency": 1
+  }
 }
