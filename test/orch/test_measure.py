@@ -277,6 +277,17 @@ class Measurement(unittest.TestCase):
                 self.assertEqual(report['candidate_rates']['eligible'], 1)
                 self.assertEqual(report['rounds'].get('failed', 0), int(verdict == 'failed'))
 
+    def test_review_r1_future_snapshot_cannot_erase_windowed_ci_failure(self):
+        failed = event('ci', second=1, required=['strict'], checks=[{'name': 'strict', 'conclusion': 'failure'}])
+        window = (measure.timestamp('2026-10-04T00:00:00Z'), measure.timestamp('2026-10-04T00:00:10Z'))
+        for rows in [[failed], [failed, event('ci', second=20, required=['strict'], checks=[])]]:
+            with self.subTest(rows=len(rows)):
+                report = measure.measure(rows, window=window)
+                self.assertEqual(report['rounds'].get('failed'), 1)
+                self.assertEqual(report['candidates'][0]['first_ci'], 'failed')
+                self.assertEqual(report['candidate_rates']['eligible'], 1)
+                self.assertEqual(report['candidate_rates']['status'], 'complete')
+
     def test_review_2_required_contract_is_immutable_per_attempt(self):
         first = event('ci', second=1, required=['strict', 'security'], checks=[{'name': 'strict', 'conclusion': 'success'}])
         for required in [['strict'], ['strict', 'security', 'extra'], None]:

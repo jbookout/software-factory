@@ -322,7 +322,8 @@ def measure(records, artifact_root=None, stratify=True, window=None):
             terminal = {v for v in ci_verdicts if v != 'unknown'}
             if len(terminal) > 1:
                 raise ValueError('CI attempt has conflicting terminal verdicts')
-            verdict = next(iter(terminal), 'unknown') if not censored else 'unknown'
+            # rows already end at the cutoff, so a terminal verdict here is settled for this window.
+            verdict = next(iter(terminal), 'unknown')
             candidate['ci'].append((times.get('started', times.get('enqueued', times['ci'])), lane, attempt, verdict))
         # A failed required CI observation is one round per run/attempt, not per leaf job.
         if ci_verdicts and verdict == 'failed' and outcome not in ('failed', 'timeout'):
