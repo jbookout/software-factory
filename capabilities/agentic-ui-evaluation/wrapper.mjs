@@ -8,7 +8,7 @@ import { ACCEPTANCE_ENGINE } from '../../src/design-verify.mjs'
 // The gate owns the pinned acceptance engine; the wrapper invokes exactly that pin.
 const [pinnedPackage, pinnedVersion] = ACCEPTANCE_ENGINE.split('@')
 export const E2E_PIN = Object.freeze({ package: pinnedPackage, version: pinnedVersion, license: 'Apache-2.0',
-  sourceRevision: '8d38206f460415b70706b45acb820bb0e24832ae' })
+  sourceRevision: 'a0ee3e9061b666fa3dd43e7dcc8e1a5da47362d6' })
 export const E2E_MODES = Object.freeze(['run', 'explore', 'bug-bash', 'mcp', 'replay'])
 const LOGIN_ACTION = 'Sign in to e2e with ChatGPT (attended)'
 const EXPIRY_WARNING_MS = 24 * 60 * 60 * 1000
@@ -72,6 +72,37 @@ export function triageFindings({ candidate, charters = [], findings }) {
 
 const sameTest = (a, b) => a?.test?.ref === b?.test?.ref && a?.test?.digest === b?.test?.digest
 
+/** Normalize published report-1 results; caller binds the executed fixture bytes. */
+export function normalizeE2eReport({ report, candidate, manifest, test }) {
+  if (report?.schemaVersion !== 'report-1' || report.run?.runner?.version !== E2E_PIN.version ||
+      !Array.isArray(report.run.results) || !Array.isArray(report.run.errors))
+    throw new Error('unsupported e2e report or runner version')
+  if (report.run.errors.length) throw new Error('e2e run has startup/configuration errors')
+  const entries = [...manifest.defects, ...manifest.traps]
+  if (report.run.results.length !== entries.length) throw new Error('e2e report has incomplete or unexpected coverage')
+  const reruns = entries.map(entry => {
+    const matches = report.run.results.filter(result => result.titlePath.at(-1) === entry.testTitle)
+    if (matches.length !== 1) throw new Error(`expected one result for ${entry.id}`)
+    const result = matches[0]
+    const attempt = result.attempts[0]
+    if (!result.selected || result.attempts.length !== 1 || !Array.isArray(attempt?.steps))
+      throw new Error(`unexercised or retried test ${entry.id}`)
+    if (attempt.steps.some(step => step.kind === 'agent' || step.model || step.turns?.length))
+      throw new Error('model steps cannot qualify deterministic execution')
+    const outcome = result.status === 'passed' ? 'passed' :
+      result.status === 'failed' && attempt.error?.code === 'ASSERTION_FAILED' &&
+        attempt.error?.phase === 'body' ? 'failed' : 'blocked'
+    return { id: entry.id, test: { ...test, ref: `${test.ref}#${entry.testTitle}` }, binding: candidate, outcome, route: entry.route,
+      assertion: outcome === 'blocked' ? null : entry.assertion ?? entry.expectation,
+      assertionKind: 'deterministic', reportResultId: result.id, error: attempt.error ?? null }
+  })
+  const trapRuns = reruns.filter(run => manifest.traps.some(trap => trap.id === run.id))
+  const findings = reruns.filter(run => run.outcome !== 'passed').map(run => ({
+    id: run.id, explanation: null, repro: run,
+  }))
+  return { candidate, findings, reruns, trapRuns }
+}
+
 /**
  * Qualification on a small app with a frozen defect manifest and traps. Pass
  * only if every planted defect is caught with a failing repro, no trap is
@@ -87,6 +118,12 @@ export async function qualifyAgenticEvaluation({ manifest, broken, repaired, rep
   if (!archive.refs.length) reasons.push('no archived evidence to survive cleanup')
   const triage = triageFindings(broken)
   if (triage.blocked) reasons.push(triage.blocked)
+  for (const trap of manifest.traps) {
+    for (const [label, run] of [['broken', broken], ['repaired', repaired], ['replay', replay]]) {
+      if (!run.trapRuns?.some(result => result.id === trap.id && result.outcome === 'passed' &&
+          sameBuild(result.binding, run.candidate))) reasons.push(`trap ${trap.id} not exercised passing on ${label}`)
+    }
+  }
   const catches = (finding, defect) => finding.repro.assertion === defect.assertion && finding.repro.route === defect.route
   const repros = new Map()
   for (const defect of manifest.defects) {
@@ -96,8 +133,10 @@ export async function qualifyAgenticEvaluation({ manifest, broken, repaired, rep
   }
   // Traps sit on the routes they guard: only a finding that catches no planted defect flags one.
   const unplanted = triage.confirmed.filter(finding => !manifest.defects.some(defect => catches(finding, defect)))
-  for (const trap of manifest.traps) {
-    if (unplanted.some(finding => finding.repro.route === trap.route)) reasons.push(`trap ${trap.id} flagged`)
+  for (const finding of unplanted) {
+    const traps = manifest.traps.filter(trap => finding.repro.route === trap.route)
+    reasons.push(`unexpected assertion-failing finding ${finding.id} on ${finding.repro.route} outside the frozen defect manifest` +
+      traps.map(trap => `; trap ${trap.id} flagged`).join(''))
   }
   if (sameBuild(repaired.candidate, broken.candidate)) reasons.push('repaired build must differ from the broken build')
   for (const [id, repro] of repros) {

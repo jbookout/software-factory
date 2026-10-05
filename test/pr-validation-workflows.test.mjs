@@ -57,7 +57,7 @@ function replay(source, events) {
 for (const file of files) {
   const source = read(file);
   test(`${file}: required context identity is retained`, () => {
-    assert.deepEqual(policy(source, context()).jobs, ["test"]);
+    assert.deepEqual(policy(source, context()).jobs, ["test", "e2e-deterministic-qualification"]);
   });
   test(`${file}: rapid A/B/C supersedes A/B and C runs every job`, () => {
     const runs = replay(source, [context("pull_request", "opened", 9, 1), context("pull_request", "synchronize", 9, 2), context("pull_request", "synchronize", 9, 3)]);
