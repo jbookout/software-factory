@@ -2,6 +2,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { runProcess } from "../src/process-runner.mjs";
 import { writeJson } from "../src/pr-delivery-state.mjs";
 import { monotonicNow } from "../src/deadline.mjs";
+import { fullSuiteEnvironment } from "../src/nightly-backstop.mjs";
 
 export const recoveryPattern =
   "fix12: kill after|fix12: restored requested checkpoint|PR46 finding 1: admission quota|PR46 finding 7: undispatched quota|fix12: cancelled pending job|fix30: 48-hour virtual";
@@ -17,13 +18,10 @@ export async function rehearse({
     duration = wallclock ? 48 * 3600000 : 0,
     cycles = [];
   const env = { ...process.env };
-  delete env.NODE_TEST_CONTEXT;
-  const options = env.NODE_OPTIONS ?? "";
-  env.NODE_OPTIONS = /(?:^|\s)--test-reporter=tap(?:\s|$)/.test(options)
-    ? options
-    : `${options} --test-reporter=tap`.trim();
   do {
-    const at = clock(),
+    const at = clock();
+    let result;
+    try {
       result = await run(
         [
           process.execPath,
@@ -33,11 +31,14 @@ export async function rehearse({
         ],
         {
           cwd: fileURLToPath(new URL("..", import.meta.url)),
-          env,
+          env: fullSuiteEnvironment(env),
           timeoutMs: 600000,
           maxOutputBytes: 8 * 1024 * 1024,
         },
       );
+    } catch {
+      result = { code: 1 };
+    }
     const output = result.stdout ?? "",
       total = Number(/^# tests ([0-9]+)$/m.exec(output)?.[1]),
       passed = Number(/^# pass ([0-9]+)$/m.exec(output)?.[1]),

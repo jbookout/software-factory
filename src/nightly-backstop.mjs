@@ -12,6 +12,20 @@ const validCounts = (c) =>
   c.tests === c.passed + c.failed + c.cancelled + c.skipped + c.todo;
 const sha = (value) => /^[0-9a-f]{40}$/.test(value ?? "");
 
+export function fullSuiteEnvironment(env = process.env) {
+  const result = { ...env };
+  delete result.NODE_TEST_CONTEXT;
+  const options = result.NODE_OPTIONS ?? "";
+  if (
+    /(?:^|\s|")--test-(?:name-pattern|skip-pattern|only|shard|rerun-failures)(?:=|\s|"|$)/.test(options)
+  )
+    throw Error("filtered selection cannot acknowledge a full suite");
+  result.NODE_OPTIONS = /(?:^|\s|")--test-reporter=tap(?:\s|"|$)/.test(options)
+    ? options
+    : `${options} --test-reporter=tap`.trim();
+  return result;
+}
+
 export function assessNightly(receipt, policy, now = Date.now()) {
   if (
     !/^jbookout\/(software-factory|doctorcre-app)$/.test(policy.repository) ||
@@ -180,12 +194,7 @@ export async function runFullMain({
     inventoryDigest;
   try {
     inventoryDigest = await inventory(cwd);
-    const childEnv = { ...env };
-    delete childEnv.NODE_TEST_CONTEXT;
-    const options = childEnv.NODE_OPTIONS ?? "";
-    childEnv.NODE_OPTIONS = /(?:^|\s)--test-reporter=tap(?:\s|$)/.test(options)
-      ? options
-      : `${options} --test-reporter=tap`.trim();
+    const childEnv = fullSuiteEnvironment(env);
     result = await runProcess(command, {
       cwd,
       env: childEnv,

@@ -3,7 +3,7 @@ import path from "node:path";
 import { canonicalDigest } from "../src/canonical.mjs";
 import { Deadline } from "../src/deadline.mjs";
 import { runProcess } from "../src/process-runner.mjs";
-import { assignment } from "../src/nightly-backstop.mjs";
+import { assignment, fullSuiteEnvironment } from "../src/nightly-backstop.mjs";
 try {
   const args = process.argv.slice(2);
   if (
@@ -32,8 +32,7 @@ try {
     ),
   );
   const deadline = new Deadline(2700000);
-  const env = { ...process.env };
-  delete env.NODE_TEST_CONTEXT;
+  const env = fullSuiteEnvironment();
   const results = await Promise.all(
     groups.map(async (group) => {
       const codes = [];

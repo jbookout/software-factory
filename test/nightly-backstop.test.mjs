@@ -147,7 +147,7 @@ test("full suite child executes seeded regression, binds counts and omits privat
   );
   await fs.writeFile(
     path.join(root, "test.mjs"),
-    "import test from 'node:test';import assert from 'node:assert/strict';test('control',()=>assert.equal(process.env.BROKEN,'1','CANARY_PRIVATE_CLIENT_SECRET'))",
+    "import test from 'node:test';import assert from 'node:assert/strict';test('control',()=>assert.equal(process.env.BROKEN,'1','CANARY_PRIVATE_CLIENT_SECRET'));test('unconditional-green',()=>{})",
   );
   const options = {
     cwd: root,
@@ -163,7 +163,16 @@ test("full suite child executes seeded regression, binds counts and omits privat
     env: { ...process.env, NODE_OPTIONS: "--test-reporter=tap", BROKEN: "1" },
   });
   assert.equal(healthy.status, "passed");
-  assert.equal(healthy.counts.tests, 1);
+  assert.equal(healthy.counts.tests, 2);
+  const filtered = await runFullMain({
+    ...options,
+    env: {
+      ...process.env,
+      NODE_OPTIONS: '"--test-name-pattern=unconditional-green"',
+      BROKEN: "0",
+    },
+  });
+  assert.notEqual(filtered.status, "passed", "filtered tests cannot certify a full suite");
   const failed = await runFullMain({
     ...options,
     env: { ...process.env, BROKEN: "0" },
@@ -397,6 +406,12 @@ test("48-hour wall-clock driver survives restarts at quota/worker/provider seams
   });
   assert.equal(incompleteWallclock.status, "failed");
   assert.equal(incompleteWallclock.pendingWallclockProof, true);
+  const unavailable = await rehearse({
+    output: path.join(root, "unavailable.json"),
+    run: async () => { throw Error("CANARY_PRIVATE_SECRET"); },
+  });
+  assert.equal(unavailable.status, "failed");
+  assert.equal(unavailable.measurements.conservation, "unproven");
 });
 test("workflow backstop runs full main suites in shadow with preserved gates", async () => {
   const { parse } = await import("yaml");
