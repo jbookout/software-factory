@@ -265,31 +265,6 @@ def load_allowlist(path):
 
 
 def scan(root, source, corpus, allowed, report_path=None):
-    chunks, locations, starts, digests, hits = [], [], [], [], []
-    line = 1
-    pii_cache = {}
-    if corpus:
-        corpus = {**corpus, '_hashes': set(corpus['hashes']), '_lengths': set(corpus['lengths']),
-                  '_prefix': hashlib.sha256((corpus['salt'] + '\0').encode()),
-                  '_starts': set(corpus['starts']) if 'starts' in corpus else None,
-                  '_start_lengths': {h: set(ns) for h, ns in corpus.get('start_lengths', {}).items()},
-                  '_first_cache': {}, '_window_cache': {}}
-    for index, (path, raw) in enumerate(source):
-        starts.append(line)
-        locations.append(path)
-        digest = hashlib.sha256(raw).hexdigest()
-        digests.append(digest)
-        utf16 = raw.startswith((b"\xff\xfe", b"\xfe\xff"))
-        text = raw.decode('utf-16' if utf16 else 'utf-8', errors='replace')
-        if digest not in pii_cache:
-            pii_cache[digest] = list(pii_findings(text, corpus))
-        hits.extend((index, number, rule, fingerprint) for number, rule, fingerprint in pii_cache[digest])
-        hits.extend((index, 1, rule, fingerprint) for _, rule, fingerprint in pii_findings(path, corpus))
-        if (b'\0' in raw and not utf16) or raw.startswith((b'%PDF-', b'PK\x03\x04', b'\x1f\x8b')):
-            hits.append((index, 1, 'opaque-binary', ''))
-        secret_input = path.encode('utf-8', 'surrogateescape') + b'\n' + text.encode('utf-8') + b'\n'
-        chunks.append(secret_input)
-        line += secret_input.count(b'\n')
     private = root / 'out' / '_to_delete' / 'leak-guard' / str(uuid.uuid4())
     private.mkdir(parents=True, mode=0o700)
     template = private / 'report.tmpl'
@@ -299,12 +274,24 @@ def scan(root, source, corpus, allowed, report_path=None):
                '--ignore-gitleaks-allow', '--report-format=template', '--report-template', str(template),
                '--report-path', str(report)]
     env = {k: v for k, v in os.environ.items() if not k.startswith('GITLEAKS_')}
-    result = subprocess.run(command, input=b''.join(chunks), capture_output=True, cwd=private, env=env)
-    if result.returncode not in (0, 1):
-        raise ValueError('gitleaks failed')
-    secret_count = 0
-    sensitive_paths = set()
-    if report.exists():
+    findings, sensitive_paths, pii_cache = set(), set(), {}
+    if corpus:
+        corpus = {**corpus, '_hashes': set(corpus['hashes']), '_lengths': set(corpus['lengths']),
+                  '_prefix': hashlib.sha256((corpus['salt'] + '\0').encode()),
+                  '_starts': set(corpus['starts']) if 'starts' in corpus else None,
+                  '_start_lengths': {h: set(ns) for h, ns in corpus.get('start_lengths', {}).items()},
+                  '_first_cache': {}, '_window_cache': {}}
+    chunks, locations, starts, digests, hits = [], [], [], [], []
+    line, batch_bytes = 1, 0
+
+    def flush():
+        if not chunks:
+            return
+        report.write_text('')
+        result = subprocess.run(command, input=b''.join(chunks), capture_output=True, cwd=private, env=env)
+        if result.returncode not in (0, 1):
+            raise ValueError('gitleaks failed')
+        secret_count = 0
         for row in report.read_text().splitlines():
             hit = json.loads(row)
             index = bisect.bisect_right(starts, hit['line']) - 1
@@ -315,10 +302,42 @@ def scan(root, source, corpus, allowed, report_path=None):
                 sensitive_paths.add(locations[index])
             hits.append((index, max(1, offset), hit['rule'], ''))
             secret_count += 1
-    if (result.returncode == 1) != bool(secret_count):
-        raise ValueError('gitleaks verdict/report disagreement')
-    findings = sorted(set((locations[i], number, rule) for i, number, rule, fingerprint in hits
-                          if (locations[i], digests[i], rule, fingerprint) not in allowed))
+        if (result.returncode == 1) != bool(secret_count):
+            raise ValueError('gitleaks verdict/report disagreement')
+        findings.update((locations[i], number, rule) for i, number, rule, fingerprint in hits
+                        if (locations[i], digests[i], rule, fingerprint) not in allowed)
+        chunks.clear()
+        locations.clear()
+        starts.clear()
+        digests.clear()
+        hits.clear()
+
+    for path, raw in source:
+        digest = hashlib.sha256(raw).hexdigest()
+        utf16 = raw.startswith((b"\xff\xfe", b"\xfe\xff"))
+        opaque = (b'\0' in raw and not utf16) or raw.startswith((b'%PDF-', b'PK\x03\x04', b'\x1f\x8b'))
+        # Uninspectable binary content is refused as a whole, never silently skipped.
+        text = '' if opaque else raw.decode('utf-16' if utf16 else 'utf-8', errors='replace')
+        secret_input = path.encode('utf-8', 'surrogateescape') + b'\n' + text.encode('utf-8') + b'\n'
+        if chunks and batch_bytes + len(secret_input) > 8 * 1048576:
+            flush()
+            line, batch_bytes = 1, 0
+        index = len(locations)
+        starts.append(line)
+        locations.append(path)
+        digests.append(digest)
+        if opaque:
+            hits.append((index, 1, 'opaque-binary', ''))
+        else:
+            if digest not in pii_cache:
+                pii_cache[digest] = list(pii_findings(text, corpus))
+            hits.extend((index, number, rule, fingerprint) for number, rule, fingerprint in pii_cache[digest])
+        hits.extend((index, 1, rule, fingerprint) for _, rule, fingerprint in pii_findings(path, corpus))
+        chunks.append(secret_input)
+        line += secret_input.count(b'\n')
+        batch_bytes += len(secret_input)
+    flush()
+    findings = sorted(findings)
     if report_path:
         relative = report_path.resolve().relative_to(root.resolve() / 'out')
         if not relative.parts:

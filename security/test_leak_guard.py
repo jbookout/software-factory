@@ -183,6 +183,24 @@ class LeakGuardTest(unittest.TestCase):
         refs = subprocess.check_output(['git', '-C', str(receiver), 'for-each-ref'])
         self.assertEqual(refs, b'')
 
+    def test_large_scan_bounds_each_gitleaks_input_batch(self):
+        import importlib.util
+        from unittest.mock import patch
+        spec = importlib.util.spec_from_file_location('guard', SCRIPT)
+        guard = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(guard)
+        run = subprocess.run
+        sizes = []
+        def observed_run(*args, **kwargs):
+            if 'input' in kwargs:
+                sizes.append(len(kwargs['input']))
+            return run(*args, **kwargs)
+        source = [(f'file-{i}.txt', b'x' * 1048576) for i in range(20)]
+        with patch.object(guard.subprocess, 'run', side_effect=observed_run):
+            self.assertEqual(guard.scan(self.root, source, None, set()), 0)
+        self.assertGreater(len(sizes), 1)
+        self.assertLessEqual(max(sizes), 9 * 1048576)
+
     def test_long_encoded_text_completes_without_quadratic_pii_search(self):
         (self.root / 'sample.txt').write_text('/' * 60000 + '\n')
         subprocess.run(['git', '-C', str(self.root), 'add', 'sample.txt'], check=True)
