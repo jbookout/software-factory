@@ -5,9 +5,10 @@ import { spawnSync } from 'node:child_process'
 // errno alone. Observe only PID/group/state, never command arguments or output.
 function liveMembers(pid) {
   // The macOS fallback must read the system utility, including when a caller
-  // injects a PATH shim for another process observation contract.
+  // injects a PATH shim for another process observation contract. The setuid
+  // ps routinely exceeds 100ms on a loaded host; a stalled one stays bounded.
   const observation = spawnSync('/bin/ps', ['-g', String(pid), '-o', 'pid=,pgid=,stat='], {
-    encoding: 'utf8', timeout: 100, maxBuffer: 1_000_000
+    encoding: 'utf8', timeout: 1000, maxBuffer: 1_000_000
   })
   if (observation.error || observation.stderr?.trim()) return null
   // ps exits 1 with empty output when the selected group has no members.

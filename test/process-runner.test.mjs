@@ -253,6 +253,22 @@ test('macOS cleanup reobserves a retiring group before treating EPERM as a refus
  }
 })
 
+test('macOS cleanup tolerates a slow system observer on a loaded host', async t => {
+ if(process.platform!=='darwin') return t.skip('macOS retired-group EPERM behavior')
+ const cp=await import('node:child_process'),{syncBuiltinESMExports}=await import('node:module')
+ const {killOwnedGroup,ownedGroupAlive}=await import('../src/process-group.mjs')
+ t.mock.method(process,'kill',()=>{throw Object.assign(Error('retired group'),{code:'EPERM'})})
+ // spawnSync reports ETIMEDOUT when /bin/ps outlives its bound; under load it takes ~300ms.
+ const observer=t.mock.method(cp.default,'spawnSync',(file,args,options)=>options.timeout<300
+  ? {error:Object.assign(Error('spawnSync /bin/ps ETIMEDOUT'),{code:'ETIMEDOUT'}),status:null}
+  : {status:0,stdout:'31234 31234 Z\n',stderr:''})
+ syncBuiltinESMExports()
+ try {
+  assert.equal(ownedGroupAlive(31234),false)
+  assert.doesNotThrow(()=>killOwnedGroup(31234,'SIGKILL'))
+ } finally {observer.mock.restore();syncBuiltinESMExports()}
+})
+
 test('retro 4: running requires this job startup log and acknowledgment', async t => {
  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'factory-startup-'))
  t.after(() => fs.rm(root, {recursive:true, force:true}))
