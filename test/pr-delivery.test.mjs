@@ -433,7 +433,11 @@ test("red hosted checks refuse merge without a queue approval comment",async t=>
 test("auto enqueue respects configured holds and deduplicates",async t=>{
  const f=await fixture(t,{}, {holds:[{repo,titlePattern:"Fixture",reason:"owner hold"}]});await f.approve()
  ok(await f.run("auto-enqueue","--once"));await assert.rejects(fs.readFile(path.join(f.stateDir,"queue.json")),{code:"ENOENT"})
- f.cfg.holds=[];await fs.writeFile(f.config,JSON.stringify(f.cfg));ok(await f.run("auto-enqueue","--once"));ok(await f.run("auto-enqueue","--once"))
+ f.cfg.holds=[];await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ ok(await f.run("auto-enqueue","--once"))
+ await assert.rejects(fs.readFile(path.join(f.stateDir,"queue.json")),{code:"ENOENT"})
+ await fs.writeFile(path.join(f.stateDir,"reconciliation.json"),JSON.stringify({retryAt:Date.now()-1}))
+ ok(await f.run("auto-enqueue","--once"));ok(await f.run("auto-enqueue","--once"))
  assert.equal(JSON.parse(await fs.readFile(path.join(f.stateDir,"queue.json"))).length,1)
 })
 test("auto enqueue reaches approved PRs beyond the first fifty results",async t=>{
