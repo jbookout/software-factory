@@ -43,7 +43,7 @@ try {
           break;
         }
         const r = await runProcess(
-          [process.execPath, "--test", "--test-reporter=tap", file],
+          [process.execPath, "--test", file],
           { cwd, env, timeoutMs: deadline.remaining(), captureOutput: false },
         );
         codes.push(r.code);

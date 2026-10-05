@@ -18,13 +18,16 @@ export async function rehearse({
     cycles = [];
   const env = { ...process.env };
   delete env.NODE_TEST_CONTEXT;
+  const options = env.NODE_OPTIONS ?? "";
+  env.NODE_OPTIONS = /(?:^|\s)--test-reporter=tap(?:\s|$)/.test(options)
+    ? options
+    : `${options} --test-reporter=tap`.trim();
   do {
     const at = clock(),
       result = await run(
         [
           process.execPath,
           "--test",
-          "--test-reporter=tap",
           `--test-name-pattern=${recoveryPattern}`,
           "test/pr-delivery.test.mjs",
         ],

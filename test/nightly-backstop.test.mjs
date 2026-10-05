@@ -147,7 +147,7 @@ test("full suite child executes seeded regression, binds counts and omits privat
   };
   const healthy = await runFullMain({
     ...options,
-    env: { ...process.env, BROKEN: "1" },
+    env: { ...process.env, NODE_OPTIONS: "--test-reporter=tap", BROKEN: "1" },
   });
   assert.equal(healthy.status, "passed");
   assert.equal(healthy.counts.tests, 1);

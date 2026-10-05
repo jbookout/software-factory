@@ -182,8 +182,10 @@ export async function runFullMain({
     inventoryDigest = await inventory(cwd);
     const childEnv = { ...env };
     delete childEnv.NODE_TEST_CONTEXT;
-    childEnv.NODE_OPTIONS =
-      `${childEnv.NODE_OPTIONS ?? ""} --test-reporter=tap`.trim();
+    const options = childEnv.NODE_OPTIONS ?? "";
+    childEnv.NODE_OPTIONS = /(?:^|\s)--test-reporter=tap(?:\s|$)/.test(options)
+      ? options
+      : `${options} --test-reporter=tap`.trim();
     result = await runProcess(command, {
       cwd,
       env: childEnv,
