@@ -865,8 +865,9 @@ test('subprocess error canaries do not reach persisted delivery/wait bytes',asyn
  assert.equal(result.code,42,JSON.stringify(result))
  const bytes=await fs.readFile(path.join(f.stateDir,'delivery.jsonl'),'utf8')
  assert.doesNotMatch(bytes,/CANARY_PRIVATE/);assert.doesNotMatch(result.stderr,/CANARY_PRIVATE/)
- for(const name of await fs.readdir(path.join(f.stateDir,'jobs'))) {
-  assert.doesNotMatch(await fs.readFile(path.join(f.stateDir,'jobs',name),'utf8'),/CANARY_PRIVATE/,name)
+ for(const directory of await fs.readdir(path.join(f.stateDir,'attempts'))) {
+  for(const name of await fs.readdir(path.join(f.stateDir,'attempts',directory)))
+   assert.doesNotMatch(await fs.readFile(path.join(f.stateDir,'attempts',directory,name),'utf8'),/CANARY_PRIVATE/,name)
  }
 })
 
@@ -1276,7 +1277,7 @@ test('retro 7: recovery refuses a still-running check and resumes only after obs
 async function installedFixture(f) {
  const source=path.join(f.root,'factory-source'),installed=path.join(f.root,'installed')
  git(f.checkout,'clone','--quiet','--no-hardlinks',fileURLToPath(new URL('../',import.meta.url)),source)
- const names=['src/orch-installation.mjs','bin/orch-install.mjs','src/github-snapshot.mjs','src/pr-delivery.mjs','src/pr-delivery-prompts.mjs',
+ const names=['src/local-verification.mjs','src/orch-installation.mjs','bin/orch-install.mjs','src/github-snapshot.mjs','src/pr-delivery.mjs','src/pr-delivery-prompts.mjs',
    'src/process-group.mjs','src/process-runner.mjs','src/process-launcher.mjs','src/process-supervisor.mjs','bin/pr-delivery.mjs',
    'deploy/orch/factory-verify.mjs','deploy/orch/factory-entry.sh','deploy/orch/test-browser.sh','deploy/orch/branch-wt.sh','deploy/orch/merge-enqueue.sh']
  for(const name of names){await fs.copyFile(fileURLToPath(new URL('../'+name,import.meta.url)),path.join(source,name))}
@@ -1299,10 +1300,11 @@ test('retro 4: installed wrapper death interrupts its acknowledged caller-owned 
  let jobFile,job
  t.after(()=>{owner.kill('SIGKILL');if(job?.groupPid)try{process.kill(-job.groupPid,'SIGKILL')}catch{}})
  for(let i=0;i<3000;i++){
-   const names=await fs.readdir(path.join(f.stateDir,'jobs')).catch(()=>[])
-   for(const name of names.filter(n=>n.endsWith('.json'))){
-     const candidate=JSON.parse(await fs.readFile(path.join(f.stateDir,'jobs',name),'utf8'))
-     if(candidate.status==='running'){job=candidate;jobFile=path.join(f.stateDir,'jobs',name);break}
+   const directories=await fs.readdir(path.join(f.stateDir,'attempts')).catch(()=>[])
+   for(const directory of directories){
+     const file=path.join(f.stateDir,'attempts',directory,'worker.json')
+     const candidate=JSON.parse(await fs.readFile(file,'utf8').catch(()=> 'null'))
+     if(candidate?.status==='running'){job=candidate;jobFile=file;break}
    }
    if(job)break;await pause(10)
  }

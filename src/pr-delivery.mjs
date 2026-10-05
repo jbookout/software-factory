@@ -1,3 +1,4 @@
+import { validateLaunchOutput } from "./local-verification.mjs"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { Deadline, DeadlineError, waitForCondition, validDuration } from "./deadline.mjs"
 import fs from "node:fs/promises"
@@ -97,12 +98,12 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     if (!Object.hasOwn(config.repos, repo)) throw new DeliveryError(`UNKNOWN REPO ${repo}: add checkout and worktreeRoot to config.repos`, 9)
     return config.repos[repo]
   }
-  async function command(argv, cwd, { allowFailure = false, timeoutMs = config.commandTimeoutMs, input = "", ...streamOptions } = {}) {
+  async function command(argv, cwd, { allowFailure = false, timeoutMs = config.commandTimeoutMs, input = "", env: childEnv, ...streamOptions } = {}) {
     budget()?.check()
     const boundedMs = Math.max(1, Math.floor(Math.min(timeoutMs, budget()?.remaining() ?? timeoutMs)))
     const mutation = streamOptions.mutation ?? (argv[0] === "gh" && argv[1] !== "api" ||
       argv[0] === "git" && !["rev-parse", "status", "show", "show-ref", "merge-base", "merge-tree", "check-ref-format", "symbolic-ref"].includes(argv[1]) && !(argv[1] === "worktree" && argv[2] === "list") && !(argv[1] === "remote" && argv[2] === "get-url"))
-    const result = await runProcess(argv, { cwd, env: { ...env, ...(config.resources ? {
+    const result = await runProcess(argv, { cwd, env: { ...env, ...childEnv, ...(config.resources ? {
       FACTORY_BROWSER_CONCURRENCY: String(config.resources.browserConcurrency) } : {}) }, timeoutMs: boundedMs, input, signal: budget()?.signal, ...streamOptions, mutation })
     if (result.timedOut || result.cancelled || result.uncertain) {
       const error = result.cancelled ? new DeliveryError("ATTEMPT-CANCELLED", 130)
@@ -255,9 +256,12 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     if (await git(worktree, "rev-parse", "HEAD") !== remoteHead) throw new DeliveryError("repair source binding mismatch; retained")
     return worktree
   }
-  async function guarded(repo, pr, kind, argv, cwd, input, head, afterExecution, beforeExecution) {
+  async function guarded(repo, pr, kind, argv, cwd, input, head, afterExecution, beforeExecution, attemptDirectory) {
     if (!["review", "fix", "ci-fix", "rescope"].includes(kind)) throw new DeliveryError("invalid guarded delivery kind", 9)
     validateProcessRequest(argv, config.limits.timeoutMs)
+    await fs.mkdir(path.join(config.stateDir,"attempts"),{recursive:true,mode:0o700})
+    attemptDirectory ??= await fs.mkdtemp(path.join(config.stateDir,"attempts","job-"))
+    validateLaunchOutput(argv,attemptDirectory)
     head ??= (await view(repo, pr)).headRefOid
     await eligible(repo, pr, head)
     let release, compute, mutationPending = false
@@ -274,7 +278,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       if (admitted.headRefOid !== head) throw new DeliveryError("SUPERSEDED: HEAD MOVED before child dispatch; observe current head", 1)
       const jobId = randomUUID()
       const job = {id:jobId, ownership:"caller", worktree:cwd, model:config.codex.model, effort:config.codex.effort,
-        log:path.join(config.stateDir,"jobs",`${jobId}.log`), receipt:path.join(config.stateDir,"jobs",`${jobId}.json`)}
+        log:path.join(attemptDirectory,"worker.log"), receipt:path.join(attemptDirectory,"worker.json")}
       const digest = createHash("sha256")
       // Persist before launch: if the controller disappears there is no final
       // callback to write uncertainty. A completed child retires this marker.
@@ -287,7 +291,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       await beforeExecution?.(job)
       const runBudget = budget().phaseBudget("execution", config.limits.timeoutMs)
       const result = await measured("execution", repo, pr, () => deadlines.run(runBudget, () => command(argv, cwd, { input, timeoutMs: config.limits.timeoutMs, allowFailure: true,
-        job, onStarted: receipt => log({repo,pr,step:kind,status:"running",jobId:receipt.id,receipt:job.receipt}),
+        env:{...env,TMPDIR:attemptDirectory,FACTORY_ATTEMPT_DIR:attemptDirectory}, job, onStarted: receipt => log({repo,pr,step:kind,status:"running",jobId:receipt.id,receipt:job.receipt}),
         mutation: kind !== "review", captureOutput: false, onOutput: chunk => digest.update(chunk), onSpawn: async (job, signal) => {
           const bindings = [await release.bindJob(job, signal), ...await compute.bindJob(job, signal)]
           const prLease = prLeases.get(keyFor(repo, pr))
@@ -337,14 +341,17 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     const unchanged = async () => await git(dir, "rev-parse", "HEAD") === head &&
       await git(dir, "write-tree") === tree &&
       !(await git(dir, "status", "--porcelain", "--untracked-files=no"))
-    const output = path.join(config.stateDir, `review-${keyFor(repo, pr)}-${attempt}.txt`)
+    await fs.mkdir(path.join(config.stateDir,"attempts"),{recursive:true,mode:0o700})
+    const attemptDirectory=await fs.mkdtemp(path.join(config.stateDir,"attempts","review-"))
+    const output = path.join(attemptDirectory,"review.txt")
     try {
       const prior = current.review?.verdict !== "APPROVE" ? current.review : null
       const prompt = deliveryPrompt("review", { repo, pr, head, prior })
-      await fs.rm(output, { force: true })
+      const reserved=await fs.open(output,"wx",0o600)
+      await reserved.close()
       const argv = [config.codex.command ?? "codex", ...createCodexExecArgs(config.codex),
         "--sandbox", "danger-full-access", "--output-last-message", output, "-"]
-      const execution = await guarded(repo, pr, "review", argv, dir, prompt, head)
+      const execution = await guarded(repo, pr, "review", argv, dir, prompt, head, undefined, undefined, attemptDirectory)
       if (!(await unchanged()))
         throw new DeliveryError("reviewer changed pinned source; refusing approval, worktree retained")
       const body = await fs.readFile(output, "utf8")
@@ -452,14 +459,17 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
         record.checks=[]
         for(const argv of local.checks) {
           const id=randomUUID()
+          await fs.mkdir(path.join(config.stateDir,"attempts"),{recursive:true,mode:0o700})
+          const attemptDirectory=await fs.mkdtemp(path.join(config.stateDir,"attempts","check-"))
+          validateLaunchOutput(argv,attemptDirectory)
           record.checkJob={id,ownership:"caller",worktree:cwd,model:"repository-check",effort:"deterministic",
-            log:path.join(config.stateDir,"jobs",`${id}.log`),receipt:path.join(config.stateDir,"jobs",`${id}.json`)}
+            log:path.join(attemptDirectory,"check.log"),receipt:path.join(attemptDirectory,"check.json")}
           record.checkPolicy=checkPolicy
           await persist("checking")
           let result
           try {
             result=await command(argv,cwd,{allowFailure:true,timeoutMs:local.checkTimeoutMs ?? config.checksTimeoutMs,
-              job:record.checkJob,captureOutput:false,onSpawn:async(job,signal)=>{
+              env:{...env,TMPDIR:attemptDirectory,FACTORY_ATTEMPT_DIR:attemptDirectory},job:record.checkJob,captureOutput:false,onSpawn:async(job,signal)=>{
                 const bindings=[...await compute.bindJob(job,signal)]
                 const owner=prLeases.get(keyFor(repo,pr));if(owner)bindings.push(await owner.bindJob(job,signal))
                 return bindings
