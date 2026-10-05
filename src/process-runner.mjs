@@ -1,56 +1,89 @@
-import { spawn, fork } from "node:child_process"
-import { StringDecoder } from "node:string_decoder"
+import { killOwnedGroup } from './process-group.mjs'
+import { monotonicNow, validDuration } from './deadline.mjs'
+import { fork } from 'node:child_process'
+import { StringDecoder } from 'node:string_decoder'
 
-// Shared shell-free process seam for build and PR jobs. A timeout is a result,
-// even if a child ignores TERM; kill the whole job group before returning.
-export function runProcess(argv, { cwd, env = process.env, input = "", timeoutMs = 120_000,
-  maxOutputBytes = 1_000_000, captureOutput = true, onOutput, onSpawn } = {}) {
+// The supervisor owns the group even when the caller disappears. Reserve TERM
+// and hard-stop time inside the caller's elapsed budget, including launch/bind.
+export function validateProcessRequest(argv, timeoutMs = 120_000) {
+  if (!Array.isArray(argv) || !argv.length || argv.some(v => typeof v !== 'string' || v.includes('\0')) ||
+      !argv[0] || !validDuration(timeoutMs)) throw new Error('invalid process request')
+}
+export function runProcess(argv, { cwd, env = process.env, input = '', timeoutMs = 120_000,
+  maxOutputBytes = 1_000_000, captureOutput = true, onOutput, onSpawn, signal, mutation = false } = {}) {
+  try { validateProcessRequest(argv, timeoutMs) } catch (error) { return Promise.reject(error) }
+  if (signal?.aborted) return Promise.resolve({ code: 130, cancelled: true, timedOut: false,
+    uncertain: false, stdout: '', stderr: '', started: false })
   return new Promise((resolve, reject) => {
-    const grouped = process.platform !== "win32"
-    const deadline = Date.now() + timeoutMs
-    const child = onSpawn
-      ? fork(new URL("./process-supervisor.mjs", import.meta.url), [], { stdio: ["pipe", "pipe", "pipe", "ipc"], execArgv: [] })
-      : spawn(argv[0], argv.slice(1), { cwd, env, shell: false, detached: grouped, stdio: ["pipe", "pipe", "pipe"] })
-    let supervisedResult
-    let stdout = "", stderr = "", bytes = 0, timedOut = false, overflow = false
-    const decoders = { stdout: new StringDecoder("utf8"), stderr: new StringDecoder("utf8") }
-    let killTimer
-    const kill = signal => {
-      try { grouped && !onSpawn ? process.kill(-child.pid, signal) : child.kill(signal) }
-      catch (error) { if (error.code !== "ESRCH") throw error }
+    const deadline = Date.now() + timeoutMs, elapsedDeadline = monotonicNow() + timeoutMs
+    const grace = Math.min(100, Math.floor(timeoutMs / 5))
+    const child = fork(new URL('./process-supervisor.mjs', import.meta.url), [], {
+      stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: []
+    })
+    let result, groupPid, stdout = '', stderr = '', bytes = 0
+    let timedOut = false, overflow = false, cancelled = false, launchError
+    const binding = new AbortController()
+    const decoders = { stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8') }
+    const hardKill = () => {
+      binding.abort()
+      if (groupPid) {
+        try { killOwnedGroup(groupPid, 'SIGKILL') }
+        catch (e) { if (e.code !== 'ESRCH') launchError ??= new Error(`process cleanup failed (${e.code})`) }
+      }
+      child.kill('SIGKILL')
     }
     const stop = () => {
-      kill("SIGTERM")
-      killTimer ??= setTimeout(() => kill("SIGKILL"), 100)
+      binding.abort()
+      // TERM is caught by the supervisor, which stops its group first.
+      child.kill('SIGTERM')
     }
-    const timer = onSpawn ? undefined : setTimeout(() => { timedOut = true; stop() }, timeoutMs)
+    const abort = () => { cancelled = true; stop() }
+    const timer = setTimeout(() => { timedOut = true; stop() }, Math.max(0, elapsedDeadline - monotonicNow() - grace))
+    const hardStop = setTimeout(hardKill, Math.max(0, elapsedDeadline - monotonicNow()))
+    signal?.addEventListener('abort', abort, { once: true })
+    if (signal?.aborted) abort()
     const collect = (stream, chunk) => {
       bytes += chunk.length
-      onOutput?.(chunk, stream)
+      try { onOutput?.(chunk, stream) } catch { launchError = new Error('process output consumer failed'); stop(); return }
       if (!captureOutput) return
       if (bytes > maxOutputBytes) { overflow = true; stop(); return }
-      if (stream === "stdout") stdout += decoders.stdout.write(chunk)
+      if (stream === 'stdout') stdout += decoders.stdout.write(chunk)
       else stderr += decoders.stderr.write(chunk)
     }
-    child.stdout.on("data", chunk => collect("stdout", chunk))
-    child.stderr.on("data", chunk => collect("stderr", chunk))
-    child.stdin.on("error", error => { if (error.code !== "EPIPE") reject(error) })
-    child.on("error", error => { clearTimeout(timer); clearTimeout(killTimer); reject(error) })
-    child.on("close", (code, signal) => {
-      if (supervisedResult) { code = supervisedResult.code; signal = supervisedResult.signal; timedOut = supervisedResult.timedOut }
-      clearTimeout(timer)
-      // A parent can exit on TERM while grandchildren keep running. Still kill
-      // the process group after timeout rather than cancelling its hard stop.
-      if (timedOut || overflow) kill("SIGKILL")
-      clearTimeout(killTimer)
-      stdout += decoders.stdout.end(); stderr += decoders.stderr.end()
-      resolve({ code: timedOut ? 142 : overflow ? 1 : code ?? 1, signal, stdout, stderr, timedOut, overflow, pid: child.pid })
+    child.stdout.on('data', chunk => collect('stdout', chunk))
+    child.stderr.on('data', chunk => collect('stderr', chunk))
+    child.on('error', () => { launchError = new Error('process supervisor launch failed'); stop() })
+    child.on('message', message => {
+      if (message.groupPid) groupPid = message.groupPid
+      else result = message
     })
-    if (onSpawn) {
-      child.on("message", result => { supervisedResult = result })
-      Promise.resolve().then(() => onSpawn({ pid: child.pid, deadline })).then(bindings => {
-        if (child.connected) child.send({ argv, cwd, env, input, deadline, bindings })
-      }).catch(error => { child.disconnect(); reject(error) })
-    } else child.stdin.end(input)
+    child.on('exit', (code, exitSignal) => {
+      if (code || exitSignal) hardKill()
+    })
+    child.on('close', (code, exitSignal) => {
+      binding.abort()
+      clearTimeout(timer); clearTimeout(hardStop); signal?.removeEventListener('abort', abort)
+      if (groupPid) {
+        try { killOwnedGroup(groupPid, 'SIGKILL') }
+        catch (e) { if (e.code !== 'ESRCH') launchError ??= new Error(`process cleanup failed (${e.code})`) }
+      }
+      stdout += decoders.stdout.end(); stderr += decoders.stderr.end()
+      if (launchError) {
+        launchError.uncertain = mutation && Boolean(groupPid)
+        if (launchError.uncertain) launchError.nextAction = 'readback-before-retry'
+        reject(launchError); return
+      }
+      timedOut ||= result?.timedOut ?? false
+      const uncertain = mutation && Boolean(groupPid) && Boolean(timedOut || cancelled || overflow || result?.signal || exitSignal || !result)
+      resolve({ code: timedOut ? 142 : cancelled ? 130 : overflow ? 1 : result?.code ?? code ?? 1,
+        signal: result?.signal ?? exitSignal, stdout, stderr, timedOut, overflow, cancelled,
+        uncertain, ...(uncertain ? { nextAction: 'readback-before-retry' } : {}), pid: child.pid, started: Boolean(groupPid) })
+    })
+    Promise.resolve().then(() => onSpawn?.({ pid: child.pid, deadline }, binding.signal)).then(bindings => {
+      if (child.connected && !binding.signal.aborted && !launchError)
+        child.send({ argv, cwd, env, input, elapsedDeadline, grace, bindings: bindings ?? [] }, error => {
+          if (error) { launchError = new Error('process launch binding failed'); stop() }
+        })
+    }).catch(() => { if (!binding.signal.aborted) { launchError = new Error('process launch binding failed'); stop() } })
   })
 }
