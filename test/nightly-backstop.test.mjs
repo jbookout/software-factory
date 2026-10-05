@@ -112,16 +112,28 @@ test("failed run and concurrent observations create one owned diagnosis; reopen 
   assert.equal(entry.status, "open");
   assert.ok(entry.wakeupAt);
   assert.ok(entry.nextAction);
-  await recordDiagnosis(root, assessNightly(receipt(), policy, base + 2000));
+  await recordDiagnosis(root, assessNightly(receipt(), policy, base + 3000));
   assert.equal(
     JSON.parse(await fs.readFile(path.join(root, files[0]))).status,
     "closed",
   );
-  await recordDiagnosis(root, observation);
+  await recordDiagnosis(root, { ...observation, observedAt: new Date(base + 4000).toISOString() });
   assert.equal(
     JSON.parse(await fs.readFile(path.join(root, files[0]))).status,
     "open",
   );
+});
+test("delayed cached green cannot close a newer owned failure", async (t) => {
+  const root = await tmp(t);
+  const failed = assessNightly({ ...receipt(), status: "failed" }, policy, base + 3000);
+  await recordDiagnosis(root, failed);
+  const olderGreen = assessNightly(receipt(), policy, base + 2000);
+  assert.equal((await recordDiagnosis(root, olderGreen)).status, "open");
+  const sameTimeGreen = assessNightly(receipt(), policy, base + 3000);
+  assert.equal((await recordDiagnosis(root, sameTimeGreen)).status, "open");
+  const nextGreen = assessNightly(receipt(), policy, base + 4000);
+  assert.equal((await recordDiagnosis(root, nextGreen)).status, "closed");
+  assert.equal((await recordDiagnosis(root, failed)).status, "closed");
 });
 test("app browser suite receipt is compatible with the shared nightly contract", () => {
   const appPolicy = {
@@ -168,7 +180,7 @@ test("full suite child executes seeded regression, binds counts and omits privat
     ...options,
     env: {
       ...process.env,
-      NODE_OPTIONS: '"--test-name-pattern=unconditional-green"',
+      NODE_OPTIONS: '"--test_name_pattern=unconditional-green"',
       BROKEN: "0",
     },
   });

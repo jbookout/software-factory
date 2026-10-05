@@ -16,11 +16,12 @@ export function fullSuiteEnvironment(env = process.env) {
   const result = { ...env };
   delete result.NODE_TEST_CONTEXT;
   const options = result.NODE_OPTIONS ?? "";
+  const normalized = options.replaceAll("_", "-");
   if (
-    /(?:^|\s|")--test-(?:name-pattern|skip-pattern|only|shard|rerun-failures)(?:=|\s|"|$)/.test(options)
+    /(?:^|\s|["'])--test-(?:name-pattern|skip-pattern|only|shard|rerun-failures)(?:=|\s|["']|$)/.test(normalized)
   )
     throw Error("filtered selection cannot acknowledge a full suite");
-  result.NODE_OPTIONS = /(?:^|\s|")--test-reporter=tap(?:\s|"|$)/.test(options)
+  result.NODE_OPTIONS = /(?:^|\s|["'])--test-reporter=tap(?:\s|["']|$)/.test(normalized)
     ? options
     : `${options} --test-reporter=tap`.trim();
   return result;
@@ -120,6 +121,14 @@ export async function recordDiagnosis(root, observation) {
     async () => {
       const prior = await readJson(file, null);
       if (observation.state === "pending") return prior;
+      const at = Date.parse(observation.observedAt);
+      const previousAt = Date.parse(prior?.observedAt);
+      if (
+        prior &&
+        (at < previousAt ||
+          (at === previousAt && prior.status === "open" && observation.state === "fresh"))
+      )
+        return prior;
       if (observation.state === "fresh" && !prior) return null;
       const status = observation.state === "fresh" ? "closed" : "open";
       const record = {
