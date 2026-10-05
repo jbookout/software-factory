@@ -2133,3 +2133,26 @@ for (const mode of ["full", "confirm"]) test(`PR52 finding 2: ${mode} review cap
  assert.equal(manifest.binding.head, head)
  assert.equal(state.comments.length, mode === "confirm" ? 2 : 1)
 })
+
+test('fix30: 48-hour virtual quota wait, provider recovery and repeated consumption conserve one effect',async t=>{
+ const {assessRecovery}=await import('../src/recovery-observation.mjs')
+ const f=await queueFixture(t);await f.approve(undefined,7,30000)
+ ok(await f.run('merge-enqueue',repo,'7',f.head))
+ const [offered]=await queueOf(f),started=Date.now(),owner='factory-queue-consumer'
+ const s=await f.read();s.apiFailure=true;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ await f.run('merge-queue',repo,'--once')
+ let entries=await queueOf(f)
+ assert.equal(entries[0].state,'effect-requested');assert.equal(entries[0].nextAction,'reconcile-provider')
+ for(let hour=0;hour<=48;hour++) {
+  const view=assessRecovery(entries,{offeredIds:[offered.id],effectIds:[],now:started+hour*3600000,owner})
+  assert.equal(view.state,'waiting');assert.equal(view.waiting[0].owner,owner);assert.ok(view.waiting[0].wakeupAt)
+ }
+ const recovered=await f.read();recovered.apiFailure=false;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(recovered));await expireProvider(f)
+ entries[0].availableAt=Date.now()-1;await fs.writeFile(path.join(f.stateDir,'queue.json'),JSON.stringify(entries))
+ const recoveryStarted=Date.now()
+ ok(await f.run('merge-queue',repo,'--once'));ok(await f.run('merge-queue',repo,'--once'))
+ const effects=(await f.read()).ghCalls.filter(merges);assert.equal(effects.length,1)
+ const final=assessRecovery(await queueOf(f),{offeredIds:[offered.id],effectIds:effects.map(()=>offered.effectId??offered.id),expectedEffectIds:[offered.effectId??offered.id],owner})
+ assert.equal(final.state,'recovered');assert.equal(final.offered,final.terminal)
+ console.log('FIX30_RECOVERY_SECONDS '+((Date.now()-recoveryStarted)/1000))
+})
