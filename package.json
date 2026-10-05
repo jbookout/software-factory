@@ -25,7 +25,7 @@
     "node": ">=20.19"
   },
   "scripts": {
-    "test": "node --test",
+    "test": "node --test --test-concurrency=2",
     "workflow:audit": "node scripts/orch/audit-workflows.mjs",
     "factory": "node ./bin/factory.mjs",
     "design-cloud:qualify": "node ./bin/design-cloud-qualify.mjs",

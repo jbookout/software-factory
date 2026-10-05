@@ -1,40 +1,15 @@
 {
   "repos": {
-    "jbookout/carr-system": {
-      "checkout": "/absolute/path/to/carr-system",
-      "worktreeRoot": "/absolute/path/to/delivery-worktrees/carr-system",
-      "requiredChecks": [
-        {
-          "name": "REPLACE_WITH_CURRENT_REQUIRED_CONTEXT",
-          "appId": 15368
-        }
-      ],
-      "trustedReviewers": [
-        "replace-with-verified-review-poster"
-      ]
-    },
-    "jbookout/doctorcre-app": {
-      "checkout": "/absolute/path/to/doctorcre-app",
-      "worktreeRoot": "/absolute/path/to/delivery-worktrees/doctorcre-app",
-      "requiredChecks": [
-        {
-          "name": "REPLACE_WITH_CURRENT_REQUIRED_CONTEXT",
-          "appId": 15368
-        }
-      ],
-      "trustedReviewers": [
-        "replace-with-verified-review-poster"
-      ]
-    },
-    "jbookout/software-factory": {
-      "checkout": "/absolute/path/to/software-factory",
-      "worktreeRoot": "/absolute/path/to/delivery-worktrees/software-factory",
+    "owner/repository": {
+      "checkout": "/absolute/path/to/repository",
+      "worktreeRoot": "/absolute/path/to/delivery-worktrees",
       "requiredChecks": [
         {
           "name": "test",
           "appId": 15368
         }
       ],
+      "dependencyRevision": "owned-actionable-input-revision",
       "trustedReviewers": [
         "replace-with-verified-review-poster"
       ]
@@ -56,5 +31,13 @@
   "autoPollMs": 300000,
   "retryMs": 120000,
   "queueRunsPer24h": 4,
-  "holds": []
+  "holds": [],
+  "queueTimeoutMs": 900000,
+  "apiTimeoutMs": 120000,
+  "attemptTimeoutMs": 9600000,
+  "resources": {
+    "capacity": 8,
+    "agentUnits": 1,
+    "browserConcurrency": 1
+  }
 }

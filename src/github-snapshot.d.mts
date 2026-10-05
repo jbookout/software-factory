@@ -1,7 +1,7 @@
 export type SourceBinding = Readonly<{ sha: string; ref: string; repo: string }>
 export type ReviewVerdict = Readonly<{ verdict: "APPROVE" | "BLOCK" | "REVIEW: BLOCKED" | "CHANGES REQUESTED"; sha: string; body: string }>
 export type Comment = Readonly<{ id: number; body: string; user: { login: string }; created_at: string; updated_at: string }>
-export type SnapshotError = Readonly<{ message: string; transient: boolean }>
+export type SnapshotError = Readonly<{ message: string; transient: boolean; code?: number; phase?: string; nextAction?: string }>
 type Observation = Readonly<{
   schema: "factory-github-snapshot/v1"; observationId: string; repo: string; pr: number; startedAt: string; fetchedAt: string;
   metrics: Readonly<{ providerCalls: number; staleActions: number }>;
@@ -37,14 +37,15 @@ export function parseReview(body: string): ReviewVerdict | null
 export function latestTrustedReview(comments: readonly Comment[], trustedReviewers: readonly string[],
   authenticate: (candidate: ReviewVerdict) => Promise<boolean>): Promise<ReviewVerdict | null>
 export function createGithubProvider(config: { retryMs: number; commandTimeoutMs: number }, dependencies: {
-  command: (argv: string[], cwd: string, options: { allowFailure: boolean; maxOutputBytes: number; input?: string; onSpawn?: (job: unknown) => Promise<unknown[]> }) =>
+  command: (argv: string[], cwd: string, options: { allowFailure: boolean; maxOutputBytes: number; input?: string; mutation?: boolean; onSpawn?: (job: unknown, signal?: AbortSignal) => Promise<unknown[]> }) =>
     Promise<{ code: number; stdout: string; timedOut?: boolean }>;
   getRepo: (repo: string) => { checkout: string; trustedReviewers: string[]; requiredChecks: { name: string; appId?: number }[] };
   authenticate: (repo: string, pr: number, candidate: ReviewVerdict) => Promise<boolean>;
   now?: () => number;
+  withRead?: <T>(repo: string, fn: (sleep: (ms: number) => Promise<void>) => Promise<T>) => Promise<T>;
 }): {
   snapshot: (repo: string, pr: number, options?: { head?: string; requireApproval?: boolean; observeChecks?: boolean }) => Promise<GithubSnapshot>;
   pages: (repo: string, route: string, options?: { field?: string; expected?: number; metrics?: { providerCalls: number }; rowKey?: (row: Record<string, unknown>) => string }) => Promise<Record<string, unknown>[]>;
-  mutate: (repo: string, method: string, route: string, fields: Record<string, unknown>, owners?: { bindJob: (job: unknown) => Promise<unknown> }[]) => Promise<{ value: unknown; headers: string; status: number; ok: boolean; transient: boolean }>;
+  mutate: (repo: string, method: string, route: string, fields: Record<string, unknown>, owners?: { bindJob: (job: unknown, signal?: AbortSignal) => Promise<unknown> }[]) => Promise<{ value: unknown; headers: string; status: number; ok: boolean; transient: boolean }>;
   request: (repo: string, route: string, options?: { metrics?: { providerCalls: number } }) => Promise<{ value: unknown; headers: string }>;
 }

@@ -1,5 +1,6 @@
 import { classifyChecks } from "./pr-readiness.mjs"
 import { DeliveryError, pause } from "./pr-delivery-state.mjs"
+import { DeadlineError } from "./deadline.mjs"
 import { randomUUID } from "node:crypto"
 
 const SHA = /^[0-9a-f]{40}$/
@@ -61,19 +62,19 @@ function prValue(value, repo, pr) {
 
 // All callers cross this interface. No durable cache: mutable comments/checks
 // are shared only within an observation, and every effect gets a fresh read.
-export function createGithubProvider(config, { command, getRepo, authenticate, now = Date.now }) {
+export function createGithubProvider(config, { command, getRepo, authenticate, now = Date.now, withRead = (repo, fn) => fn(pause) }) {
   const observations = new Map()
-  async function transport(repo, route, { method = "GET", fields = {}, owners = [], metrics } = {}) {
+  async function transport(repo, route, { method = "GET", fields = {}, owners = [], metrics, sleep = pause } = {}) {
     const argv = ["gh", "api", `repos/${repo}/${route}`, "--include"]
     if (method !== "GET") argv.push("-X", method, "--input", "-")
     for (let attempt = 0; ; attempt++) {
       if (metrics) metrics.providerCalls++
       const response = await command(argv, getRepo(repo).checkout, { allowFailure: true, maxOutputBytes: 16_000_000,
-        ...(method !== "GET" ? { input: JSON.stringify(fields), onSpawn: job => Promise.all(owners.map(owner => owner.bindJob(job))) } : {}) })
+        ...(method !== "GET" ? { input: JSON.stringify(fields), mutation: true, onSpawn: (job, signal) => Promise.all(owners.map(owner => owner.bindJob(job, signal))) } : {}) })
       const parts = response.stdout.split(/\r?\n\r?\n/), headers = parts.shift() ?? ""
       const status = Number(/^HTTP\/[^ ]+ (\d+)/.exec(headers)?.[1])
       const exhausted = status === 403 && /^x-ratelimit-remaining: 0\s*$/im.test(headers)
-      const transient = response.timedOut || method !== "GET" && !Number.isFinite(status) || exhausted || [429, 500, 502, 503, 504].includes(status)
+      const transient = method !== "GET" && !Number.isFinite(status) || exhausted || [429, 500, 502, 503, 504].includes(status)
       let value
       try { value = JSON.parse(parts.join("\n\n")) } catch { value = undefined }
       const ok = !response.code && status >= 200 && status < 300
@@ -85,14 +86,15 @@ export function createGithubProvider(config, { command, getRepo, authenticate, n
         return { value, headers }
       }
       if (!transient || attempt >= 2) fail("GitHub REST observation unavailable", transient)
-      const retryAfter = Number(/^retry-after: (\d+)/im.exec(headers)?.[1]) * 1000
+      const guidance = /^retry-after: ([^\r\n]+)/im.exec(headers)?.[1]
+      const retryAfter = guidance === undefined ? NaN : /^\d+$/.test(guidance) ? Number(guidance) * 1000 : Date.parse(guidance) - now()
       const reset = Number(/^x-ratelimit-reset: (\d+)/im.exec(headers)?.[1]) * 1000 - now()
       const delay = Number.isFinite(retryAfter) ? retryAfter : exhausted && Number.isFinite(reset) ? Math.max(0, reset) : config.retryMs
       if (delay > config.commandTimeoutMs) fail("GitHub REST waiting for provider reset", true)
-      await pause(delay)
+      await sleep(delay)
     }
   }
-  const request = (repo, route, options = {}) => transport(repo, route, { metrics: options.metrics })
+  const request = (repo, route, options = {}) => withRead(repo, sleep => transport(repo, route, { metrics: options.metrics, sleep }))
   const mutate = (repo, method, route, fields, owners = []) => transport(repo, route, { method, fields, owners })
   async function pages(repo, route, { field, expected = null, metrics, rowKey = null } = {}) {
     const rows = [], ids = new Set()
@@ -169,7 +171,8 @@ export function createGithubProvider(config, { command, getRepo, authenticate, n
     } catch (error) {
       return freeze({ ...base, state: "unknown", fetchedAt: new Date(now()).toISOString(),
         ci: { state: "provider-unknown", nextAction: "retry-provider-observation" }, review: null,
-        errors: [{ message: error instanceof DeliveryError ? error.message : "GitHub snapshot unavailable", transient: error.transient ?? false }] })
+        errors: [{ message: error instanceof DeliveryError || error instanceof DeadlineError ? error.message : "GitHub snapshot unavailable", transient: error.transient ?? false,
+          ...(error instanceof DeadlineError ? { code: error.code, phase: error.phase, nextAction: error.nextAction } : {}) }] })
     }
   }
   function snapshot(repo, pr, options = {}) {

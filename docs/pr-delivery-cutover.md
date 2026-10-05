@@ -228,7 +228,64 @@ and verified review posters. Copy the entire wrapper set together, including
 does not modify running `carr-system/out/orch` scripts, start workers, or change
 product deployment authority.
 
+Continuous merge queues keep polling while the PR writer or integration lane is
+owned. Contention returns transient code 75 without consuming an entry attempt;
+`--once` still exits 75. An uncertain update acknowledgement retains its saved
+intent for readback, including a supervised timeout, without another update write.
+
 Malformed attempted review envelopes from trusted authors invalidate older approval,
 including SHA-only comments and whitespace-damaged verdicts. Ordinary notes remain
 ignored. Missing local receipt source objects refuse that approval while keeping
 readiness and fresh review reachable; fresh review fetches and verifies its source.
+
+## Deadline and child-capacity cutover
+
+Configure `queueTimeoutMs`, `apiTimeoutMs`, and `attemptTimeoutMs` separately
+from `checksTimeoutMs`, `commandTimeoutMs`, and `limits.timeoutMs`. The attempt
+clock spans nested delivery steps and rounds in one exclusive invocation.
+Phase budgets, individual commands, provider pacing, and cleanup share that
+remaining monotonic budget. Readiness checks run immediately, then back off;
+Retry-After/reset guidance never renews the API or attempt deadline. The ledger
+records API, readiness, queue, execution, and cleanup durations and typed stops.
+The supervisor reserves termination time inside the process deadline, including
+an unresponsive launch binding. Active process expiry uses the shared host
+monotonic clock; persisted wall deadlines are readback metadata. Lease recovery
+does not kill a live supervised job because its wall deadline moved. A launch
+latch prevents execution until every
+group lease binding has been persisted. Timeout/cancellation of a started mutation
+returns `uncertain` and `readback-before-retry`; an unchanged guarded mutation
+cannot redispatch. Observe the remote head and reconcile the effect before
+supplying a changed actionable dependency pin. A timer alone cannot clear it.
+
+Agent admission now requires an explicit `resources` configuration: `capacity`,
+`agentUnits`, and `browserConcurrency`. All workers on one host share one state
+root. Admission reserves agent plus test-child units atomically before spending
+model budget. It observes existing Node test launchers and browser roots, counts
+unmanaged children, excludes duplicate descendants, and charges observed excess
+above an owned reservation. Unknown process observations refuse admission.
+The example values are configuration examples, not qualified host tuning.
+Keep the supervising host's release/load governor: this change counts test
+compute but does not replace its release-priority policy or pause existing work.
+
+Install the maintained `review-pr.sh`, `codex-guard.sh`, `pr-loop.sh` and their
+shared `factory-entry.sh` through the existing drained cutover above. No live
+wrapper was edited by this source change. The new `test-browser.sh` invokes
+`bin/browser-suite.mjs` for an independently scheduled browser suite:
+`test-browser.sh owner/repository <explicit-test-files...>`. It reserves its
+worker count and invokes Node with explicit test file concurrency. The wrapper
+reports result counts and exit status; test names, console output and
+error payloads never enter the wrapper's output. Zero acknowledged results fail.
+The private `FACTORY_BROWSER_CONCURRENCY` override may lower that count, but cannot exceed
+the configured reservation. A guard already reserves its own test children;
+its tests should use that exported concurrency in their Node invocation,
+rather than nest another standalone reservation. Existing ungoverned test
+launchers remain visible to subsequent admission. This is a cooperative host
+budget, not OS isolation or a promise to prevent arbitrary detached work.
+
+Before choosing production concurrency or shortening healthy job caps, run
+matched same-source/cache/load browser suites at 1 and 2, retaining test union,
+timeouts, duration, and host load. The committed fixed-load four-file replay
+checks both modes and child peaks; it does not qualify the product's full browser
+suite or establish the audit's weekly savings. Factory CI has a 15-minute outer
+job deadline and a five-minute install deadline; the factory's Node test command
+also limits file concurrency to two. Keep required CI coverage intact.
