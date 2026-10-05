@@ -22,13 +22,12 @@ const common = { task: "Implement the DoctorCRE Needs Joe advisory model from th
   contracts: [contract], baseline, candidates: [candidate], verifyObservation: row => row.attested === true }
 
 function jev(choice = routeKey) {
-  return async (_, request) => {
-    const sent = JSON.parse(request.body)
+  return async sent => {
     assert.equal(sent.state.contracts[0].excerpt, contract.excerpt)
-    return { ok: true, async json() { return { model: "jev-1.13.0", answers: { preferred_route: {
+    return { model: "jev-1.13.0", answers: { preferred_route: {
       type: "choice", choice, confidence: 0.8,
       probabilities: { baseline: choice === "baseline" ? 0.8 : 0.2, [routeKey]: choice === routeKey ? 0.8 : 0.2 }
-    } } } } }
+    } } }
   }
 }
 
@@ -62,7 +61,7 @@ function observation(id, overrides = {}) {
 
 test("Jev sees exact pinned contract but cannot promote insufficient replay cases", async () => {
   const result = await routeDoctorCreBuild({ ...common, observations: [observation("pr44"), observation("pr45")],
-    controlEnabled: true, apiKey: "test", fetchImpl: jev() })
+    controlEnabled: true, apiKey: "test", sharedAsk: jev() })
   assert.deepEqual(result.selected_route, baseline)
   assert.equal(result.jev.status, "skipped")
   assert.equal(result.jev.reason, "single_qualified_route")
@@ -79,7 +78,7 @@ for (const [name, observations, checkedCases] of [
 ]) {
   test(`${name} cannot promote a candidate under explicit control`, async () => {
     const result = await routeDoctorCreBuild({ ...common, observations,
-      controlEnabled: true, verifyControl: () => true, apiKey: "test", fetchImpl: jev() })
+      controlEnabled: true, verifyControl: () => true, apiKey: "test", sharedAsk: jev() })
     assert.deepEqual(result.selected_route, baseline)
     assert.equal(result.qualifications[0].checked_cases, checkedCases)
     assert.deepEqual(result.eligible_routes, [])
@@ -90,14 +89,14 @@ for (const [name, observations, checkedCases] of [
 test("three distinct authenticated passes permit explicit control", async () => {
   const observations = [observation("pr44"), observation("pr45"), observation("pr46")]
   const result = await routeDoctorCreBuild({ ...common, observations,
-    controlEnabled: true, verifyControl: () => true, apiKey: "test", fetchImpl: jev() })
+    controlEnabled: true, verifyControl: () => true, apiKey: "test", sharedAsk: jev() })
   assert.deepEqual(result.selected_route, candidate)
   assert.equal(result.selection_reason, "qualified_jev_choice")
   const shadow = await routeDoctorCreBuild({ ...common, observations,
-    apiKey: "test", fetchImpl: jev() })
+    apiKey: "test", sharedAsk: jev() })
   assert.deepEqual(shadow.selected_route, baseline)
   const unapproved = await routeDoctorCreBuild({ ...common, observations,
-    controlEnabled: true, apiKey: "test", fetchImpl: jev() })
+    controlEnabled: true, apiKey: "test", sharedAsk: jev() })
   assert.deepEqual(unapproved.selected_route, baseline)
   assert.equal(unapproved.selection_reason, "qualified_control_ready")
 })
@@ -113,7 +112,7 @@ test("signed evaluation evidence enables qualified-only production control", asy
     minimumCases: authenticated.minimumCases,
     verifyObservation: authenticated.verifyObservation,
     verifyControl: authenticated.verifyControl,
-    controlEnabled: true, apiKey: "test", fetchImpl: jev() })
+    controlEnabled: true, apiKey: "test", sharedAsk: jev() })
   assert.deepEqual(result.selected_route, candidate)
   assert.equal(result.selection_reason, "qualified_jev_choice")
   assert.match(authenticated.bundleDigest, /^sha256:[0-9a-f]{64}$/)
@@ -123,11 +122,11 @@ test("signed evaluation evidence enables qualified-only production control", asy
 })
 
 test("Jev failure or invalid answer keeps baseline route explicit", async () => {
-  const failed = await routeDoctorCreBuild({ ...common, apiKey: "test", fetchImpl: async () => { throw Error("down") } })
+  const failed = await routeDoctorCreBuild({ ...common, apiKey: "test", sharedAsk: async () => { throw Error("down") } })
   assert.deepEqual(failed.selected_route, baseline)
   assert.equal(failed.jev.status, "unavailable")
-  const invalid = await routeDoctorCreBuild({ ...common, apiKey: "test", fetchImpl: async () => ({ ok: true,
-    async json() { return { model: "jev-1.13.0", answers: { preferred_route: { type: "choice", choice: "other" } } } } }) })
+  const invalid = await routeDoctorCreBuild({ ...common, apiKey: "test", sharedAsk: async () => ({
+    model: "jev-1.13.0", answers: { preferred_route: { type: "choice", choice: "other" } } }) })
   assert.deepEqual(invalid.selected_route, baseline)
   assert.equal(invalid.jev.reason, "invalid_answer")
 })
@@ -163,13 +162,12 @@ test("Jev selects optional context depth while the required pinned contract stay
     excerpt: "a".repeat(4000), content_digest:
       `sha256:${createHash("sha256").update("a".repeat(4000)).digest("hex")}` }
   const chosen = await selectOptionalBuildContext({ task: common.task, chunks: [optional], apiKey: "test",
-    fetchImpl: async (_, request) => {
-      const sent = JSON.parse(request.body)
+    sharedAsk: async sent => {
       assert.equal(sent.state.chunks[0].excerpt, optional.excerpt)
-      return { ok: true, async json() { return { model: "jev-1.13.0", answers: {
+      return { model: "jev-1.13.0", answers: {
         context_0: { type: "choice", choice: "short", confidence: 0.8,
           probabilities: { hide: 0.05, short: 0.8, long: 0.1, full: 0.05 } }
-      } } } }
+      } }
     } })
   const context = createPinnedBuildContext([contract, ...chosen.contracts])
   assert.equal(chosen.choices[0].visibility, "short")
@@ -183,9 +181,8 @@ test("unavailable or malformed Jev hides optional context without hiding require
   assert.equal(unavailable.reason, "no_api_key")
   assert.deepEqual(unavailable.contracts, [])
   const malformed = await selectOptionalBuildContext({ task: common.task, chunks: [contract],
-    apiKey: "test", fetchImpl: async () => ({ ok: true, async json() {
-      return { model: "jev-1.13.0", answers: { context_0: { type: "choice", choice: "full" } } }
-    } }) })
+    apiKey: "test", sharedAsk: async () => ({ model: "jev-1.13.0",
+      answers: { context_0: { type: "choice", choice: "full" } } }) })
   assert.equal(malformed.reason, "invalid_answer")
   assert.deepEqual(malformed.contracts, [])
   assert.equal(createPinnedBuildContext([contract, ...malformed.contracts]).contracts[0].excerpt,

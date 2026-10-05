@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import sys
+import subprocess
 import urllib.parse
 from pathlib import Path
 
@@ -59,7 +60,7 @@ def _state(raw):
     return state
 
 
-def select(raw, *, api_key=None, opener=None, usage_log=None, cache_path=None):
+def select(raw, *, api_key=None, shared_ask=None):
     """Return a typed recommendation bound to a fresh snapshot digest."""
     state = _state(raw)
     digest = hashlib.sha256(json.dumps(state, sort_keys=True).encode()).hexdigest()
@@ -76,9 +77,8 @@ def select(raw, *, api_key=None, opener=None, usage_log=None, cache_path=None):
         },
     }
     try:
-        answer = _usage.ask(payload, key, opener=opener, usage_log=usage_log,
-                            cache_path=cache_path).get("answers", {})
-    except (OSError, ValueError, TypeError):
+        answer = _usage.ask(payload, key, shared_ask=shared_ask).get("answers", {})
+    except (OSError, ValueError, TypeError, RuntimeError, subprocess.SubprocessError):
         return {**_refuse("jev_unavailable"), "snapshot_sha256": digest}
     operation = answer.get("operation", {}).get("choice")
     target = answer.get("target", {}).get("choice")
