@@ -389,7 +389,10 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       const queue = await readJson(queueFile, [])
       if (!Array.isArray(queue)) throw new DeliveryError("invalid queue journal", 9)
       for (const entry of queue) {
-        if (!config.repos[entry.repo] || !Number.isSafeInteger(entry.pr) || entry.pr <= 0 || !SHA.test(entry.head) || !entry.id)
+        // The journal is shared across lanes; dispatch, rather than reading
+        // another lane's row, requires a configured repository.
+        if (!REPO.test(entry.repo ?? "") || entry.repo.split("/").some(part => part === "." || part === "..") ||
+            !Number.isSafeInteger(entry.pr) || entry.pr <= 0 || !SHA.test(entry.head) || !entry.id)
           throw new DeliveryError("invalid queue job binding", 9)
         entry.state ??= entry.outcome ? "acknowledged" : "pending"
         if (!["pending", "claimed", "effect-requested", "reconciled", "acknowledged"].includes(entry.state))
