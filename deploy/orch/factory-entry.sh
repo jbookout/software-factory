@@ -4,8 +4,7 @@ DIRECTORY=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 9
 RECEIPT="$DIRECTORY/.factory-orch.json"
 # Installed entrypoints always read their own binding. A removed receipt refuses.
 if [ -f "$RECEIPT" ]; then
-  ROOT=$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).sourceRoot)' "$RECEIPT") || exit 9
-  exec node "$ROOT/bin/orch-install.mjs" invoke "$DIRECTORY" "$@"
+  exec node "$DIRECTORY/factory-verify.mjs" "$DIRECTORY" "$@"
 fi
 # Source adapters support repository replay only. Installed copies cannot fall back.
 if [ -n "$FACTORY_ROOT" ] && [ -n "$FACTORY_PR_CONFIG" ]; then

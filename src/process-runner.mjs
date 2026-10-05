@@ -55,7 +55,7 @@ export function runProcess(argv, { cwd, env = process.env, input = '', timeoutMs
     if (signal?.aborted) abort()
     const collect = (stream, chunk) => {
       bytes += chunk.length
-      if (job) { try { fs.appendFileSync(job.log, chunk) } catch { launchError = new Error('job log write failed'); stop(); return } }
+      if (job && captureOutput) { try { fs.appendFileSync(job.log, chunk) } catch { launchError = new Error('job log write failed'); stop(); return } }
       try { onOutput?.(chunk, stream) } catch { launchError = new Error('process output consumer failed'); stop(); return }
       if (!captureOutput) return
       if (bytes > maxOutputBytes) { overflow = true; stop(); return }

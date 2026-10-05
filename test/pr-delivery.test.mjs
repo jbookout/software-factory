@@ -14,7 +14,8 @@ const fake = `#!/usr/bin/env node
 const fs = require('node:fs'), cp = require('node:child_process');
 const args = process.argv.slice(2), file = process.env.FAKE_PR;
 const s = JSON.parse(fs.readFileSync(file));
-const save = () => fs.writeFileSync(file, JSON.stringify(s));
+// Concurrent fake calls and the test read this file; replace it atomically.
+const save = () => { const temp = file + '.' + process.pid + '.tmp'; fs.writeFileSync(temp, JSON.stringify(s)); fs.renameSync(temp, file); };
 const git = (...a) => cp.execFileSync('git', a, {encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
 s.headRefOid = git('--git-dir',s.remote,'rev-parse','refs/heads/topic');
 const tool = require('node:path').basename(process.argv[1]);
@@ -29,6 +30,8 @@ if(tool === 'codex') {
  s.blocked=true; save(); fs.writeFileSync(args[args.indexOf('--output-last-message')+1], body);
  } else if(!s.noProgress) {
  fs.writeFileSync('fix.txt',String(Date.now())); git('add','fix.txt'); git('commit','-qm','Repair'); if(!s.builderNoPush) git('push','-q','origin','HEAD:topic');
+ if(s.correctiveRepair && s.calls.filter(c=>!c.prompt.includes('REVIEW MODE:')).length>1) {fs.writeFileSync('correction.txt','fixed');git('add','correction.txt');git('commit','-qm','Correct failed check');}
+ if(s.hangAfterCommit) {setInterval(()=>{},1000);return;}
  s.statusCheckRollup=[{status:'COMPLETED',conclusion:'SUCCESS'}]; s.mergeable='MERGEABLE'; s.mergeStateStatus='CLEAN'; save();
  }
  });
@@ -49,9 +52,11 @@ if(tool === 'codex') {
  const topicHasMain=()=>{try{git('--git-dir',s.remote,'merge-base','--is-ancestor','refs/heads/main','refs/heads/topic');return true}catch{return false}};
  if(name==='comments') {
  s.comments.push({body:body.body,pr:Number(route.split('/')[4]),author:{login:'reviewer'}});
- if(s.advanceMainOnComment) {git('-C',s.checkout,'checkout','-q','main');fs.writeFileSync(s.checkout+'/late-main.txt','late');git('-C',s.checkout,'add','late-main.txt');git('-C',s.checkout,'commit','-qm','Late main');git('-C',s.checkout,'push','-q','origin','main');s.advanceMainOnComment=false;}
- save();reply(201,{id:s.comments.length});
+ if(s.blockBeforeMerge&&body.body.startsWith('DELIVERY VERIFIED')) s.comments.push({body:'REVIEW: BLOCKED\\nReviewed-SHA: '+s.headRefOid,author:{login:'reviewer'}});
+ if(s.advanceMainOnComment&&body.body.startsWith('DELIVERY VERIFIED')) {git('-C',s.checkout,'checkout','-q','main');fs.writeFileSync(s.checkout+'/late-main.txt','late');git('-C',s.checkout,'add','late-main.txt');git('-C',s.checkout,'commit','-qm','Late main');git('-C',s.checkout,'push','-q','origin','main');s.advanceMainOnComment=false;}
+ save();reply(201,{id:s.comments.length,body:body.body});
  } else if(name==='update-branch') {
+ if(s.pendingUpdate) {s.updatePending=true;s.pendingReads=0;save();reply(s.pendingUpdate==='lost'?502:202,{message:'Updating pull request branch.'});}
  if(body.expected_head_sha!==s.headRefOid) reply(422,{message:'expected head sha mismatch'});
  git('-C',s.checkout,'checkout','-q','topic');git('-C',s.checkout,'fetch','-q','origin');
  try {git('-C',s.checkout,'merge','--no-edit','origin/main')} catch {git('-C',s.checkout,'merge','--abort');git('-C',s.checkout,'checkout','-q','main');reply(422,{message:'merge conflict'})}
@@ -66,7 +71,8 @@ if(tool === 'codex') {
  if(strict && !topicHasMain()) reply(405,{message:'Head branch is not up to date with the base branch'});
  git('-C',s.checkout,'fetch','-q','origin');git('-C',s.checkout,'checkout','-q','main');git('-C',s.checkout,'reset','-q','--hard','origin/main');git('-C',s.checkout,'merge','--squash','origin/topic');git('-C',s.checkout,'commit','-qm','Merge PR');git('-C',s.checkout,'push','-q','origin','main');
  s.state='MERGED';s.mergeCommit={oid:git('-C',s.checkout,'rev-parse','HEAD')};save();
- reply(200,s.missingAck?{}:{merged:true,sha:s.mergeCommit.oid});
+ if(s.lostMergeReply) reply(502,{});
+ reply(200,s.missingAck||s.emptyMergeReply?{}:{merged:true,sha:s.mergeCommit.oid});
  }
  console.error('unexpected REST write');process.exit(2);
  }
@@ -75,19 +81,27 @@ if(tool === 'codex') {
  if(s.apiFailure) { console.log('HTTP/2.0 403 Forbidden\\nx-ratelimit-remaining: 0\\n\\n{}');console.error('provider unavailable');process.exit(1); }
  if(s.restFault) { if(s.restFault==='exception') process.exit(2); if(s.restFault==='refusal') {console.log('HTTP/2.0 401 Unauthorized\\n\\n{}');process.exit(1);}
  console.log('HTTP/2.0 200 OK\\n\\n'+s.restFault);process.exit(0); }
- const pr=()=>({number:s.number,title:s.title,state:s.state==='OPEN'?'open':'closed',merged:s.state==='MERGED',draft:s.isDraft,
- head:{sha:s.headRefOid,ref:s.headRefName,repo:{full_name:s.isCrossRepository?'fixture/fork':'fixture/new-repository'}},
- base:{ref:s.baseRefName,repo:{full_name:'fixture/new-repository'}},mergeable:s.mergeable==='UNKNOWN'?null:s.mergeable!=='CONFLICTING',mergeable_state:s.mergeStateStatus.toLowerCase(),merge_commit_sha:s.mergeCommit?.oid});
+ const pr=(number=s.number)=>({id:number,number,title:s.title,state:s.state==='OPEN'?'open':'closed',merged:s.state==='MERGED',draft:s.isDraft,
+ head:{sha:s.headRefOid,ref:s.headRefName,repo:{full_name:s.isCrossRepository?'fixture/fork':(s.repo??'fixture/new-repository')}},
+ base:{ref:s.baseRefName,sha:s.recordedBase??git('--git-dir',s.remote,'rev-parse','refs/heads/main'),repo:{full_name:s.repo??'fixture/new-repository'}},comments:s.comments.filter(c=>(c.pr??7)===number).length,mergeable:s.mergeable==='UNKNOWN'?null:s.mergeable!=='CONFLICTING',mergeable_state:s.mergeStateStatus.toLowerCase(),merge_commit_sha:s.mergeCommit?.oid});
  if(/pulls\\/[0-9]+$/.test(route)) {
+ if(s.updatePending && s.updateAfterReads && ++s.pendingReads>=s.updateAfterReads) {
+ git('-C',s.checkout,'checkout','-q','topic');git('-C',s.checkout,'fetch','-q','origin');
+ if(s.badUpdate) {fs.writeFileSync(s.checkout+'/unreviewed.txt','unreviewed');git('-C',s.checkout,'add','unreviewed.txt');git('-C',s.checkout,'commit','-qm','Unrelated change');}
+ else git('-C',s.checkout,'merge','--no-edit','origin/main');
+ git('-C',s.checkout,'push','-q','origin','topic');git('-C',s.checkout,'checkout','-q','main');
+ s.headRefOid=git('--git-dir',s.remote,'rev-parse','refs/heads/topic');s.updatePending=false;save();
+ }
+
  if(s.moveDuringChecks && ++s.moveViewCount>1) {
  git('-C',s.checkout,'checkout','-q','topic');fs.writeFileSync(s.checkout+'/moved.txt','moved');git('-C',s.checkout,'add','moved.txt');git('-C',s.checkout,'commit','-qm','Move head');git('-C',s.checkout,'push','-q','origin','topic');
  s.headRefOid=git('--git-dir',s.remote,'rev-parse','refs/heads/topic');s.moveDuringChecks=false;save(); }
- save();respond({...pr(),number:Number(route.split('/').at(-1))});
+ save();respond(pr(Number(route.split('/').at(-1))));
  } else if(route.includes('/pulls?')) {
- const prs=s.listCount?Array.from({length:s.listCount},(_,i)=>({...pr(),body:'x'.repeat(s.listBodyBytes??0),number:i===s.listCount-1?7:i+100})):[pr()];respond(prs.slice((page-1)*pageSize,page*pageSize));
+ const prs=s.listCount?Array.from({length:s.listCount},(_,i)=>({...pr(),body:'x'.repeat(s.listBodyBytes??0),id:i+100,number:i===s.listCount-1?7:i+100,comments:i===s.listCount-1?s.comments.length:0})):[pr()];respond(prs.slice((page-1)*pageSize,page*pageSize));
  } else if(route.includes('/comments')) {
  const number=Number(/issues\\/([0-9]+)\\//.exec(route)[1]);
- respond(s.comments.filter(c=>(c.pr??7)===number).slice((page-1)*pageSize,page*pageSize));
+ if(s.missingCommentPage===page) respond([]); else respond(s.comments.filter(c=>(c.pr??7)===number).map((c,i)=>({id:i+1,created_at:new Date(1700000000000+i*1000).toISOString(),updated_at:new Date(1700000000000+i*1000).toISOString(),user:{login:c.author?.login??'reviewer'},...c})).slice((page-1)*pageSize,page*pageSize));
  }
  else if(route.includes('/check-runs')) {
  const runs=s.checkRuns??s.statusCheckRollup.filter(c=>c.__typename!=='StatusContext').map((c,i)=>({id:i+1,name:c.name??(i?'optional-'+i:'test'),head_sha:s.headRefOid,status:c.status?.toLowerCase(),conclusion:c.conclusion?.toLowerCase()??null,app:{id:15368}}));
@@ -96,13 +110,13 @@ if(tool === 'codex') {
  const statuses=s.statuses??s.statusCheckRollup.filter(c=>c.__typename==='StatusContext').map((c,i)=>({id:i+1,context:c.context??'test',state:c.state?.toLowerCase()}));
  respond(statuses.slice((page-1)*pageSize,page*pageSize));
  }
+ else if(route.includes('/git/ref/heads/')) respond({ref:'refs/heads/main',object:{type:'commit',sha:git('--git-dir',s.remote,'rev-parse','refs/heads/main')}});
  else if(route.includes('/rules/branches/main')) {
  const rules=s.rules??[{type:'required_status_checks',ruleset_id:1,parameters:{strict_required_status_checks_policy:true}}];
  respond(rules.slice((page-1)*pageSize,page*pageSize));
  } else if(route.endsWith('/rulesets/1')) respond(s.ruleset??{id:1,enforcement:'active',current_user_can_bypass:'never'});
  else { console.error('unexpected REST route');process.exit(2); }
- } else if(action==='comment') {s.comments.push({body:args[args.indexOf('--body')+1],pr:Number(args[2]),author:{login:'reviewer'}}); save();}
- else {console.error('Unexpected gh action '+args.join(' '));process.exit(2);}
+ } else {console.error('GraphQL PR route forbidden');process.exit(2);}
 }
 `
 
@@ -122,12 +136,12 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
  const tools=path.join(root,"tools");await fs.mkdir(tools)
  for(const name of ["gh","codex"]) await fs.writeFile(path.join(tools,name),fake,{mode:0o755})
  env.PATH=tools+path.delimiter+env.PATH
- const state={ remote,checkout,number:7,title:"Fixture PR",state:"OPEN",baseRefName:"main",isCrossRepository:false,headRefName:"topic",headRefOid:head,mergeStateStatus:"CLEAN",mergeable:"MERGEABLE",isDraft:false,author:{login:"builder"},comments:[],statusCheckRollup:[{status:"COMPLETED",conclusion:"SUCCESS"}],calls:[],ghCalls:[],...overrides }
+ const state={ remote,checkout,number:7,title:"Fixture PR",state:"OPEN",baseRefName:"main",isCrossRepository:false,headRefName:"topic",headRefOid:head,mergeStateStatus:"CLEAN",mergeable:"MERGEABLE",isDraft:false,author:{login:"builder"},comments:[],statusCheckRollup:[{status:"COMPLETED",conclusion:"SUCCESS"}],calls:[],ghCalls:[],builderNoPush:true,...overrides }
  await fs.writeFile(env.FAKE_PR,JSON.stringify(state))
  const config=path.join(root,"config.json"), stateDir=path.join(root,"state")
  // CLI smoke controls use the trusted host observer; allow room for concurrent
  // host jobs. Capacity refusal itself uses injected snapshots in its own tests.
- const cfg={repos:{"fixture/new-repository":{checkout,originUrl:remote,worktreeRoot:path.join(root,"worktrees"),requiredChecks:[{name:"test"}],checks:[[process.execPath,"-e",""]]}},stateDir,codex:{model:"fixture-model",effort:"high"},resources:{capacity:64,browserConcurrency:1,agentUnits:1},limits:{runsPer24h:8,slots:2,timeoutMs:5000},pollMs:5,retryMs:0,commandTimeoutMs:5000,...configOverrides}
+ const cfg={repos:{"fixture/new-repository":{checkout,originUrl:remote,worktreeRoot:path.join(root,"worktrees"),requiredChecks:[{name:"test"}],trustedReviewers:["reviewer"],checks:[[process.execPath,"-e",""]]}},stateDir,codex:{model:"fixture-model",effort:"high"},resources:{capacity:64,browserConcurrency:1,agentUnits:1},queueTimeoutMs:15000,limits:{runsPer24h:8,slots:2,timeoutMs:5000},pollMs:5,retryMs:0,commandTimeoutMs:5000,checksTimeoutMs:5000,...configOverrides}
  await fs.writeFile(config,JSON.stringify(cfg))
  const read=async()=>JSON.parse(await fs.readFile(env.FAKE_PR,"utf8"))
  const launch=(command,args,workerEnv=env)=>new Promise((resolve,reject)=>{
@@ -138,7 +152,8 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
  const wrapper=(name,...args)=>launch("sh",[fileURLToPath(new URL(`../deploy/orch/${name}.sh`,import.meta.url)),...args],
    {...env,FACTORY_ROOT:fileURLToPath(new URL("../",import.meta.url)),FACTORY_PR_CONFIG:config})
  const approve=async (body,number=7)=>{
-  if(body) { const s=await read();s.comments.push({body,author:{login:"reviewer"}});await fs.writeFile(env.FAKE_PR,JSON.stringify(s));return }
+  if(body) { const s=await read();s.comments.push({body,author:{login:"reviewer"}});await fs.writeFile(env.FAKE_PR,JSON.stringify(s));
+   return }
   const before=await read(), apiFailure=before.apiFailure, move=before.moveDuringChecks;before.apiFailure=false;before.moveDuringChecks=false;await fs.writeFile(env.FAKE_PR,JSON.stringify(before))
   // The short readiness deadline is the property under test, not approval setup.
   await fs.writeFile(config,JSON.stringify({...cfg,checksTimeoutMs:5000}))
@@ -206,11 +221,11 @@ for(const action of ["pr-loop","review-pr","fix-pr","ci-fix"]) test(`closed PR s
 })
 test("NO-PROGRESS exits 2 instead of re-reviewing unchanged head",async t=>{
  const f=await fixture(t,{noProgress:true});await f.approve("REVIEW: BLOCKED\nReviewed-SHA: "+f.head+"\n1. defect")
- const r=await f.run("pr-loop",repo,"7","-","3");assert.equal(r.code,2);assert.match(r.stdout,/NO-PROGRESS/);assert.equal((await f.read()).calls.length,1)
+ const r=await f.run("pr-loop",repo,"7","-","3");assert.equal(r.code,2,JSON.stringify(r));assert.match(r.stdout,/NO-PROGRESS/);assert.equal((await f.read()).calls.length,1)
 })
 test("nine automatic redispatches on one refused head record one wait and no new attempts",async t=>{
  const f=await fixture(t,{noProgress:true});await f.approve("REVIEW: BLOCKED\nReviewed-SHA: "+f.head+"\n1. defect")
- assert.equal((await f.run("pr-loop",repo,"7","-","3")).code,2)
+ const first=await f.run("pr-loop",repo,"7","-","3");assert.equal(first.code,2,JSON.stringify(first))
  for(let i=0;i<9;i++) assert.equal((await f.run("pr-loop",repo,"7","-","3")).code,2)
  assert.equal((await f.read()).calls.length,1)
  const events=(await fs.readFile(path.join(f.stateDir,"delivery.jsonl"),"utf8")).trim().split("\n").map(JSON.parse)
@@ -220,13 +235,13 @@ test("concurrent recovery writers cannot redispatch an unchanged deterministic s
  const f=await fixture(t,{noProgress:true});await f.approve("REVIEW: BLOCKED\nReviewed-SHA: "+f.head+"\n1. defect")
  assert.equal((await f.run("pr-loop",repo,"7","-","3")).code,2)
  const results=await Promise.all([f.run("pr-loop",repo,"7","-","3"),f.run("pr-loop",repo,"7","-","3")])
- assert.ok(results.every(r=>[2,75].includes(r.code)))
+ assert.ok(results.every(r=>[2,75].includes(r.code)),JSON.stringify(results))
  assert.equal((await f.read()).calls.length,1)
 })
 test("CHANGES REQUESTED starts a repair round before re-review",async t=>{
  const f=await fixture(t,{noProgress:true});await f.approve(`CHANGES REQUESTED\nReviewed-SHA: ${f.head}\n1. fix defect`)
  const r=await f.run("pr-loop",repo,"7","-","1")
- assert.equal(r.code,2);assert.equal((await f.read()).calls.length,1)
+ assert.equal(r.code,2,JSON.stringify(r));assert.equal((await f.read()).calls.length,1)
  assert.match((await f.read()).calls[0].prompt,/resolve every numbered blocking finding/)
 })
 test("approved pending CI waits for the deadline without spending repair usage",async t=>{
@@ -234,7 +249,7 @@ test("approved pending CI waits for the deadline without spending repair usage",
  const s=await f.read();s.statusCheckRollup=[{status:"IN_PROGRESS",conclusion:null}]
  await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
  const r=await f.run("pr-loop",repo,"7","-","1")
- assert.equal(r.code,142);assert.match(r.stdout,/READINESS-TIMEOUT/)
+ assert.equal(r.code,142,JSON.stringify(r));assert.match(r.stdout,/READINESS-TIMEOUT/)
  assert.equal((await f.read()).calls.length,0);assert.equal((await f.read()).headRefOid,f.head)
  assert.deepEqual(JSON.parse(await fs.readFile(path.join(f.stateDir,"usage.json"))),[])
 })
@@ -300,7 +315,7 @@ test("unknown repo rejected with a clear configuration message",async t=>{
 })
 test("stale approval on moved head requires re-review and cannot merge",async t=>{
  const f=await fixture(t);await f.approve();f.g("checkout","topic");await fs.writeFile(path.join(f.checkout,"extra.txt"),"extra");f.g("add","extra.txt");f.g("commit","-qm","Extra");f.g("push","-q","origin","topic");f.g("checkout","main")
- const r=await f.run("merge-one-core",repo,"7",f.head);assert.equal(r.code,2);assert.match(r.stderr,/fresh review/)
+ const r=await f.run("merge-one-core",repo,"7",f.head);assert.equal(r.code,2,JSON.stringify(r));assert.match(r.stderr,/fresh review/)
  ok(await f.run("pr-loop",repo,"7","-","2"));assert.equal((await f.read()).calls.length,1)
 })
 test("a blocked comment quoting Reviewed-SHA is not independent approval",async t=>{
@@ -318,6 +333,7 @@ test("a builder formatted approval has no reviewer execution and cannot merge",a
 test("independence comes from fresh execution even with a shared GitHub account",async t=>{
  const f=await fixture(t);await f.approve()
  const s=await f.read();s.comments[0].author={login:"builder"};await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ f.cfg.repos[repo].trustedReviewers.push("builder");await fs.writeFile(f.config,JSON.stringify(f.cfg))
  ok(await f.run("merge-one-core",repo,"7",f.head));assert.equal((await f.read()).state,"MERGED")
 })
 for(const artifact of ["prompt","output","receipt"]) test(`changed reviewer ${artifact} invalidates approval evidence`,async t=>{
@@ -335,7 +351,7 @@ test("head moving during checks cannot merge",async t=>{
 })
 test("automatic main merge invalidates the pre-integration review",async t=>{
  const f=await fixture(t);await f.approve();await fs.writeFile(path.join(f.checkout,"main-change.txt"),"main");f.g("add","main-change.txt");f.g("commit","-qm","Main advances");f.g("push","-q","origin","main")
- const r=await f.run("merge-one-core",repo,"7",f.head);assert.equal(r.code,2);assert.equal((await f.read()).state,"OPEN")
+ const r=await f.run("merge-one-core",repo,"7",f.head);assert.equal(r.code,2,JSON.stringify(r));assert.equal((await f.read()).state,"OPEN")
 })
 
 test("concurrent guard invocations cannot overspend a per-PR budget",async t=>{
@@ -385,14 +401,14 @@ test("controller death cannot orphan a guarded child or release its occupied slo
  ok(await f.run("codex-guard",repo,"8","review",process.execPath,"-e","process.exit(0)"))
 })
 test("transient GitHub error is requeued at most three times",async t=>{
- const f=await fixture(t,{apiFailure:true},{retryMs:0});await f.approve();ok(await f.run("merge-enqueue",repo,"7",f.head))
+ const f=await fixture(t,{apiFailure:true},{retryMs:0});await f.approve();const s=await f.read();s.apiFailure=false;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s));ok(await f.run("merge-enqueue",repo,"7",f.head));s.apiFailure=true;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
  for(let i=0;i<5;i++) ok(await f.run("merge-queue","--once"))
  const queue=JSON.parse(await fs.readFile(path.join(f.stateDir,"queue.json")))
  assert.equal(queue[0].attempts,4);assert.equal(queue[0].outcome.status,"fail");assert.equal((await f.read()).state,"OPEN")
 })
 test("same-head CI recovery queues a fresh bounded attempt and preserves the failed outcome",async t=>{
  const f=await fixture(t,{statusCheckRollup:[{status:"COMPLETED",conclusion:"FAILURE"}]});await f.approve()
- ok(await f.run("merge-enqueue",repo,"7",f.head));ok(await f.run("merge-queue","--once"))
+ const admission=await f.read();admission.statusCheckRollup=[{status:"COMPLETED",conclusion:"SUCCESS"}];await fs.writeFile(f.env.FAKE_PR,JSON.stringify(admission));ok(await f.run("merge-enqueue",repo,"7",f.head));admission.statusCheckRollup=[{status:"COMPLETED",conclusion:"FAILURE"}];await fs.writeFile(f.env.FAKE_PR,JSON.stringify(admission));ok(await f.run("merge-queue","--once"))
  const before=JSON.parse(await fs.readFile(path.join(f.stateDir,"queue.json")));assert.equal(before[0].outcome.status,"fail")
  const s=await f.read();s.statusCheckRollup=[{status:"COMPLETED",conclusion:"SUCCESS"}];await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
  ok(await f.run("auto-enqueue","--once"));ok(await f.run("auto-enqueue","--once"));ok(await f.run("merge-queue","--once"))
@@ -443,7 +459,7 @@ test("duplicate PR loops allow only one fixer/reviewer",async t=>{
 test("manual merge edits invalidate deterministic re-approval",async t=>{
  const f=await fixture(t);await f.approve();await fs.writeFile(path.join(f.checkout,"main-change.txt"),"main");f.g("add","main-change.txt");f.g("commit","-qm","Main advances");f.g("push","-q","origin","main")
  f.g("checkout","topic");f.g("merge","--no-commit","origin/main");await fs.writeFile(path.join(f.checkout,"extra.txt"),"hand edit");f.g("add","extra.txt");f.g("commit","-qm","Merge with edits");f.g("push","-q","origin","topic");f.g("checkout","main")
- const r=await f.run("merge-one-core",repo,"7",f.head);assert.equal(r.code,2);assert.match(r.stderr,/needs fresh review/);assert.equal((await f.read()).state,"OPEN")
+ const r=await f.run("merge-one-core",repo,"7",f.head);assert.equal(r.code,2,JSON.stringify(r));assert.match(r.stderr,/needs fresh review/);assert.equal((await f.read()).state,"OPEN")
 })
 
 test("read-only legacy import preserves pending FIFO entries and recent usage",async t=>{
@@ -657,7 +673,7 @@ for(const action of ["fix-pr","ci-fix"])
   const f=await fixture(t,{noProgress:true});await f.approve(`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. defect`)
   for(let i=0;i<2;i++) {
    const r=await f.wrapper(action,repo,"7","-","--no-loop")
-   assert.equal(r.code,2);assert.match(r.stdout,/NO-PROGRESS/)
+   assert.equal(r.code,2,JSON.stringify(r));assert.match(r.stdout,/NO-PROGRESS/)
   }
   assert.equal((await f.run("pr-loop",repo,"7","-","1")).code,2)
   assert.equal((await f.run("recover","--once")).code,2)
@@ -698,6 +714,59 @@ for(const order of ["failure-first","failure-last","all-success"])
   assert.equal((await f.read()).calls.length,0)
  })
 
+// Item 11: exercise the deployed consumers, not a second approval predicate.
+test("outsider cannot replay an authentic factory approval comment",async t=>{
+ const f=await fixture(t);await f.approve();const s=await f.read();
+ s.comments[0].author.login="outsider";await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s));
+ ok(await f.wrapper("auto-enqueue","--once"));
+ await assert.rejects(fs.readFile(path.join(f.stateDir,"queue.json")),{code:"ENOENT"});
+});
+test("missing comment page stays unknown even with an older valid approval",async t=>{
+ const f=await fixture(t);await f.approve();const s=await f.read();
+ s.comments.push(...Array.from({length:26},()=>({body:"ordinary note"})));s.missingCommentPage=2;
+ await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s));
+ assert.notEqual((await f.wrapper("auto-enqueue","--once")).code,0);
+ await assert.rejects(fs.readFile(path.join(f.stateDir,"queue.json")),{code:"ENOENT"});
+});
+test("untrusted later BLOCK cannot impersonate the independent reviewer",async t=>{
+ const f=await fixture(t);await f.approve();await f.approve(`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. fabricated`);
+ const s=await f.read();s.comments.at(-1).author.login="outsider";await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s));
+ ok(await f.wrapper("pr-loop",repo,"7","-","1"));assert.equal((await f.read()).calls.length,0);
+});
+test("snapshot carries full source inventory and one provider observation",async t=>{
+ const f=await fixture(t);const r=await f.run("snapshot",repo,"7");ok(r);
+ const v=JSON.parse(r.stdout);assert.equal(v.schema,"factory-github-snapshot/v1");assert.equal(v.state,"known");
+ assert.equal(v.head.sha,f.head);assert.match(v.base.sha,/^[0-9a-f]{40}$/);
+ assert.equal(v.inventory.checkRuns.length,1);assert.equal(v.inventory.comments.length,0);
+ assert.equal(v.metrics.providerCalls,7);assert.equal(v.metrics.staleActions,0);assert.ok(Date.parse(v.fetchedAt));
+});
+
+test("latest trusted BLOCK after APPROVE defeats every deployed reader",async t=>{
+ const f=await fixture(t);await f.approve();await f.approve(`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. defect`);
+ ok(await f.wrapper("auto-enqueue","--once"));await assert.rejects(fs.readFile(path.join(f.stateDir,"queue.json")),{code:"ENOENT"});
+ assert.equal((await f.wrapper("merge-one-core",repo,"7",f.head)).code,4);
+ assert.equal((await f.run("merge-enqueue",repo,"7",f.head)).code,4);
+ const observed=JSON.parse((await f.run("snapshot",repo,"7")).stdout);assert.equal(observed.review.verdict,"REVIEW: BLOCKED");
+ assert.equal((await f.read()).calls.length,0);
+});
+for(const replyFault of ["lostMergeReply","emptyMergeReply"]) test(`merged retry after ${replyFault} authenticates ancestry and never repeats the effect`,async t=>{
+ const f=await fixture(t);await f.approve();const s=await f.read();s[replyFault]=true;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s));
+ ok(await f.wrapper("merge-one-core",repo,"7",f.head));ok(await f.wrapper("merge-one-core",repo,"7",f.head));
+ const after=await f.read();assert.equal(after.ghCalls.filter(a=>a.some(v=>v.endsWith("/merge"))).length,1);
+ assert.equal(f.g("rev-parse","origin/main"),after.mergeCommit.oid);
+ assert.equal(f.g("merge-base","--is-ancestor",after.mergeCommit.oid,"origin/main"),"");
+});
+for(const body of [h=>`Reviewed-SHA: ${h}`,h=>`APPROVE\nReviewed-SHA: ${h.slice(0,7)}`,h=>`APPROVE\nReviewed-SHA: ${h}extra`])
+ test("SHA-only, prefix and malformed approvals refuse enqueue",async t=>{
+  const f=await fixture(t);await f.approve(body(f.head));ok(await f.wrapper("auto-enqueue","--once"));
+  assert.equal((await f.run("merge-enqueue",repo,"7",f.head)).code,4);assert.equal((await f.read()).calls.length,0);
+ });
+
+test("later BLOCK at the final action recheck prevents a stale merge",async t=>{
+ const f=await fixture(t);await f.approve();const s=await f.read();s.blockBeforeMerge=true;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s));
+ assert.equal((await f.wrapper("merge-one-core",repo,"7",f.head)).code,4);
+ const after=await f.read();assert.equal(after.state,"OPEN");assert.equal(after.ghCalls.filter(a=>a.some(v=>v.endsWith("/merge"))).length,0);
+});
 for (const apiHang of ['fetch', 'body', 'drip']) test(`readiness bounds never-settling ${apiHang} within one API/attempt budget`, async t => {
  const f=await fixture(t,{apiHang},{commandTimeoutMs:5000,apiTimeoutMs:1000,attemptTimeoutMs:1800})
  const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
@@ -783,6 +852,9 @@ test('subprocess error canaries do not reach persisted delivery/wait bytes',asyn
  assert.equal(result.code,42,JSON.stringify(result))
  const bytes=await fs.readFile(path.join(f.stateDir,'delivery.jsonl'),'utf8')
  assert.doesNotMatch(bytes,/CANARY_PRIVATE/);assert.doesNotMatch(result.stderr,/CANARY_PRIVATE/)
+ for(const name of await fs.readdir(path.join(f.stateDir,'jobs'))) {
+  assert.doesNotMatch(await fs.readFile(path.join(f.stateDir,'jobs',name),'utf8'),/CANARY_PRIVATE/,name)
+ }
 })
 
 for(const resources of [{browserConcurrency:1},{capacity:0},{capacity:1,agentUnits:1,browserConcurrency:1},
@@ -812,7 +884,7 @@ test("different-file interaction is integrated before fresh exact-tree review", 
 test("late main update during delivery evidence cannot deliver an unreviewed tree", async t => {
  const f=await fixture(t,{advanceMainOnComment:true}); await f.approve()
  const r=await f.run("merge-one-core",repo,"7",f.head)
- assert.equal(r.code,2,JSON.stringify(r)); assert.match(r.stderr,/needs fresh review/)
+ assert.equal(r.code,1,JSON.stringify(r)); assert.match(r.stderr,/BASE MOVED/)
  const s=await f.read(); assert.equal(s.state,"OPEN"); assert.equal(s.mergeCommit,undefined)
  assert.ok(!git(f.root,"--git-dir",f.remote,"ls-tree","-r","--name-only","refs/heads/main").includes("feature.txt"))
 })
@@ -828,7 +900,7 @@ for(const [label,state] of [["no strict rule",{rules:[]}],["non-strict rule",{ru
 
 test("merged delivery is validated against the saved integration base", async t => {
  const f=await fixture(t,{missingAck:true}); await f.approve()
- assert.equal((await f.run("merge-one-core",repo,"7",f.head)).code,7)
+ ok(await f.run("merge-one-core",repo,"7",f.head))
  const [name]=await fs.readdir(path.join(f.stateDir,"integrations")), file=path.join(f.stateDir,"integrations",name)
  const record=JSON.parse(await fs.readFile(file)); record.base=f.head; await fs.writeFile(file,JSON.stringify(record))
  const r=await f.run("merge-one-core",repo,"7",f.head)
@@ -862,17 +934,19 @@ for(const mode of ["direct","queued"]) test(`${mode} controller death keeps both
  assert.equal(remoteTopic(f),f.head,"the interrupted write never lands under the successor")
  await prLease(); await lane()
  const r=await f.run("merge-one-core",repo,"7",f.head)
- assert.equal(r.code,2,JSON.stringify(r)); assert.notEqual(remoteTopic(f),f.head)
+ assert.equal(r.code,6,JSON.stringify(r)); assert.match(r.stderr,/PENDING/); assert.equal(remoteTopic(f),f.head)
+ assert.equal((await f.read()).ghCalls.filter(a=>a.some(v=>v.endsWith("/update-branch"))).length,1,"interrupted intent is reconciled before any retry")
 })
 
-for(const fault of [502,429,"no-response"]) test(`transient update-branch ${fault} keeps the bounded queue retry`, async t => {
+for(const fault of [502,429,"no-response"]) test(`ambiguous update-branch ${fault} remains pending without duplicate write`, async t => {
  const f=await fixture(t,{writeFaults:{"update-branch":[fault]}}); await f.approve(); await advanceMain(f)
  ok(await f.run("merge-enqueue",repo,"7",f.head)); ok(await f.run("merge-queue",repo,"--once"))
  const [entry]=await queueOf(f)
  assert.equal(entry.attempts,1); assert.equal(entry.outcome,undefined,JSON.stringify(entry)); assert.equal(remoteTopic(f),f.head)
  ok(await f.run("merge-queue",repo,"--once"))
  const [done]=await queueOf(f)
- assert.equal(done.outcome.data.code,2); assert.match(done.outcome.data.message,/fresh review/); assert.notEqual(remoteTopic(f),f.head)
+ assert.equal(done.outcome,undefined); assert.equal(remoteTopic(f),f.head)
+ assert.equal((await f.read()).ghCalls.filter(a=>a.some(v=>v.endsWith("/update-branch"))).length,1)
 })
 
 test("an update applied behind a lost response is read back, not retried or called a conflict", async t => {
@@ -894,9 +968,33 @@ test("queue mutation respects the same PR writer lease as a fixer", async t => {
  ok(await f.run("merge-queue",repo,"--once")); assert.equal((await f.read()).state,"MERGED")
 })
 
+for (const owner of ["PR writer", "integration lane"]) test(`continuous queue survives held ${owner} and delivers after release`, {timeout:60000}, async t => {
+ const f=await fixture(t); await f.approve(); ok(await f.run("merge-enqueue",repo,"7",f.head))
+ const name=owner==="PR writer" ? `pr-${keyFor(repo,7)}` : `merge-${encodeURIComponent(repo)}`
+ const release=await acquireLease(path.join(f.stateDir,"locks"),name); assert.ok(release)
+ const child=spawn(process.execPath,[cli,f.config,"merge-queue",repo],{env:f.env,stdio:["ignore","pipe","pipe"]})
+ let stdout="",stderr="",closed=false
+ child.stdout.on("data",b=>stdout+=b); child.stderr.on("data",b=>stderr+=b)
+ const done=new Promise((resolve,reject)=>{child.on("error",reject);child.on("close",code=>{closed=true;resolve(code)})})
+ try {
+ const until=Date.now()+30000
+ while(!closed && stdout.split("BUSY:").length<4 && Date.now()<until) await pause(20)
+ assert.equal(closed,false,`daemon exited during contention: ${stdout} ${stderr}`)
+ assert.ok(stdout.split("BUSY:").length>=4,"same process retries while owner holds lease")
+ assert.equal((await f.read()).state,"OPEN"); assert.equal((await queueOf(f))[0].attempts,0)
+ assert.equal((await f.read()).ghCalls.filter(merges).length,0)
+ await release()
+ while(!closed && !stdout.includes("MERGED") && Date.now()<until) await pause(20)
+ assert.match(stdout.slice(0,3000),/MERGED/,stderr); assert.equal(closed,false,"daemon remains active after processing")
+ assert.equal((await f.read()).state,"MERGED"); assert.equal((await queueOf(f))[0].attempts,1)
+ assert.equal((await f.read()).ghCalls.filter(merges).length,1)
+ } finally { await release(); if(!closed) child.kill("SIGTERM"); await done }
+})
+
 test("a held CARR-style integration lane does not starve another repo", async t => {
  const a=await fixture(t), b=await fixture(t), second="fixture/independent"
  b.cfg.repos={[second]:b.cfg.repos[repo]}; b.cfg.stateDir=a.stateDir
+ const otherState=await b.read();otherState.repo=second;await fs.writeFile(b.env.FAKE_PR,JSON.stringify(otherState))
  await fs.writeFile(b.config,JSON.stringify(b.cfg))
  await a.approve(); ok(await b.run("review-pr",second,"7"))
  ok(await a.run("merge-enqueue",repo,"7",a.head)); ok(await b.run("merge-enqueue",second,"7",b.head))
@@ -917,15 +1015,6 @@ test("a real overlapping-file update conflict refuses before final evidence", as
  const s=await f.read(); assert.equal(s.state,"OPEN"); assert.ok(!s.ghCalls.some(merges))
 })
 
-test("empty merge acknowledgement is reconciled without repeating the effect", async t => {
- const f=await fixture(t,{missingAck:true}); await f.approve()
- const first=await f.run("merge-one-core",repo,"7",f.head)
- assert.equal(first.code,7); assert.match(first.stderr,/acknowledgement missing/)
- assert.equal((await f.read()).state,"MERGED")
- ok(await f.run("merge-one-core",repo,"7",f.head))
- assert.equal((await f.read()).ghCalls.filter(merges).length,1)
-})
-
 test("malformed integration read cannot persist provider canary bytes", async t => {
  const f=await fixture(t,{restFault:"private-canary-123 invalid REST"})
  const r=await f.run("merge-one-core",repo,"7",f.head)
@@ -942,6 +1031,56 @@ test("a draft integration candidate stays refused without readiness mutation", a
  const s=await f.read(); assert.ok(s.ghCalls.every(a=>!a.includes("-X"))); assert.equal(s.state,"OPEN")
 })
 
+for (const body of [h=>`Reviewed-SHA: ${h}`,h=>`REVIEW: BLOCKED \nReviewed-SHA: ${h}\n1. defect`])
+ test("malformed later trusted review defeats authentic approval in deployed wrappers",async t=>{
+ const f=await fixture(t);await f.approve();await f.approve(body(f.head))
+ ok(await f.wrapper("auto-enqueue","--once"));await assert.rejects(fs.readFile(path.join(f.stateDir,"queue.json")),{code:"ENOENT"})
+ assert.equal((await f.wrapper("merge-one-core",repo,"7",f.head)).code,4)
+ const s=await f.read();assert.equal(s.state,"OPEN");assert.equal(s.calls.length,0);assert.equal(s.ghCalls.filter(merges).length,0)
+})
+test("recorded PR base cannot conceal live base movement after evidence",async t=>{
+ const f=await fixture(t);await f.approve();const s=await f.read()
+ s.recordedBase=f.g("rev-parse","origin/main");s.advanceMainOnComment=true;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ const r=await f.run("merge-one-core",repo,"7",f.head)
+ assert.equal(r.code,1,JSON.stringify(r));assert.match(r.stderr,/BASE MOVED/)
+ const after=await f.read();assert.equal(after.state,"OPEN");assert.equal(after.ghCalls.filter(merges).length,0)
+})
+for(const acknowledgement of ["accepted","lost"]) test(`pending ${acknowledgement} update is reconciled without old-head CI, merge or duplicate update`,async t=>{
+ const f=await fixture(t,{pendingUpdate:acknowledgement},{checksTimeoutMs:80});await f.approve();await advanceMain(f)
+ ok(await f.run("merge-enqueue",repo,"7",f.head));ok(await f.run("merge-queue",repo,"--once"))
+ const [entry]=await queueOf(f);assert.equal(entry.outcome,undefined,JSON.stringify(entry))
+ assert.equal((await f.read()).ghCalls.filter(merges).length,0)
+ ok(await f.run("merge-queue",repo,"--once"))
+ const after=await f.read();assert.equal(after.ghCalls.filter(a=>a.some(v=>v.endsWith("/update-branch"))).length,1)
+ assert.equal(after.headRefOid,f.head);assert.equal(after.state,"OPEN")
+ const pendingReads=after.ghCalls.slice(after.ghCalls.findIndex(a=>a.some(v=>v.endsWith("/update-branch")))+1)
+ assert.ok(pendingReads.every(a=>!a.some(v=>/check-runs|statuses/.test(v))),"pending head is observed without consuming its old CI")
+})
+for(const action of ["readiness","review-pr"]) test(`missing local receipt source permits ${action} recovery from a shallow main-only checkout`,async t=>{
+ const f=await fixture(t);await f.approve();const shallow=path.join(f.root,"shallow")
+ execFileSync("git",["clone","--depth=1","--single-branch","--branch","main",`file://${f.remote}`,shallow],{env:f.env,stdio:"ignore"})
+ assert.throws(()=>git(shallow,"rev-parse",`${f.head}^{tree}`))
+ f.cfg.repos[repo].checkout=shallow;await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ ok(await f.run(action,repo,"7"))
+ if(action==="review-pr") {assert.equal((await f.read()).calls.length,1);assert.equal(git(shallow,"rev-parse",`${f.head}^{tree}`),f.g("rev-parse",`${f.head}^{tree}`))}
+ else {const snap=JSON.parse((await f.run("snapshot",repo,"7")).stdout);assert.equal(snap.state,"known");assert.equal(snap.review,null)}
+})
+test("blocking fixture has no receipt artifacts after authentic older approval",async t=>{
+ const f=await fixture(t);await f.approve();const before=await fs.readdir(path.join(f.stateDir,"reviews"))
+ await f.approve(`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. defect`)
+ assert.deepEqual(await fs.readdir(path.join(f.stateDir,"reviews")),before)
+ ok(await f.wrapper("auto-enqueue","--once"));assert.equal((await f.wrapper("merge-one-core",repo,"7",f.head)).code,4)
+})
+
+for(const badUpdate of [false,true]) test(`asynchronous head completion validates its approved-head/main relationship: bad=${badUpdate}`,async t=>{
+ const f=await fixture(t,{pendingUpdate:"accepted",updateAfterReads:3,badUpdate},{checksTimeoutMs:5000});await f.approve();await advanceMain(f)
+ const r=await f.run("merge-one-core",repo,"7",f.head)
+ assert.notEqual(r.code,0,JSON.stringify(r));assert.match(r.stderr,badUpdate?/NON-MERGE COMMIT/:/INTEGRATION UPDATED.*fresh review/)
+ const after=await f.read();assert.notEqual(after.headRefOid,f.head);assert.equal(after.state,"OPEN");assert.equal(after.ghCalls.filter(merges).length,0)
+ const following=after.ghCalls.slice(after.ghCalls.findIndex(a=>a.some(v=>v.endsWith("/update-branch")))+1)
+ assert.ok(following.every(a=>!a.some(v=>/check-runs|statuses/.test(v))))
+ assert.equal(after.ghCalls.filter(a=>a.some(v=>v.endsWith("/update-branch"))).length,1)
+})
 
 test('review 1: a signalled guard cannot repeat a mutation without readback', async t => {
  const f = await fixture(t)
@@ -1124,9 +1263,9 @@ test('retro 7: recovery refuses a still-running check and resumes only after obs
 async function installedFixture(f) {
  const source=path.join(f.root,'factory-source'),installed=path.join(f.root,'installed')
  git(f.checkout,'clone','--quiet','--no-hardlinks',fileURLToPath(new URL('../',import.meta.url)),source)
- const names=['src/orch-installation.mjs','bin/orch-install.mjs','src/pr-delivery.mjs','src/pr-delivery-prompts.mjs',
+ const names=['src/orch-installation.mjs','bin/orch-install.mjs','src/github-snapshot.mjs','src/pr-delivery.mjs','src/pr-delivery-prompts.mjs',
    'src/process-group.mjs','src/process-runner.mjs','src/process-launcher.mjs','src/process-supervisor.mjs','bin/pr-delivery.mjs',
-   'deploy/orch/factory-entry.sh','deploy/orch/test-browser.sh','deploy/orch/branch-wt.sh','deploy/orch/merge-enqueue.sh']
+   'deploy/orch/factory-verify.mjs','deploy/orch/factory-entry.sh','deploy/orch/test-browser.sh','deploy/orch/branch-wt.sh','deploy/orch/merge-enqueue.sh']
  for(const name of names){await fs.copyFile(fileURLToPath(new URL('../'+name,import.meta.url)),path.join(source,name))}
  git(source,'add',...names);git(source,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--allow-empty','-qm','Delivered candidate fixture')
  await fs.symlink(fileURLToPath(new URL('../node_modules',import.meta.url)),path.join(source,'node_modules'),'dir')
@@ -1184,7 +1323,7 @@ test('retro 7: terminal receipt pointer uses the existing orch inbox command',as
  await fs.writeFile(command,`#!/usr/bin/env node\nrequire('fs').writeFileSync(${JSON.stringify(pointer)},JSON.stringify(process.argv.slice(2)));`,{mode:0o755})
  f.cfg.orchInbox={command,store};await fs.writeFile(f.config,JSON.stringify(f.cfg))
  ok(await f.run('fix-pr',repo,'7','-'))
- const file=path.join(f.stateDir,'repairs',`${keyFor(repo,7)}.json`)
+ const record=await currentRepair(f),file=path.join(f.stateDir,'repair-receipts',`${record.id}.json`)
  assert.deepEqual(JSON.parse(await fs.readFile(pointer,'utf8')),['--store',store,'inbox','push','PlatformEngineer',`${repo}#7`,'delivered','--report',file])
  assert.equal(JSON.parse(await fs.readFile(file,'utf8')).status,'delivered')
 })
@@ -1236,4 +1375,132 @@ test('retro 7: installed recovery observes a killed check and resumes its commit
  const delivered=JSON.parse(await fs.readFile(file,'utf8'))
  assert.equal(delivered.status,'delivered');assert.equal(delivered.head,head);assert.equal(delivered.remoteHead,head)
  assert.equal((await f.read()).calls.filter(c=>!c.prompt.includes('REVIEW MODE:')).length,1)
+})
+ test("timed-out branch update retains pending intent and reconciles without another write", async t => {
+  const f=await fixture(t,{}, {commandTimeoutMs:1000,checksTimeoutMs:80})
+  await f.approve(); await advanceMain(f)
+  const state=await f.read(); state.pauseWrite="update-branch"; state.pauseMarker=path.join(f.root,"update.marker"); await fs.writeFile(f.env.FAKE_PR,JSON.stringify(state))
+  ok(await f.run("merge-enqueue",repo,"7",f.head)); ok(await f.run("merge-queue",repo,"--once"))
+  const [entry]=await queueOf(f)
+  assert.equal(entry.outcome,undefined,JSON.stringify(entry)); assert.equal(entry.attempts,1)
+  ok(await f.run("merge-queue",repo,"--once"))
+  const s=await f.read(); assert.equal(s.state,"OPEN"); assert.equal(s.ghCalls.filter(merges).length,0)
+  assert.equal(s.ghCalls.filter(a=>a.some(v=>v.endsWith("/update-branch"))).length,1)
+  assert.equal((await queueOf(f))[0].outcome,undefined)
+ })
+
+ test("attempt expiry while a branch update is pending keeps the continuous queue alive without another write", {timeout:120000}, async t => {
+  const f=await fixture(t,{pendingUpdate:"accepted"}); await f.approve(); await advanceMain(f)
+  ok(await f.run("merge-enqueue",repo,"7",f.head))
+  // Pacing outlasts the attempt: the readback sleep reaches attempt expiry.
+  await fs.writeFile(f.config,JSON.stringify({...f.cfg,attemptTimeoutMs:15000,checksTimeoutMs:15000,pollMs:60000}))
+  const child=spawn(process.execPath,[cli,f.config,"merge-queue",repo],{env:f.env,stdio:["ignore","pipe","pipe"]})
+  let stdout="",stderr="",closed=false,code
+  child.stdout.on("data",b=>stdout+=b); child.stderr.on("data",b=>stderr+=b)
+  const done=new Promise((resolve,reject)=>{child.on("error",reject);child.on("close",c=>{closed=true;code=c;resolve(c)})})
+  try {
+   const until=Date.now()+30000
+   while(!closed && (await queueOf(f))[0].attempts<1 && Date.now()<until) await pause(50)
+   await pause(500)
+   assert.equal(closed,false,`daemon exited ${code}: ${stdout} ${stderr}`)
+   const [entry]=await queueOf(f); assert.equal(entry.attempts,1,JSON.stringify(entry)); assert.equal(entry.outcome,undefined)
+   assert.match(stdout,/UPDATE-BRANCH PENDING/)
+   const s=await f.read(); assert.equal(s.state,"OPEN"); assert.equal(s.ghCalls.filter(merges).length,0)
+   assert.equal(s.ghCalls.filter(a=>a.some(v=>v.endsWith("/update-branch"))).length,1)
+  } finally { if(!closed) child.kill("SIGTERM"); await done }
+ })
+
+const currentRepair = async f => JSON.parse(await fs.readFile(path.join(f.stateDir,'repairs',`${keyFor(repo,7)}.json`),'utf8'))
+
+test('blocking 4: early builder publication is detected and never called unpushed',async t=>{
+ const f=await fixture(t,{builderNoPush:false})
+ f.cfg.repos[repo].checks=[[process.execPath,'-e','process.exit(17)']]
+ await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ const result=await f.run('fix-pr',repo,'7','-')
+ assert.notEqual(result.code,0)
+ assert.doesNotMatch(result.stdout+result.stderr,/source unpushed/)
+ assert.match(result.stdout+result.stderr,/EARLY PUBLICATION/)
+ const record=await currentRepair(f)
+ assert.equal(record.status,'early_publication');assert.equal(record.remoteHead,remoteTopic(f))
+})
+
+for(const multiple of [false,true]) test(`blocking 5: effective push destinations refuse extra remote (${multiple})`,async t=>{
+ const f=await fixture(t,{builderNoPush:true}),other=path.join(f.root,'other.git')
+ git(f.root,'clone','--bare','--quiet',f.remote,other)
+ if(multiple) f.g('config','--add','remote.origin.pushurl',f.remote)
+ f.g('config','--add','remote.origin.pushurl',other)
+ const result=await f.run('fix-pr',repo,'7','-')
+ assert.notEqual(result.code,0);assert.match(result.stdout+result.stderr,/push destination/)
+ assert.equal(remoteTopic(f),f.head)
+ assert.equal(git(f.root,'--git-dir',other,'rev-parse','refs/heads/topic'),f.head)
+})
+
+test('blocking 6: closed PR after checks refuses publication and delivery',async t=>{
+ const f=await fixture(t,{builderNoPush:true})
+ f.cfg.repos[repo].checks=[[process.execPath,'-e',`const fs=require('fs'),p=${JSON.stringify(f.env.FAKE_PR)};const s=JSON.parse(fs.readFileSync(p));s.state='CLOSED';fs.writeFileSync(p,JSON.stringify(s));`]]
+ await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ const result=await f.run('fix-pr',repo,'7','-')
+ assert.equal(result.code,8,JSON.stringify(result));assert.equal(remoteTopic(f),f.head)
+ assert.notEqual((await currentRepair(f)).status,'delivered')
+})
+
+test('blocking 7: confirmed failed check dispatches one corrective builder under unchanged policy',async t=>{
+ const f=await fixture(t,{builderNoPush:true,correctiveRepair:true})
+ f.cfg.repos[repo].checks=[[process.execPath,'-e',"if(!require('fs').existsSync('correction.txt'))process.exit(17)"]]
+ await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ assert.equal((await f.run('fix-pr',repo,'7','-')).code,17)
+ const failed=await currentRepair(f)
+ ok(await f.run('ci-fix',repo,'7','-','--no-loop'))
+ const repaired=await currentRepair(f)
+ assert.equal((await f.read()).calls.filter(c=>!c.prompt.includes('REVIEW MODE:')).length,2)
+ assert.notEqual(repaired.id,failed.id);assert.equal(repaired.corrects,failed.id)
+ const preserved=JSON.parse(await fs.readFile(path.join(f.stateDir,'repair-receipts',`${failed.id}.json`),'utf8'))
+ assert.equal(preserved.status,'check_failed');assert.equal(preserved.head,failed.head)
+})
+
+test('blocking 8: committed interrupted builder is observed without repeat or publication',async t=>{
+ const f=await fixture(t,{builderNoPush:true,hangAfterCommit:true},{limits:{runsPer24h:8,slots:2,timeoutMs:1500}})
+ const first=await f.run('fix-pr',repo,'7','-');assert.equal(first.code,142,JSON.stringify(first))
+ const interrupted=await currentRepair(f)
+ assert.ok(interrupted.builderJob);assert.equal(interrupted.baseHead,f.head)
+ const result=await f.wrapper('unstick','--once')
+ assert.equal(result.code,75,JSON.stringify(result))
+ const observed=await currentRepair(f)
+ assert.equal(observed.status,'candidate_unconfirmed');assert.notEqual(observed.head,f.head)
+ assert.equal(remoteTopic(f),f.head);assert.equal((await f.read()).calls.length,1)
+ const state=await f.read();state.hangAfterCommit=false;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(state))
+ ok(await f.run('fix-pr',repo,'7','-'))
+ assert.equal((await f.read()).calls.filter(c=>!c.prompt.includes('REVIEW MODE:')).length,2)
+ assert.equal((await currentRepair(f)).status,'delivered')
+})
+
+test('blocking 10: each inbox pointer retains the original terminal repair receipt',async t=>{
+ const f=await fixture(t,{builderNoPush:true}),command=path.join(f.root,'orch'),pointers=path.join(f.root,'pointers.jsonl')
+ await fs.writeFile(command,`#!/usr/bin/env node\nrequire('fs').appendFileSync(${JSON.stringify(pointers)},JSON.stringify(process.argv.slice(2))+'\\n');`,{mode:0o755})
+ f.cfg.orchInbox={command,store:path.join(f.root,'inbox')};await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ ok(await f.run('fix-pr',repo,'7','-'))
+ const [first]= (await fs.readFile(pointers,'utf8')).trim().split('\n').map(JSON.parse)
+ const file=first.at(-1),before=await fs.readFile(file,'utf8')
+ ok(await f.run('ci-fix',repo,'7','-','--no-loop'))
+ const [,second]=(await fs.readFile(pointers,'utf8')).trim().split('\n').map(JSON.parse)
+ assert.notEqual(file,second.at(-1));assert.equal(await fs.readFile(file,'utf8'),before)
+ assert.equal(JSON.parse(before).status,'delivered')
+})
+
+test('blocking 6: final PR readback refuses a PR closed during push',async t=>{
+ const f=await fixture(t)
+ await fs.writeFile(path.join(f.remote,'hooks','pre-receive'),`#!/usr/bin/env node\nconst fs=require('fs'),p=${JSON.stringify(f.env.FAKE_PR)};const s=JSON.parse(fs.readFileSync(p));s.state='CLOSED';fs.writeFileSync(p,JSON.stringify(s));`,{mode:0o755})
+ const result=await f.run('fix-pr',repo,'7','-')
+ assert.equal(result.code,8,JSON.stringify(result));assert.notEqual(remoteTopic(f),f.head)
+ assert.equal((await currentRepair(f)).status,'push_pending')
+})
+
+test('blocking 5: worktree-specific push destination is checked after repository checks',async t=>{
+ const f=await fixture(t),other=path.join(f.root,'other.git')
+ git(f.root,'clone','--bare','--quiet',f.remote,other);f.g('config','extensions.worktreeConfig','true')
+ f.cfg.repos[repo].checks=[[process.execPath,'-e',`require('child_process').execFileSync('git',['config','--worktree','remote.origin.pushurl',${JSON.stringify(other)}]);`]]
+ await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ const result=await f.run('fix-pr',repo,'7','-')
+ assert.equal(result.code,9,JSON.stringify(result));assert.match(result.stdout+result.stderr,/push destination/)
+ assert.equal(remoteTopic(f),f.head);assert.equal(git(f.root,'--git-dir',other,'rev-parse','refs/heads/topic'),f.head)
 })
