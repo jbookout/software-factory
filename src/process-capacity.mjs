@@ -43,20 +43,30 @@ const nodeValueOptions = new Set(`-r -C --require --conditions --import --loader
   --secure-heap --secure-heap-min --snapshot-blob --title --tls-cipher-list --tls-keylog
   --trace-event-categories --trace-event-file-pattern --trace-require-module --unhandled-rejections
   --use-largepages --v8-pool-size --watch-kill-signal --watch-path`.split(/\s+/))
-function isTestLauncher(command) {
+function testLauncher(command) {
   const [executable, ...args] = command.trim().split(/\s+/)
-  if (!/^(?:\S*\/)?node$/.test(executable)) return false
+  if (!/^(?:\S*\/)?node$/.test(executable)) return null
+  let test = false, requested
   for (let i = 0; i < args.length; i++) {
-    const option = args[i].split('=')[0]
-    if (option === '--test') return true
-    if (option === '--' || !option.startsWith('-') || ['-e', '--eval', '-p', '--print', '--run'].includes(option)) return false
-    if (nodeValueOptions.has(option) && !args[i].includes('=')) i++
+    // Node accepts hyphens and underscores interchangeably in option names.
+    // Normalize names once for both launcher detection and worker accounting.
+    const [name, attached] = args[i].split('=')
+    const option = name.replaceAll('_', '-')
+    if (option === '--' || !option.startsWith('-') || ['-e', '--eval', '-p', '--print', '--run'].includes(option)) break
+    if (option === '--test') test = true
+    if (nodeValueOptions.has(option)) {
+      const value = attached ?? args[++i]
+      if (option === '--test-concurrency' && /^\d+$/.test(value)) requested = Number(value)
+    }
   }
-  return false
+  return test ? { requested } : null
 }
 function unmanagedUnits(rows, owned, browserConcurrency) {
   const parents = new Map(rows.map(row => [row.pid, row.ppid]))
-  const tests = rows.filter(row => isTestLauncher(row.command))
+  const tests = rows.flatMap(row => {
+    const launcher = testLauncher(row.command)
+    return launcher ? [{ ...row, ...launcher }] : []
+  })
   const testRoots = new Set(tests.map(row => row.pid))
   const browsers = rows.filter(row => /(?:chrome|chromium|firefox|webkit|playwright)/i.test(row.command.split(" ")[0]) ||
     /^\/(?:Users\/[^/]+\/)?Applications\/[^/]*(?:chrome|chromium|firefox|webkit|playwright)[^/]*\.app\/Contents\/MacOS\//i.test(row.command))
@@ -66,13 +76,12 @@ function unmanagedUnits(rows, owned, browserConcurrency) {
     if (descends(row.pid, owned, parents) || descends(row.ppid, testRoots, parents)) continue
     // Unmanaged supported launcher flags are counted, not silently reduced to
     // the factory default. Unknown launchers consume the declared worker cap.
-    const requested = /--test-concurrency(?:=|\s+)(\d+)/.exec(row.command)?.[1]
     const root = new Set([row.pid])
     const activeWorkers = rows.filter(worker => worker.pid !== row.pid &&
       /^(?:\S*\/)?node\s/.test(worker.command) && descends(worker.pid, root, parents)).length
     const activeBrowsers = browsers.filter(browser => descends(browser.pid, root, parents) &&
       !descends(browser.ppid, browserRoots, parents)).length
-    units += Math.max(requested ? Number(requested) : browserConcurrency, activeWorkers + activeBrowsers)
+    units += Math.max(row.requested ?? browserConcurrency, activeWorkers + activeBrowsers)
   }
   for (const row of browsers) {
     if (descends(row.pid, owned, parents) || descends(row.pid, testRoots, parents) || descends(row.ppid, browserRoots, parents)) continue

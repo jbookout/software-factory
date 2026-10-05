@@ -11,6 +11,34 @@ test('review 9: deadline and phase clocks reject timer overflow', () => {
  assert.throws(() => new Deadline(100).phaseBudget('api', 3000000000), /deadline/)
 })
 
+for (const managed of [false, true]) {
+ for (const flags of [
+  '--test_reporter spec --test --test-concurrency=4',
+  '--test-reporter spec --test --test_concurrency=4',
+  '--test_reporter spec --test_concurrency 4 --test',
+  '--test_reporter=spec --test --test_concurrency 4',
+  '--test-reporter spec --test_concurrency=4 --test',
+  '--test_reporter_destination stdout --test_reporter spec --test --test_concurrency=4'
+ ]) test(`review 4: underscore flags count ${managed ? 'managed excess' : 'unmanaged workers'}: ${flags}`, async t => {
+  const { reserveCompute } = await import('../src/process-capacity.mjs')
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'factory-underscore-options-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const config = { stateDir: root, resources: { capacity: 4, browserConcurrency: 1 }, pollMs: 5 }
+  let owned, admitted
+  try {
+   if (managed) {
+    owned = await reserveCompute(config, 1, new Deadline(3000), { snapshot: async () => [] })
+    const bindings = await owned.bindJob({ pid: process.pid, deadline: Date.now() + 30000 })
+    for (const { file } of bindings) {
+     const row = JSON.parse(await fs.readFile(file)); row.job.groupPid = process.pid; await fs.writeFile(file, JSON.stringify(row))
+    }
+   }
+   const rows = [{ pid: managed ? process.pid : 123, ppid: 1, command: `node ${flags} suite.mjs` }]
+   await assert.rejects(async () => { admitted = await reserveCompute(config, 1, new Deadline(1000), { snapshot: async () => rows }) }, { code: 142 })
+  } finally { if (admitted) await admitted(); if (owned) await owned() }
+ })
+}
+
 for (const managed of [false, true]) test(`review 4: separate Node option values count ${managed ? 'managed excess' : 'unmanaged workers'}`, async t => {
  const { reserveCompute } = await import('../src/process-capacity.mjs')
  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'factory-option-order-'))
