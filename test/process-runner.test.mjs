@@ -189,13 +189,16 @@ test('a permission error on a live group remains a refusal',async t=>{
 test('macOS retired-group readback uses the system observer rather than a PATH shim',async t=>{
  if(process.platform!=='darwin') return t.skip('macOS retired-group EPERM behavior')
  const {killOwnedGroup,ownedGroupAlive}=await import('../src/process-group.mjs')
+ const {spawn}=await import('node:child_process')
+ const retired=spawn(process.execPath,['-e',''],{detached:true,stdio:'ignore'})
+ await new Promise((resolve,reject)=>{retired.on('close',resolve);retired.on('error',reject)})
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-group-observer-')),prior=process.env.PATH
  t.after(async()=>{process.env.PATH=prior;await fs.rm(root,{recursive:true,force:true})})
- await fs.writeFile(path.join(root,'ps'),'#!/bin/sh\necho "2147483646 2147483646 R"\n',{mode:0o755})
+ await fs.writeFile(path.join(root,'ps'),`#!/bin/sh\necho "${retired.pid} ${retired.pid} R"\n`,{mode:0o755})
  process.env.PATH=root+path.delimiter+prior
  t.mock.method(process,'kill',()=>{const error=Error('synthetic retired-group EPERM');error.code='EPERM';throw error})
- assert.equal(ownedGroupAlive(2147483646),false)
- assert.doesNotThrow(()=>killOwnedGroup(2147483646,'SIGKILL'))
+ assert.equal(ownedGroupAlive(retired.pid),false)
+ assert.doesNotThrow(()=>killOwnedGroup(retired.pid,'SIGKILL'))
 })
 
 test('retro 4: running requires this job startup log and acknowledgment', async t => {
@@ -203,12 +206,14 @@ test('retro 4: running requires this job startup log and acknowledgment', async 
  t.after(() => fs.rm(root, {recursive:true, force:true}))
  const job = {id:'startup-fixture', ownership:'caller', worktree:root, model:'fixture', effort:'high',
    log:path.join(root,'job.log'), receipt:path.join(root,'job.json')}
+ const release=path.join(root,'acknowledged')
  let acknowledged
- const result = await runProcess([process.execPath,'-e','console.log("started")'], {
+ const result = await runProcess([process.execPath,'-e',`console.log("started");const timer=setInterval(()=>{if(require('fs').existsSync(${JSON.stringify(release)})){clearInterval(timer)}},10)`], {
    cwd:root, job, onStarted: async receipt => {
      acknowledged = JSON.parse(await fs.readFile(job.receipt, 'utf8'))
      assert.equal(receipt.id, job.id)
      await fs.access(receipt.log)
+     await fs.writeFile(release,receipt.id)
    }
  })
  assert.equal(acknowledged?.status,'running')

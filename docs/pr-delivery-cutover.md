@@ -250,8 +250,9 @@ full checks, ordinary push and both remote/PR head readback. The repair receipt
 at `stateDir/repairs/<repo-pr>.json` transitions through `checking`,
 `check_failed` or `check_interrupted`, `push_pending`, then `delivered`.
 `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" repair-status "$R" "$N"`
-reads that receipt and the current check owner. Recovery observes the process
-and receipt before retrying. It refuses a live or unconfirmed check, retains
+reads that receipt and the current check owner. The installed `unstick` and `stall-watch` recovery entrypoints discover both
+waits and incomplete repair receipts. Recovery observes the process and
+receipt before retrying. It refuses a live or unconfirmed check, retains
 failed source and resumes the same committed candidate. A pending push reads
 remote state before attempting another push. A changed check policy requires
 fresh checks. Delivery binds the tested commit/tree, check results and observed

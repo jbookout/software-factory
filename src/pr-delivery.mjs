@@ -39,7 +39,10 @@ export async function loadDeliveryConfig(file) {
       if (local.checks !== undefined && (!Array.isArray(local.checks) || !local.checks.length))
         throw new DeliveryError("config repo checks must be nonempty argv commands", 9)
       if(local.checkTimeoutMs !== undefined && !validDuration(local.checkTimeoutMs)) throw new DeliveryError("invalid repository check timeout",9)
-      for (const argv of local.checks ?? []) validateProcessRequest(argv, value.commandTimeoutMs ?? 120_000)
+      for (const argv of local.checks ?? []) {
+        try {validateProcessRequest(argv)}
+        catch {throw new DeliveryError("config repo checks must be valid argv commands",9)}
+      }
       if (local.dependencyRevision !== undefined && (typeof local.dependencyRevision !== "string" || !local.dependencyRevision.trim()))
         throw new DeliveryError("config dependencyRevision must be a nonempty owned input pin", 9)
       return [repo, { ...local, checkout: absolute(local.checkout), worktreeRoot: absolute(local.worktreeRoot) }]
@@ -344,12 +347,14 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
           if (prLease) bindings.push(await prLease.bindJob(job, signal))
           return bindings
         } })))
-      if (mutationPending) { await completeDeliveryWait(config, repo, pr, budget()); mutationPending = false }
+      if (mutationPending && (!afterExecution || result.code)) { await completeDeliveryWait(config, repo, pr, budget()); mutationPending = false }
       const outputDigest = digest.digest("hex")
       await log({ repo, pr, step: kind, status: result.code ? "failed" : "complete", code: result.code,
         outputDigest })
       if (result.code) throw new DeliveryError(`${kind} exited ${result.code}`, result.code)
-      return afterExecution ? await afterExecution(compute) : { ...result, outputDigest }
+      const completed = afterExecution ? await afterExecution(compute) : { ...result, outputDigest }
+      if (mutationPending) { await completeDeliveryWait(config, repo, pr, budget()); mutationPending = false }
+      return completed
     } catch (error) {
       if (mutationPending && error.uncertain === false)
         await completeDeliveryWait(config, repo, pr, budget())
@@ -490,13 +495,16 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     await log({repo,pr,step:"repair-delivery",status:"delivered",head:record.head,testedHead:record.testedHead,remoteHead:record.remoteHead,receipt:file})
     return {head:record.head,receipt:file}
   }
-  async function fix(repo, pr, kind, worktree) {
+  async function fix(repo, pr, kind, worktree, repairId) {
     const local = getRepo(repo)
     if (!local.checks?.length) throw new DeliveryError("repository-owned checks required before repair",9)
+    const prior=await readJson(repairFile(repo,pr),null)
+    // Discovery precedes admission: re-read the selected receipt under the PR lease.
+    if (repairId && (!prior || prior.status === "delivered")) return {message:"REPAIR ALREADY RECONCILED"}
+    if (repairId && prior.id !== repairId) throw new DeliveryError("repair recovery receipt changed; observe before retry",75)
     const current = await view(repo, pr)
     requireOpen(current)
     if (current.isCrossRepository !== false) throw new DeliveryError("fork repair is unsupported; origin is not the PR source")
-    const prior=await readJson(repairFile(repo,pr),null)
     if(prior && prior.status !== "delivered") {
       if(prior.branch !== current.headRefName || ![prior.baseHead,prior.head].includes(current.headRefOid))
         throw new DeliveryError("repair recovery source moved; reconcile retained receipt",9)
@@ -738,17 +746,21 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
   return {
     config,
     async recoveryCandidates() {
-      const dir = path.join(config.stateDir, "waits")
-      const names = await fs.readdir(dir).catch(e => { if (e.code === "ENOENT") return []; throw e })
-      const candidates = []
-      for (const name of names) {
-        if (!name.endsWith(".json")) continue
-        const record = await readJson(path.join(dir, name))
-        if (record.schema !== "factory-delivery-wait/v1" || !config.repos[record.repo] || !Number.isSafeInteger(record.pr) || record.pr <= 0)
-          throw new DeliveryError("invalid delivery recovery record", 9)
-        if (["suspended", "resumable"].includes(record.status)) candidates.push({ repo: record.repo, pr: record.pr })
+      const candidates = new Map()
+      for (const [directory, schema] of [["waits","factory-delivery-wait/v1"],["repairs","factory-repair-delivery/v1"]]) {
+        const dir = path.join(config.stateDir,directory)
+        const names = await fs.readdir(dir).catch(e => { if (e.code === "ENOENT") return []; throw e })
+        for (const name of names) {
+          if (!name.endsWith(".json")) continue
+          const record = await readJson(path.join(dir,name))
+          if (record.schema !== schema || !config.repos[record.repo] || !Number.isSafeInteger(record.pr) || record.pr <= 0 ||
+              directory === "repairs" && (typeof record.id !== "string" || !record.id))
+            throw new DeliveryError("invalid delivery recovery record",9)
+          if (directory === "repairs" ? record.status !== "delivered" : ["suspended","resumable"].includes(record.status))
+            candidates.set(keyFor(record.repo,record.pr),{repo:record.repo,pr:record.pr,...(directory === "repairs" ? {repairId:record.id} : {})})
+        }
       }
-      return candidates
+      return [...candidates.values()]
     },
     async exclusive(repo, pr, fn) {
       getRepo(repo)
@@ -792,7 +804,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
             }
             case "pr:suspend": data = await suspend(repo, pr, head, request.stop); break
             case "pr:complete": await completeDeliveryWait(config, repo, pr, budget()); data = {}; break
-            case "fix": case "ci-fix": data = await fix(repo, pr, step, worktree); break
+            case "fix": case "ci-fix": data = await fix(repo, pr, step, worktree, request.repairId); break
             case "branch-wt": data = { worktree: await branchWorktree(repo, request.branch, request.fallback) }; break
             case "codex-guard": data = await guarded(repo, pr, request.kind, request.argv, getRepo(repo).checkout, ""); break
             case "enqueue": data = await enqueue(repo, pr, head, note); break

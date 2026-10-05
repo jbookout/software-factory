@@ -267,7 +267,7 @@ test("per-PR budget stop survives invocations and loop stops",async t=>{
  const again=await f.run("review-pr",repo,"7");assert.equal(again.code,75)
 })
 test("hard timeout kills a Codex that ignores SIGTERM and releases slot",async t=>{
- const f=await fixture(t,{hang:true},{limits:{runsPer24h:8,slots:1,timeoutMs:400}})
+ const f=await fixture(t,{hang:true},{limits:{runsPer24h:8,slots:1,timeoutMs:400},queueTimeoutMs:15000})
  const r=await f.run("review-pr",repo,"7");assert.equal(r.code,142);assert.match(r.stdout,/TIMEOUT/)
  const events=(await fs.readFile(path.join(f.stateDir,"delivery.jsonl"),"utf8")).trim().split("\n").map(JSON.parse)
  const execution=events.find(e=>e.phase==="execution")
@@ -736,7 +736,7 @@ test('interrupted source mutation is uncertain and unchanged input cannot redisp
 })
 
 test('browser concurrency 1/2 uses the same immutable fixture and bounded child load',async t=>{
- const f=await fixture(t,{}, {resources:{capacity:32,browserConcurrency:2,agentUnits:1}})
+ const f=await fixture(t,{}, {resources:{capacity:64,browserConcurrency:2,agentUnits:1}})
  const files=[]
  for(let i=0;i<4;i++) {
   const file=path.join(f.checkout,`browser-${i}.test.mjs`);files.push(file)
@@ -1084,9 +1084,25 @@ test('retro 7: failed push stays pending and recovery reads remote without rebui
  const file=path.join(f.stateDir,'repairs',`${keyFor(repo,7)}.json`)
  const pending=JSON.parse(await fs.readFile(file,'utf8'));assert.equal(pending.status,'push_pending');assert.equal(pending.testedHead,pending.head)
  await fs.writeFile(hook,'#!/bin/sh\nexit 0\n',{mode:0o755})
- ok(await f.run('fix-pr',repo,'7','-'))
+ ok(await f.wrapper('unstick','--once'))
  const delivered=JSON.parse(await fs.readFile(file,'utf8'));assert.equal(delivered.status,'delivered')
- assert.deepEqual(delivered.checks,pending.checks);assert.equal((await f.read()).calls.length,1)
+ assert.deepEqual(delivered.checks,pending.checks);assert.equal((await f.read()).calls.filter(c=>!c.prompt.includes('REVIEW MODE:')).length,1)
+})
+
+test('retro 7: reconciled recovery allows a subsequent CI repair',async t=>{
+ const f=await fixture(t,{builderNoPush:true},{queueTimeoutMs:15000})
+ ok(await f.run('fix-pr',repo,'7','-'))
+ const file=path.join(f.stateDir,'repairs',`${keyFor(repo,7)}.json`)
+ const record=JSON.parse(await fs.readFile(file,'utf8'))
+ await fs.writeFile(file,JSON.stringify({...record,status:'push_pending'}))
+ const state=await f.read()
+ state.comments.push({pr:7,author:{login:'reviewer'},body:`APPROVE\nReviewed-SHA: ${record.head}\n\nNon-blocking\nNone`})
+ state.statusCheckRollup=[{status:'COMPLETED',conclusion:'FAILURE'}]
+ await fs.writeFile(f.env.FAKE_PR,JSON.stringify(state))
+ ok(await f.wrapper('unstick','--once'))
+ const after=await f.read()
+ assert.equal(after.calls.filter(c=>!c.prompt.includes('REVIEW MODE:')).length,2)
+ assert.notEqual(after.headRefOid,record.head)
 })
 
 test('retro 7: recovery refuses a still-running check and resumes only after observing terminal failure',async t=>{
@@ -1097,23 +1113,22 @@ test('retro 7: recovery refuses a still-running check and resumes only after obs
  const file=path.join(f.stateDir,'repairs',`${keyFor(repo,7)}.json`),record=JSON.parse(await fs.readFile(file,'utf8'))
  const terminal=JSON.parse(await fs.readFile(record.checkJob.receipt,'utf8'))
  await fs.writeFile(record.checkJob.receipt,JSON.stringify({...terminal,status:'running',pid:process.pid,groupPid:null}))
- assert.equal((await f.run('fix-pr',repo,'7','-')).code,75)
+ assert.equal((await f.wrapper('unstick','--once')).code,75)
  assert.equal((await f.read()).calls.length,1)
  await fs.writeFile(record.checkJob.receipt,JSON.stringify(terminal))
  f.cfg.repos[repo].checks=[[process.execPath,'-e','']]
  await fs.writeFile(f.config,JSON.stringify(f.cfg))
- ok(await f.run('fix-pr',repo,'7','-'));assert.equal((await f.read()).calls.length,1)
+ ok(await f.wrapper('unstick','--once'));assert.equal((await f.read()).calls.filter(c=>!c.prompt.includes('REVIEW MODE:')).length,1)
 })
 
-test('retro 3: installed review/fix/queue wrappers exercise the bound PR adapter',async t=>{
- const f=await fixture(t,{builderNoPush:true},{resources:{capacity:64,browserConcurrency:1,agentUnits:1},queueTimeoutMs:15000})
+async function installedFixture(f) {
  const source=path.join(f.root,'factory-source'),installed=path.join(f.root,'installed')
  git(f.checkout,'clone','--quiet','--no-hardlinks',fileURLToPath(new URL('../',import.meta.url)),source)
  const names=['src/orch-installation.mjs','bin/orch-install.mjs','src/pr-delivery.mjs','src/pr-delivery-prompts.mjs',
-   'src/process-runner.mjs','src/process-launcher.mjs','src/process-supervisor.mjs','bin/pr-delivery.mjs',
+   'src/process-group.mjs','src/process-runner.mjs','src/process-launcher.mjs','src/process-supervisor.mjs','bin/pr-delivery.mjs',
    'deploy/orch/factory-entry.sh','deploy/orch/test-browser.sh','deploy/orch/branch-wt.sh','deploy/orch/merge-enqueue.sh']
  for(const name of names){await fs.copyFile(fileURLToPath(new URL('../'+name,import.meta.url)),path.join(source,name))}
- git(source,'add',...names);git(source,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','Delivered candidate fixture')
+ git(source,'add',...names);git(source,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--allow-empty','-qm','Delivered candidate fixture')
  await fs.symlink(fileURLToPath(new URL('../node_modules',import.meta.url)),path.join(source,'node_modules'),'dir')
  execFileSync(process.execPath,[fileURLToPath(new URL('../bin/orch-install.mjs',import.meta.url)),'install',source,installed,f.config],{encoding:'utf8'})
  const wrapper=(name,...args)=>new Promise((resolve,reject)=>{
@@ -1121,6 +1136,33 @@ test('retro 3: installed review/fix/queue wrappers exercise the bound PR adapter
    let stdout='',stderr='';child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b)
    child.on('error',reject);child.on('close',code=>resolve({code,stdout,stderr}))
  })
+ return {installed,wrapper}
+}
+
+test('retro 4: installed wrapper death interrupts its acknowledged caller-owned job',async t=>{
+ const f=await fixture(t,{},{limits:{runsPer24h:8,slots:2,timeoutMs:15000},queueTimeoutMs:15000})
+ const {installed}=await installedFixture(f)
+ // The installed entrypoint itself must remain the foreground job owner.
+ const owner=spawn('sh',[path.join(installed,'codex-guard.sh'),repo,'7','review',process.execPath,'-e','setInterval(()=>{},1000)'],{env:f.env,stdio:'ignore'})
+ let jobFile,job
+ t.after(()=>{owner.kill('SIGKILL');if(job?.groupPid)try{process.kill(-job.groupPid,'SIGKILL')}catch{}})
+ for(let i=0;i<3000;i++){
+   const names=await fs.readdir(path.join(f.stateDir,'jobs')).catch(()=>[])
+   for(const name of names.filter(n=>n.endsWith('.json'))){
+     const candidate=JSON.parse(await fs.readFile(path.join(f.stateDir,'jobs',name),'utf8'))
+     if(candidate.status==='running'){job=candidate;jobFile=path.join(f.stateDir,'jobs',name);break}
+   }
+   if(job)break;await pause(10)
+ }
+ assert.ok(job,'installed job acknowledged')
+ owner.kill('SIGKILL')
+ for(let i=0;i<200;i++){job=JSON.parse(await fs.readFile(jobFile,'utf8'));if(job.status==='interrupted')break;await pause(10)}
+ assert.equal(job.status,'interrupted');assert.equal(job.code,130)
+})
+
+test('retro 3: installed review/fix/queue wrappers exercise the bound PR adapter',async t=>{
+ const f=await fixture(t,{builderNoPush:true},{resources:{capacity:64,browserConcurrency:1,agentUnits:1},queueTimeoutMs:15000})
+ const {installed,wrapper}=await installedFixture(f)
  ok(await wrapper('review-pr',repo,'7'))
  ok(await wrapper('fix-pr',repo,'7','-'))
  ok(await wrapper('ci-fix',repo,'7','-','--no-loop'))
@@ -1145,4 +1187,53 @@ test('retro 7: terminal receipt pointer uses the existing orch inbox command',as
  const file=path.join(f.stateDir,'repairs',`${keyFor(repo,7)}.json`)
  assert.deepEqual(JSON.parse(await fs.readFile(pointer,'utf8')),['--store',store,'inbox','push','PlatformEngineer',`${repo}#7`,'delivered','--report',file])
  assert.equal(JSON.parse(await fs.readFile(file,'utf8')).status,'delivered')
+})
+
+test('retro 7: a stale recovery candidate cannot start another builder after delivery',async t=>{
+ const f=await fixture(t,{builderNoPush:true},{queueTimeoutMs:15000})
+ ok(await f.run('fix-pr',repo,'7','-'))
+ const file=path.join(f.stateDir,'repairs',`${keyFor(repo,7)}.json`),record=JSON.parse(await fs.readFile(file,'utf8'))
+ await fs.writeFile(file,JSON.stringify({...record,status:'push_pending'}))
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const [candidate]=await adapter.recoveryCandidates()
+ assert.equal(candidate.repairId,record.id)
+ // The current owner finishes after discovery, before the recovery lease is acquired.
+ await fs.writeFile(file,JSON.stringify(record))
+ const result=await adapter.exclusive(repo,7,()=>adapter.execute('fix',{...candidate,repairId:record.id}))
+ assert.equal(result.status,'pass',JSON.stringify(result))
+ assert.equal((await f.read()).calls.length,1,'completed receipt must not dispatch a builder')
+ assert.equal(JSON.parse(await fs.readFile(file,'utf8')).head,record.head)
+ await fs.writeFile(file,JSON.stringify({...record,status:'push_pending',id:'replacement-receipt'}))
+ const replaced=await adapter.exclusive(repo,7,()=>adapter.execute('fix',candidate))
+ assert.equal(replaced.data.code,75);assert.equal((await f.read()).calls.length,1)
+})
+
+test('retro 7: installed recovery observes a killed check and resumes its committed source',async t=>{
+ const f=await fixture(t,{builderNoPush:true},{limits:{runsPer24h:8,slots:2,timeoutMs:15000},queueTimeoutMs:15000})
+ const marker=path.join(f.root,'check-started')
+ f.cfg.repos[repo].checks=[[process.execPath,'-e',`require('fs').writeFileSync(${JSON.stringify(marker)},'started');setInterval(()=>{},1000)`]]
+ f.cfg.repos[repo].checkTimeoutMs=30000
+ await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ const {installed,wrapper}=await installedFixture(f)
+ const owner=spawn('sh',[path.join(installed,'fix-pr.sh'),repo,'7','-'],{env:f.env,stdio:'ignore'})
+ let job
+ t.after(()=>{owner.kill('SIGKILL');if(job?.groupPid)try{process.kill(-job.groupPid,'SIGKILL')}catch{}})
+ const file=path.join(f.stateDir,'repairs',`${keyFor(repo,7)}.json`)
+ let record
+ for(let i=0;i<3000;i++){
+   record=JSON.parse(await fs.readFile(file,'utf8').catch(()=> 'null'))
+   if(record?.checkJob){job=JSON.parse(await fs.readFile(record.checkJob.receipt,'utf8').catch(()=> 'null'))}
+   if(job?.status==='running' && await fs.access(marker).then(()=>true,()=>false))break;await pause(10)
+ }
+ assert.equal(job?.status,'running');await fs.access(marker)
+ const head=record.head
+ owner.kill('SIGKILL')
+ for(let i=0;i<200;i++){job=JSON.parse(await fs.readFile(record.checkJob.receipt,'utf8'));if(job.status==='interrupted')break;await pause(10)}
+ assert.equal(job.status,'interrupted');assert.equal(job.code,130)
+ f.cfg.repos[repo].checks=[[process.execPath,'-e','']]
+ await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ ok(await wrapper('unstick','--once'))
+ const delivered=JSON.parse(await fs.readFile(file,'utf8'))
+ assert.equal(delivered.status,'delivered');assert.equal(delivered.head,head);assert.equal(delivered.remoteHead,head)
+ assert.equal((await f.read()).calls.filter(c=>!c.prompt.includes('REVIEW MODE:')).length,1)
 })
