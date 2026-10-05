@@ -111,6 +111,30 @@ scripts are unchanged by this PR.
 
 ## Budget and CI deployment entry points
 
+### Job evidence navigation
+
+Before operating a development job, use the same pinned factory checkout and
+private config as its wrapper. All three steps are required:
+
+1. Run `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" installation-status`.
+2. Read the installation receipt named in the output through its owning
+   deployment check.
+3. Run `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" job-status "$R" "$N"`.
+
+Both actions are read-only. They identify the invoked factory source revision,
+entrypoint, required-check policy and policy source, private log and receipt
+paths. `job-status` reads the existing queue, wait and review records and streams
+the delivery log. Its event status is recorded evidence, not process liveness.
+It does not query GitHub, start a worker, reserve budget or create state.
+
+If the deployment path provides an installed-orchestration manifest, set
+`installationReceipt` in the private config to that existing receipt's path.
+The output names the path and hashes its bytes without echoing receipt contents.
+The installation remains `unverified` here: its owning deployment comparison
+must verify the installed executable hashes and source binding. A missing
+receipt never proves that a live `out/orch` copy uses the tracked implementation.
+This command does not create a second installation manifest or status database.
+
 The maintained adapters are in `deploy/orch/`. They execute the same CLI used by
 the replay tests; they contain no budget, review or CI policy of their own.
 After draining active workers, copy **all** of that directory's `.sh` files to

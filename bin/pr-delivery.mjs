@@ -10,7 +10,7 @@ try {
   const [repo, number, extra, fourth] = args
   const once = args.includes("--once"), pr = Number(number)
   const daemons = ["merge-queue", "auto-enqueue", "recover"]
-  if (!daemons.includes(action) && !["branch-wt", "import-legacy"].includes(action) && (!Number.isSafeInteger(pr) || pr <= 0)) throw new Error("PR number must be a positive integer")
+  if (!daemons.includes(action) && !["branch-wt", "import-legacy", "installation-status"].includes(action) && (!Number.isSafeInteger(pr) || pr <= 0)) throw new Error("PR number must be a positive integer")
   const request = { repo, pr }
   const loop = () => runPrDelivery({ ...request, worktree: extra, rounds: Number(fourth ?? 3) }, adapter)
   const report = result => {
@@ -20,7 +20,8 @@ try {
     const code = data.code ?? (result.status === "fail" ? 1 : 0)
     if (code && !process.exitCode) process.exitCode = code
   }
-  if (action === "pr-loop") report(await adapter.exclusive(repo, pr, loop))
+  if (["installation-status", "job-status"].includes(action)) report(await adapter.execute(action, request))
+  else if (action === "pr-loop") report(await adapter.exclusive(repo, pr, loop))
   else if (action === "recover") {
     do {
       for (const candidate of await adapter.recoveryCandidates()) {
