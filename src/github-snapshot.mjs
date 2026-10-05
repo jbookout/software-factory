@@ -14,13 +14,17 @@ const freeze = value => {
   return value
 }
 
-export function parseReview(body) {
-  if (typeof body !== "string") return null
+const REVIEW_VERDICTS = new Set(["APPROVE", "BLOCK", "REVIEW: BLOCKED", "CHANGES REQUESTED"])
+function reviewEnvelope(body) {
+  if (typeof body !== "string") return { attempted: false, review: null }
   const [verdict, line] = body.split(/\r?\n/)
   const sha = /^Reviewed-SHA: ([0-9a-f]{40})$/.exec(line ?? "")?.[1]
-  return sha && ["APPROVE", "BLOCK", "REVIEW: BLOCKED", "CHANGES REQUESTED"].includes(verdict)
-    ? { verdict, sha, body } : null
+  // A reserved envelope field or a whitespace-damaged verdict is an attempted
+  // review. Ordinary prose remains a note; damaged envelopes revoke approval.
+  const attempted = REVIEW_VERDICTS.has(verdict.trim()) || /^Reviewed-SHA:/m.test(body)
+  return { attempted, review: sha && REVIEW_VERDICTS.has(verdict) ? { verdict, sha, body } : null }
 }
+export function parseReview(body) { return reviewEnvelope(body).review }
 
 // The latest trusted author's verdict wins, including a blocking verdict.
 // Approval additionally needs the existing independent execution receipt.
@@ -28,9 +32,8 @@ export async function latestTrustedReview(comments, trustedReviewers, authentica
   const ordered = [...comments].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id)
   for (const comment of ordered) {
     if (!trustedReviewers.some(login => login.toLowerCase() === comment.user.login.toLowerCase())) continue
-    const marker = comment.body.split(/\r?\n/)[0]
-    if (!["APPROVE", "BLOCK", "REVIEW: BLOCKED", "CHANGES REQUESTED"].includes(marker)) continue
-    const candidate = parseReview(comment.body)
+    const { attempted, review: candidate } = reviewEnvelope(comment.body)
+    if (!attempted) continue
     if (!candidate) return null
     return candidate.verdict !== "APPROVE" || await authenticate(candidate) ? candidate : null
   }
@@ -47,7 +50,7 @@ function prValue(value, repo, pr) {
       ![true, false, null].includes(value.mergeable) || typeof value.mergeable_state !== "string" ||
       (value.merged && !SHA.test(value.merge_commit_sha ?? ""))) fail("invalid GitHub PR response")
   return { number: pr, title: value.title, state: value.merged ? "MERGED" : value.state.toUpperCase(),
-    baseRefName: value.base.ref, baseRefOid: value.base.sha, headRefName: value.head.ref, headRefOid: value.head.sha,
+    baseRefName: value.base.ref, baseRefOid: value.base.sha, recordedBaseOid: value.base.sha, headRefName: value.head.ref, headRefOid: value.head.sha,
     head: { sha: value.head.sha, ref: value.head.ref, repo: value.head.repo.full_name },
     base: { sha: value.base.sha, ref: value.base.ref, repo: value.base.repo.full_name },
     isCrossRepository: value.head.repo.full_name !== repo, mergeStateStatus: value.mergeable_state.toUpperCase(),
@@ -60,26 +63,28 @@ function prValue(value, repo, pr) {
 // are shared only within an observation, and every effect gets a fresh read.
 export function createGithubProvider(config, { command, getRepo, authenticate, now = Date.now }) {
   const observations = new Map()
-  async function request(repo, route, { method = "GET", fields = {}, metrics } = {}) {
+  async function transport(repo, route, { method = "GET", fields = {}, owners = [], metrics } = {}) {
     const argv = ["gh", "api", `repos/${repo}/${route}`, "--include"]
-    if (method !== "GET") {
-      argv.push("--method", method)
-      for (const [key, value] of Object.entries(fields)) argv.push("-f", `${key}=${value}`)
-    }
+    if (method !== "GET") argv.push("-X", method, "--input", "-")
     for (let attempt = 0; ; attempt++) {
       if (metrics) metrics.providerCalls++
-      const response = await command(argv, getRepo(repo).checkout, { allowFailure: true, maxOutputBytes: 16_000_000 })
+      const response = await command(argv, getRepo(repo).checkout, { allowFailure: true, maxOutputBytes: 16_000_000,
+        ...(method !== "GET" ? { input: JSON.stringify(fields), onSpawn: job => Promise.all(owners.map(owner => owner.bindJob(job))) } : {}) })
       const parts = response.stdout.split(/\r?\n\r?\n/), headers = parts.shift() ?? ""
       const status = Number(/^HTTP\/[^ ]+ (\d+)/.exec(headers)?.[1])
-      if (!response.code && status >= 200 && status < 300) {
-        try { return { value: JSON.parse(parts.join("\n\n")), headers } }
-        catch { fail("invalid GitHub REST JSON") }
-      }
       const exhausted = status === 403 && /^x-ratelimit-remaining: 0\s*$/im.test(headers)
-      const transient = response.timedOut || exhausted || [429, 500, 502, 503, 504].includes(status)
-      // Effects are never retried here: a lost acknowledgement requires state
-      // reconciliation, not another write.
-      if (method !== "GET" || !transient || attempt >= 2) fail("GitHub REST observation unavailable", transient)
+      const transient = response.timedOut || method !== "GET" && !Number.isFinite(status) || exhausted || [429, 500, 502, 503, 504].includes(status)
+      let value
+      try { value = JSON.parse(parts.join("\n\n")) } catch { value = undefined }
+      const ok = !response.code && status >= 200 && status < 300
+      // Effects are sent exactly once and bound to their writers' leases. The
+      // caller reconciles absent or ambiguous acknowledgements from observations.
+      if (method !== "GET") return { value, headers, status, ok, transient }
+      if (ok) {
+        if (value === undefined) fail("invalid GitHub REST JSON")
+        return { value, headers }
+      }
+      if (!transient || attempt >= 2) fail("GitHub REST observation unavailable", transient)
       const retryAfter = Number(/^retry-after: (\d+)/im.exec(headers)?.[1]) * 1000
       const reset = Number(/^x-ratelimit-reset: (\d+)/im.exec(headers)?.[1]) * 1000 - now()
       const delay = Number.isFinite(retryAfter) ? retryAfter : exhausted && Number.isFinite(reset) ? Math.max(0, reset) : config.retryMs
@@ -87,7 +92,9 @@ export function createGithubProvider(config, { command, getRepo, authenticate, n
       await pause(delay)
     }
   }
-  async function pages(repo, route, { field, expected = null, metrics } = {}) {
+  const request = (repo, route, options = {}) => transport(repo, route, { metrics: options.metrics })
+  const mutate = (repo, method, route, fields, owners = []) => transport(repo, route, { method, fields, owners })
+  async function pages(repo, route, { field, expected = null, metrics, rowKey = null } = {}) {
     const rows = [], ids = new Set()
     let promisedNext = false
     for (let page = 1; page <= MAX_ROWS / PAGE_SIZE; page++) {
@@ -101,8 +108,9 @@ export function createGithubProvider(config, { command, getRepo, authenticate, n
         expected = value.total_count
       }
       for (const row of batch) {
-        if (!Number.isSafeInteger(row?.id) || row.id <= 0 || ids.has(row.id)) fail("invalid or duplicate GitHub REST row")
-        ids.add(row.id)
+        const id = rowKey ? rowKey(row) : row?.id
+        if (!(rowKey ? typeof id === "string" && id.length > 0 : Number.isSafeInteger(id) && id > 0) || ids.has(id)) fail("invalid or duplicate GitHub REST row")
+        ids.add(id)
       }
       rows.push(...batch)
       const next = /<([^>]+)>;\s*rel="next"/i.exec(/^link: (.*)$/im.exec(headers)?.[1] ?? "")?.[1]
@@ -120,23 +128,29 @@ export function createGithubProvider(config, { command, getRepo, authenticate, n
     }
     fail("GitHub REST scan exceeds repository bound")
   }
-  async function collect(repo, pr, { head, requireApproval = false } = {}) {
+  async function liveTarget(repo, current, metrics) {
+    const { value } = await request(repo, `git/ref/heads/${current.base.ref.split("/").map(encodeURIComponent).join("/")}`, { metrics })
+    if (value?.ref !== `refs/heads/${current.base.ref}` || value.object?.type !== "commit" || !SHA.test(value.object.sha ?? ""))
+      fail("invalid GitHub target ref response")
+    return { ...current, baseRefOid: value.object.sha, base: { ...current.base, sha: value.object.sha } }
+  }
+  async function collect(repo, pr, { head, requireApproval = false, observeChecks = true } = {}) {
     getRepo(repo)
     const metrics = { providerCalls: 0, staleActions: 0 }, startedAt = new Date(now()).toISOString()
     const base = { schema: "factory-github-snapshot/v1", observationId: randomUUID(), repo, pr, startedAt, metrics }
     try {
       const policy = structuredClone({ requiredChecks: getRepo(repo).requiredChecks, trustedReviewers: getRepo(repo).trustedReviewers })
       if (!Number.isSafeInteger(pr) || pr <= 0 || head !== undefined && !SHA.test(head)) fail("invalid GitHub snapshot request")
-      const initial = prValue((await request(repo, `pulls/${pr}`, { metrics })).value, repo, pr)
+      const initial = await liveTarget(repo, prValue((await request(repo, `pulls/${pr}`, { metrics })).value, repo, pr), metrics)
       const observedHead = head ?? initial.headRefOid
       const comments = await pages(repo, `issues/${pr}/comments`, { expected: initial.commentCount, metrics })
       if (comments.some(c => typeof c.body !== "string" || typeof c.user?.login !== "string" ||
           !Number.isFinite(Date.parse(c.created_at)) || !Number.isFinite(Date.parse(c.updated_at)))) fail("invalid GitHub comments response")
       const review = await latestTrustedReview(comments, policy.trustedReviewers, candidate => authenticate(repo, pr, candidate))
       const refused = requireApproval && (review?.verdict !== "APPROVE" || review.sha !== initial.headRefOid)
-      const checkRuns = refused ? null : await pages(repo, `commits/${observedHead}/check-runs?filter=all`, { field: "check_runs", metrics })
-      const statuses = refused ? null : (await pages(repo, `commits/${observedHead}/statuses`, { metrics })).map(s => ({ ...s, head_sha: observedHead }))
-      const final = prValue((await request(repo, `pulls/${pr}`, { metrics })).value, repo, pr)
+      const checkRuns = refused || !observeChecks ? null : await pages(repo, `commits/${observedHead}/check-runs?filter=all`, { field: "check_runs", metrics })
+      const statuses = refused || !observeChecks ? null : (await pages(repo, `commits/${observedHead}/statuses`, { metrics })).map(s => ({ ...s, head_sha: observedHead }))
+      const final = await liveTarget(repo, prValue((await request(repo, `pulls/${pr}`, { metrics })).value, repo, pr), metrics)
       if (JSON.stringify(initial) !== JSON.stringify(final) || JSON.stringify(policy) !==
           JSON.stringify({ requiredChecks: getRepo(repo).requiredChecks, trustedReviewers: getRepo(repo).trustedReviewers })) {
         metrics.staleActions++
@@ -146,7 +160,8 @@ export function createGithubProvider(config, { command, getRepo, authenticate, n
         reason: "no-current-trusted-approval", comments, review, ci: { state: "unobserved", nextAction: "await-trusted-review" },
         inventory: { comments, checkRuns: null, statuses: null, requiredChecks: policy.requiredChecks },
         fetchedAt: new Date(now()).toISOString(), errors: [] })
-      const ci = classifyChecks({ head: observedHead, observedHead: final.headRefOid, requiredChecks: policy.requiredChecks, checkRuns, statuses })
+      const ci = observeChecks ? classifyChecks({ head: observedHead, observedHead: final.headRefOid, requiredChecks: policy.requiredChecks, checkRuns, statuses })
+        : { state: "unobserved", nextAction: "await-updated-head" }
       if (ci.state === "provider-unknown") fail("invalid hosted checks response")
       return freeze({ ...base, ...final, state: "known", prState: final.state, comments, ci, review,
         inventory: { comments, checkRuns, statuses, requiredChecks: policy.requiredChecks },
@@ -158,12 +173,12 @@ export function createGithubProvider(config, { command, getRepo, authenticate, n
     }
   }
   function snapshot(repo, pr, options = {}) {
-    const key = JSON.stringify([repo, pr, options.head ?? null, options.requireApproval ?? false])
+    const key = JSON.stringify([repo, pr, options.head ?? null, options.requireApproval ?? false, options.observeChecks ?? true])
     if (!observations.has(key)) {
       const pending = collect(repo, pr, options).finally(() => observations.delete(key))
       observations.set(key, pending)
     }
     return observations.get(key)
   }
-  return { snapshot, pages, request }
+  return { snapshot, pages, request, mutate }
 }

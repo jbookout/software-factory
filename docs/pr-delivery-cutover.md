@@ -57,7 +57,7 @@ Use `R=owner/repository`, `N=<pr>`, `W=<worktree-or-dash>`, `H=<approved-full-sh
 | `ci-fix.sh R N` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" ci-fix "$R" "$N"` |
 | `codex-guard.sh R N kind command...` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" codex-guard "$R" "$N" "$KIND" "${COMMAND[@]}"` |
 | `branch-wt.sh repo-dir B F` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" branch-wt "$R" "$B" "$F"` |
-| `merge-queue.sh` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" merge-queue` |
+| `merge-queue.sh` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" merge-queue "$R"` (one consumer per repository) |
 | `merge-one-core.sh R N H note` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" merge-one-core "$R" "$N" "$H" "$NOTE"` |
 | `merge-enqueue.sh R N H note` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" merge-enqueue "$R" "$N" "$H" "$NOTE"` |
 | `auto-enqueue.sh` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" auto-enqueue` |
@@ -66,8 +66,19 @@ Set `KIND` and the `COMMAND` argv array for the guard. Replace the loop's `3`
 with the existing caller's round limit. `branch-wt` takes the configured repo
 identity instead of a checkout path. `ci-fix` re-enters the PR loop; `--no-loop`
 disables that for a caller already controlling rounds. Queue/auto-enqueue accept
-`--once` for supervised checks. Never use GitHub auto-merge. Direct merge-core
-calls acquire the same global merge lease as the queue. Review uses a fresh,
+`--once` for supervised checks. Never use GitHub auto-merge. Each repository has
+its own integration lease, shared by its queue consumer and direct merge-core
+calls; both also take the PR writer lease that fixers hold. Every GitHub write
+runs under the process supervisor bound to both leases, so a dead controller's
+ownership survives until its write job is gone. A behind-main head receives one
+update request. Accepted or ambiguous responses
+remain pending until a changed head proves the approved-head/main-merge relationship;
+consumer restarts reconcile the stored intent without repeating the write. Old-head
+CI is not consumed while pending. The integrated head requires fresh review
+and CI of the integrated tree. Merging requires an
+active `main` ruleset with strict required status checks that the merging
+identity cannot bypass, so GitHub itself refuses a merge after main moves; the
+delivered squash parent must equal the recorded integration base. Review uses a fresh,
 detached worktree and process; builders never post approvals. Queue approval
 attestations cannot substitute for independent review comments. Each review uses
 a unique attempt directory; live, dirty, or interrupted attempts are preserved.
@@ -180,7 +191,9 @@ Known observations bind repository/PR, full head and base SHA/ref/repository,
 PR state/draft/mergeability, all comment/check/status pages, the named required
 inventory, fetch time and latest trusted verdict. The reader validates provider
 counts, duplicate IDs and advertised pagination links, and fences the observation
-with a second PR read. A changed source/base/state/comment count or policy is
+with a second PR read and reads of the live target ref before and after collection.
+The PR response’s recorded base remains diagnostic; action checks bind the live
+target SHA. A changed source/base/state/comment count or policy is
 unknown. This is a REST observation, not an atomic provider transaction. Every
 write rechecks current preconditions; merge also sends the full head SHA as the
 provider compare-and-swap. REST cannot mark a draft ready: draft delivery refuses
@@ -214,3 +227,8 @@ and verified review posters. Copy the entire wrapper set together, including
 `factory-entry.sh`; retain previous wrappers for rollback. This source change
 does not modify running `carr-system/out/orch` scripts, start workers, or change
 product deployment authority.
+
+Malformed attempted review envelopes from trusted authors invalidate older approval,
+including SHA-only comments and whitespace-damaged verdicts. Ordinary notes remain
+ignored. Missing local receipt source objects refuse that approval while keeping
+readiness and fresh review reachable; fresh review fetches and verifies its source.

@@ -37,7 +37,7 @@ try {
   }
   else if (daemons.includes(action)) {
     do {
-      const result = await adapter.execute(action)
+      const result = await adapter.execute(action, { repo: action === "merge-queue" && repo !== "--once" ? repo : undefined })
       report(result)
       if (once || (result.status === "fail" && !result.data.transient)) break
       process.exitCode = 0

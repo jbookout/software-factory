@@ -4,9 +4,8 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { execFileSync, spawn } from "node:child_process"
-import { createHash, randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
-import { acquireLease } from "../src/pr-delivery-state.mjs"
+import { acquireLease, keyFor, pause } from "../src/pr-delivery-state.mjs"
 
 const cli = fileURLToPath(new URL("../bin/pr-delivery.mjs", import.meta.url))
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
@@ -35,34 +34,60 @@ if(tool === 'codex') {
 } else {
  s.ghCalls.push(args); save(); const action=args[1];
  if(args[0]==='api') {
- const route=args[1], params=new URL('https://fixture.invalid/'+route).searchParams;
+ const route=args.find(a=>a.startsWith('repos/')), params=new URL('https://fixture.invalid/'+route).searchParams;
  const page=Number(params.get('page')||1),pageSize=Number(params.get('per_page')||100);
  const respond=value=>console.log('HTTP/2.0 200 OK\\n\\n'+JSON.stringify(value));
+ if(args.includes('-X')) {
+ // Writes: JSON body on stdin; s.writeFaults[name] injects one outcome per call.
+ const body=JSON.parse(fs.readFileSync(0,'utf8')),name=route.split('/').at(-1);
+ const reply=(code,value)=>{console.log('HTTP/2.0 '+code+' synthetic\\n\\n'+JSON.stringify(value));process.exit(code<300?0:1)};
+ const fault=s.writeFaults?.[name]?.shift();save();
+ if(s.pauseWrite===name) {fs.writeFileSync(s.pauseMarker,String(process.pid));Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,3000);}
+ if(fault==='no-response') process.exit(1);
+ if(typeof fault==='number') reply(fault,{message:'synthetic'});
+ const topicHasMain=()=>{try{git('--git-dir',s.remote,'merge-base','--is-ancestor','refs/heads/main','refs/heads/topic');return true}catch{return false}};
+ if(name==='comments') {
+ s.comments.push({body:body.body,pr:Number(route.split('/')[4]),author:{login:'reviewer'}});
+ if(s.blockBeforeMerge&&body.body.startsWith('DELIVERY VERIFIED')) s.comments.push({body:'REVIEW: BLOCKED\\nReviewed-SHA: '+s.headRefOid,author:{login:'reviewer'}});
+ if(s.advanceMainOnComment&&body.body.startsWith('DELIVERY VERIFIED')) {git('-C',s.checkout,'checkout','-q','main');fs.writeFileSync(s.checkout+'/late-main.txt','late');git('-C',s.checkout,'add','late-main.txt');git('-C',s.checkout,'commit','-qm','Late main');git('-C',s.checkout,'push','-q','origin','main');s.advanceMainOnComment=false;}
+ save();reply(201,{id:s.comments.length,body:body.body});
+ } else if(name==='update-branch') {
+ if(s.pendingUpdate) {s.updatePending=true;s.pendingReads=0;save();reply(s.pendingUpdate==='lost'?502:202,{message:'Updating pull request branch.'});}
+ if(body.expected_head_sha!==s.headRefOid) reply(422,{message:'expected head sha mismatch'});
+ git('-C',s.checkout,'checkout','-q','topic');git('-C',s.checkout,'fetch','-q','origin');
+ try {git('-C',s.checkout,'merge','--no-edit','origin/main')} catch {git('-C',s.checkout,'merge','--abort');git('-C',s.checkout,'checkout','-q','main');reply(422,{message:'merge conflict'})}
+ git('-C',s.checkout,'push','-q','origin','topic');git('-C',s.checkout,'checkout','-q','main');s.headRefOid=git('--git-dir',s.remote,'rev-parse','refs/heads/topic');save();
+ if(s.loseUpdateResponse) reply(502,{message:'synthetic lost response'});
+ reply(202,{message:'Updating pull request branch.'});
+ } else if(name==='merge') {
+ if(body.merge_method!=='squash' || body.sha!==s.headRefOid) reply(409,{message:'Head branch was modified'});
+ // Models an active strict ruleset: the provider refuses a head that lacks main.
+ const strict=(s.rules??[{parameters:{strict_required_status_checks_policy:true}}]).some(r=>r.parameters?.strict_required_status_checks_policy)
+  && (s.ruleset?.enforcement??'active')==='active' && (s.ruleset?.current_user_can_bypass??'never')==='never';
+ if(strict && !topicHasMain()) reply(405,{message:'Head branch is not up to date with the base branch'});
+ git('-C',s.checkout,'fetch','-q','origin');git('-C',s.checkout,'checkout','-q','main');git('-C',s.checkout,'reset','-q','--hard','origin/main');git('-C',s.checkout,'merge','--squash','origin/topic');git('-C',s.checkout,'commit','-qm','Merge PR');git('-C',s.checkout,'push','-q','origin','main');
+ s.state='MERGED';s.mergeCommit={oid:git('-C',s.checkout,'rev-parse','HEAD')};save();
+ if(s.lostMergeReply) reply(502,{});
+ reply(200,s.missingAck||s.emptyMergeReply?{}:{merged:true,sha:s.mergeCommit.oid});
+ }
+ console.error('unexpected REST write');process.exit(2);
+ }
  if(s.restCodes?.length) {const code=s.restCodes.shift();save();console.log('HTTP/2.0 '+code+' synthetic\\nRetry-After: 0\\n'+(s.quotaEvidence?'X-RateLimit-Remaining: 0\\n':'')+'\\n{}');process.exit(1);}
  if(s.apiFailure) { console.log('HTTP/2.0 403 Forbidden\\nx-ratelimit-remaining: 0\\n\\n{}');console.error('provider unavailable');process.exit(1); }
  if(s.restFault) { if(s.restFault==='exception') process.exit(2); if(s.restFault==='refusal') {console.log('HTTP/2.0 401 Unauthorized\\n\\n{}');process.exit(1);}
  console.log('HTTP/2.0 200 OK\\n\\n'+s.restFault);process.exit(0); }
- if(args.includes('--method')) {
- const field=k=>args[args.indexOf(k+'=')];
- const fields=Object.fromEntries(args.filter((_,i)=>args[i-1]==='-f').map(v=>[v.slice(0,v.indexOf('=')),v.slice(v.indexOf('=')+1)]));
- if(route.endsWith('/comments')) {s.comments.push({body:fields.body,pr:Number(/issues\\/([0-9]+)/.exec(route)[1]),author:{login:'reviewer'}});if(s.blockBeforeMerge&&fields.body.startsWith('DELIVERY VERIFIED')) s.comments.push({body:'REVIEW: BLOCKED\\nReviewed-SHA: '+s.headRefOid,author:{login:'reviewer'}});save();respond({id:s.comments.length,body:fields.body});}
- else if(route.endsWith('/update-branch')) {
- if(fields.expected_head_sha!==s.headRefOid) process.exit(2);
- git('-C',s.checkout,'checkout','-q','topic');git('-C',s.checkout,'fetch','-q','origin');git('-C',s.checkout,'merge','--no-edit','origin/main');git('-C',s.checkout,'push','-q','origin','topic');respond({message:'Updating pull request branch.'});
- } else if(route.endsWith('/merge')) {
- if(fields.merge_method!=='squash'||fields.sha!==s.headRefOid) process.exit(2);
- git('-C',s.checkout,'fetch','-q','origin');git('-C',s.checkout,'checkout','-q','main');git('-C',s.checkout,'merge','--squash','origin/topic');git('-C',s.checkout,'commit','-qm','Merge PR');git('-C',s.checkout,'push','-q','origin','main');
- s.state='MERGED';s.mergeCommit={oid:git('-C',s.checkout,'rev-parse','HEAD')};save();
- if(s.emptyMergeReply) {respond({});process.exit(0);}
- if(s.lostMergeReply) {console.log('HTTP/2.0 502 Error\\n\\n{}');process.exit(1);}
- respond({merged:true,sha:s.mergeCommit.oid});
- } else process.exit(2);
- process.exit(0);
- }
  const pr=(number=s.number)=>({id:number,number,title:s.title,state:s.state==='OPEN'?'open':'closed',merged:s.state==='MERGED',draft:s.isDraft,
- head:{sha:s.headRefOid,ref:s.headRefName,repo:{full_name:s.isCrossRepository?'fixture/fork':'fixture/new-repository'}},
- base:{ref:s.baseRefName,sha:git('--git-dir',s.remote,'rev-parse','refs/heads/main'),repo:{full_name:'fixture/new-repository'}},comments:s.comments.filter(c=>(c.pr??7)===number).length,mergeable:s.mergeable==='UNKNOWN'?null:s.mergeable!=='CONFLICTING',mergeable_state:s.mergeStateStatus.toLowerCase(),merge_commit_sha:s.mergeCommit?.oid});
+ head:{sha:s.headRefOid,ref:s.headRefName,repo:{full_name:s.isCrossRepository?'fixture/fork':(s.repo??'fixture/new-repository')}},
+ base:{ref:s.baseRefName,sha:s.recordedBase??git('--git-dir',s.remote,'rev-parse','refs/heads/main'),repo:{full_name:s.repo??'fixture/new-repository'}},comments:s.comments.filter(c=>(c.pr??7)===number).length,mergeable:s.mergeable==='UNKNOWN'?null:s.mergeable!=='CONFLICTING',mergeable_state:s.mergeStateStatus.toLowerCase(),merge_commit_sha:s.mergeCommit?.oid});
  if(/pulls\\/[0-9]+$/.test(route)) {
+ if(s.updatePending && s.updateAfterReads && ++s.pendingReads>=s.updateAfterReads) {
+ git('-C',s.checkout,'checkout','-q','topic');git('-C',s.checkout,'fetch','-q','origin');
+ if(s.badUpdate) {fs.writeFileSync(s.checkout+'/unreviewed.txt','unreviewed');git('-C',s.checkout,'add','unreviewed.txt');git('-C',s.checkout,'commit','-qm','Unrelated change');}
+ else git('-C',s.checkout,'merge','--no-edit','origin/main');
+ git('-C',s.checkout,'push','-q','origin','topic');git('-C',s.checkout,'checkout','-q','main');
+ s.headRefOid=git('--git-dir',s.remote,'rev-parse','refs/heads/topic');s.updatePending=false;save();
+ }
+
  if(s.moveDuringChecks && ++s.moveViewCount>1) {
  git('-C',s.checkout,'checkout','-q','topic');fs.writeFileSync(s.checkout+'/moved.txt','moved');git('-C',s.checkout,'add','moved.txt');git('-C',s.checkout,'commit','-qm','Move head');git('-C',s.checkout,'push','-q','origin','topic');
  s.headRefOid=git('--git-dir',s.remote,'rev-parse','refs/heads/topic');s.moveDuringChecks=false;save(); }
@@ -80,6 +105,11 @@ if(tool === 'codex') {
  const statuses=s.statuses??s.statusCheckRollup.filter(c=>c.__typename==='StatusContext').map((c,i)=>({id:i+1,context:c.context??'test',state:c.state?.toLowerCase()}));
  respond(statuses.slice((page-1)*pageSize,page*pageSize));
  }
+ else if(route.includes('/git/ref/heads/')) respond({ref:'refs/heads/main',object:{type:'commit',sha:git('--git-dir',s.remote,'rev-parse','refs/heads/main')}});
+ else if(route.includes('/rules/branches/main')) {
+ const rules=s.rules??[{type:'required_status_checks',ruleset_id:1,parameters:{strict_required_status_checks_policy:true}}];
+ respond(rules.slice((page-1)*pageSize,page*pageSize));
+ } else if(route.endsWith('/rulesets/1')) respond(s.ruleset??{id:1,enforcement:'active',current_user_can_bypass:'never'});
  else { console.error('unexpected REST route');process.exit(2); }
  } else {console.error('GraphQL PR route forbidden');process.exit(2);}
 }
@@ -104,7 +134,7 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
  const state={ remote,checkout,number:7,title:"Fixture PR",state:"OPEN",baseRefName:"main",isCrossRepository:false,headRefName:"topic",headRefOid:head,mergeStateStatus:"CLEAN",mergeable:"MERGEABLE",isDraft:false,author:{login:"builder"},comments:[],statusCheckRollup:[{status:"COMPLETED",conclusion:"SUCCESS"}],calls:[],ghCalls:[],...overrides }
  await fs.writeFile(env.FAKE_PR,JSON.stringify(state))
  const config=path.join(root,"config.json"), stateDir=path.join(root,"state")
- const cfg={repos:{"fixture/new-repository":{checkout,originUrl:remote,worktreeRoot:path.join(root,"worktrees"),requiredChecks:[{name:"test"}],trustedReviewers:["reviewer"]}},stateDir,codex:{model:"fixture-model",effort:"high"},limits:{runsPer24h:8,slots:2,timeoutMs:5000},pollMs:5,retryMs:0,commandTimeoutMs:5000,...configOverrides}
+ const cfg={repos:{"fixture/new-repository":{checkout,originUrl:remote,worktreeRoot:path.join(root,"worktrees"),requiredChecks:[{name:"test"}],trustedReviewers:["reviewer"]}},stateDir,codex:{model:"fixture-model",effort:"high"},limits:{runsPer24h:8,slots:2,timeoutMs:5000},pollMs:5,retryMs:0,commandTimeoutMs:5000,checksTimeoutMs:80,...configOverrides}
  await fs.writeFile(config,JSON.stringify(cfg))
  const read=async()=>JSON.parse(await fs.readFile(env.FAKE_PR,"utf8"))
  const launch=(command,args,workerEnv=env)=>new Promise((resolve,reject)=>{
@@ -116,14 +146,6 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
    {...env,FACTORY_ROOT:fileURLToPath(new URL("../",import.meta.url)),FACTORY_PR_CONFIG:config})
  const approve=async (body,number=7)=>{
   if(body) { const s=await read();s.comments.push({body,author:{login:"reviewer"}});await fs.writeFile(env.FAKE_PR,JSON.stringify(s));
-   if(body.startsWith("REVIEW: BLOCKED\n") || body.startsWith("CHANGES REQUESTED\n")) {
-    const id=randomUUID(), stem=path.join(stateDir,"reviews",id), prompt="synthetic independent reviewer", output=stem+".output";
-    const hash=v=>createHash("sha256").update(v).digest("hex");
-    const comment=body+"\nFactory-Review: "+id;s.comments.at(-1).body=comment;
-    await fs.mkdir(path.dirname(stem),{recursive:true});await fs.writeFile(stem+".prompt",prompt);await fs.writeFile(output,body);
-    await fs.writeFile(stem+".json",JSON.stringify({schema:"factory-review/v1",repo:"fixture/new-repository",pr:number,head,tree:g("rev-parse",head+"^{tree}"),verdict:body.split("\n")[0],sourceVerified:true,execution:{code:0,pid:1234},output,promptDigest:hash(prompt),outputDigest:hash(body),commentDigest:hash(comment)}));
-    await fs.writeFile(env.FAKE_PR,JSON.stringify(s));
-   }
    return }
   const before=await read(), apiFailure=before.apiFailure, move=before.moveDuringChecks;before.apiFailure=false;before.moveDuringChecks=false;await fs.writeFile(env.FAKE_PR,JSON.stringify(before))
   const r=await run("review-pr","fixture/new-repository",String(number));assert.equal(r.code,0,JSON.stringify(r))
@@ -135,6 +157,7 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
 }
 const repo="fixture/new-repository"
 const ok = r => assert.equal(r.code,0,JSON.stringify(r))
+const merges = a => a.includes("-X") && a.some(v=>v.endsWith("/merge"))
 
 test("approve -> enqueue -> serial squash merge verifies main",async t=>{
  const f=await fixture(t);ok(await f.run("review-pr",repo,"7"));const s=await f.read()
@@ -144,7 +167,7 @@ test("approve -> enqueue -> serial squash merge verifies main",async t=>{
  assert.ok(s.calls[0].args.includes("fixture-model"))
  ok(await f.run("auto-enqueue","--once"));ok(await f.run("merge-queue","--once"))
  const merged=await f.read();assert.equal(merged.state,"MERGED");assert.equal(f.g("rev-parse","origin/main"),merged.mergeCommit.oid)
- assert.ok(merged.ghCalls.some(a=>a[1].endsWith("/merge")&&a.includes("sha="+merged.headRefOid)&&!a.includes("--auto")))
+ assert.ok(merged.ghCalls.some(a=>a.includes("PUT")&&a.some(v=>v.endsWith("/pulls/7/merge"))&&!a.includes("--auto")))
 })
 test("blocked review -> fix -> re-review uses confirmation scope",async t=>{
  const f=await fixture(t,{blockOnce:true});ok(await f.run("pr-loop",repo,"7","-","3"));const s=await f.read()
@@ -241,7 +264,7 @@ test("already merged state must prove its commit exists on main and delivers the
  const f=await fixture(t,{state:"MERGED",mergeCommit:{oid:"a".repeat(40)}})
  const r=await f.run("merge-one-core",repo,"7",f.head)
  assert.notEqual(r.code,0);assert.match(r.stderr,/MERGE.*(MAIN|SOURCE|VERIFY)/)
- assert.equal((await f.read()).ghCalls.filter(a=>a[1].endsWith("/merge")).length,0)
+ assert.equal((await f.read()).ghCalls.filter(merges).length,0)
 })
 test("per-PR budget stop survives invocations and loop stops",async t=>{
  const f=await fixture(t,{blockOnce:true},{limits:{runsPer24h:1,slots:1,timeoutMs:5000}})
@@ -279,7 +302,7 @@ test("unknown repo rejected with a clear configuration message",async t=>{
 })
 test("stale approval on moved head requires re-review and cannot merge",async t=>{
  const f=await fixture(t);await f.approve();f.g("checkout","topic");await fs.writeFile(path.join(f.checkout,"extra.txt"),"extra");f.g("add","extra.txt");f.g("commit","-qm","Extra");f.g("push","-q","origin","topic");f.g("checkout","main")
- const r=await f.run("merge-one-core",repo,"7",f.head);assert.equal(r.code,1);assert.match(r.stderr,/fresh review/)
+ const r=await f.run("merge-one-core",repo,"7",f.head);assert.equal(r.code,2);assert.match(r.stderr,/fresh review/)
  ok(await f.run("pr-loop",repo,"7","-","2"));assert.equal((await f.read()).calls.length,1)
 })
 test("a blocked comment quoting Reviewed-SHA is not independent approval",async t=>{
@@ -292,7 +315,7 @@ test("a builder formatted approval has no reviewer execution and cannot merge",a
  await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
  const r=await f.run("merge-one-core",repo,"7",f.head)
  assert.equal(r.code,4);assert.equal((await f.read()).state,"OPEN")
- assert.equal((await f.read()).ghCalls.filter(a=>a[1].endsWith("/merge")).length,0)
+ assert.equal((await f.read()).ghCalls.filter(merges).length,0)
 })
 test("independence comes from fresh execution even with a shared GitHub account",async t=>{
  const f=await fixture(t);await f.approve()
@@ -313,9 +336,9 @@ for(const artifact of ["prompt","output","receipt"]) test(`changed reviewer ${ar
 test("head moving during checks cannot merge",async t=>{
  const f=await fixture(t,{moveDuringChecks:true});await f.approve();const r=await f.run("merge-one-core",repo,"7",f.head);assert.equal(r.code,1);assert.equal((await f.read()).state,"OPEN")
 })
-test("automatic main merge preserves approval only after tree proof",async t=>{
+test("automatic main merge invalidates the pre-integration review",async t=>{
  const f=await fixture(t);await f.approve();await fs.writeFile(path.join(f.checkout,"main-change.txt"),"main");f.g("add","main-change.txt");f.g("commit","-qm","Main advances");f.g("push","-q","origin","main")
- ok(await f.run("merge-one-core",repo,"7",f.head));assert.equal((await f.read()).state,"MERGED")
+ const r=await f.run("merge-one-core",repo,"7",f.head);assert.equal(r.code,2);assert.equal((await f.read()).state,"OPEN")
 })
 
 test("concurrent guard invocations cannot overspend a per-PR budget",async t=>{
@@ -385,7 +408,7 @@ test("a valid already merged PR is verified again without another merge",async t
  const first=await f.read()
  ok(await f.run("merge-one-core",repo,"7",f.head))
  const r=await f.run("pr-loop",repo,"7","-","1");ok(r);assert.match(r.stdout,/source verified/)
- const after=await f.read();assert.equal(after.ghCalls.filter(a=>a[1].endsWith("/merge")).length,1)
+ const after=await f.read();assert.equal(after.ghCalls.filter(merges).length,1)
  assert.equal(after.calls.length,0);assert.equal(after.mergeCommit.oid,first.mergeCommit.oid)
 })
 test("red hosted checks refuse merge without a queue approval comment",async t=>{
@@ -407,7 +430,7 @@ test("auto enqueue reaches approved PRs beyond the first fifty results",async t=
 test("concurrent merge workers use a single serial owner",async t=>{
  const f=await fixture(t);await f.approve();ok(await f.run("merge-enqueue",repo,"7",f.head))
  const results=await Promise.all([f.run("merge-queue","--once"),f.run("merge-queue","--once")])
- assert.ok(results.some(r=>r.code===0));assert.ok(results.every(r=>[0,75].includes(r.code)),JSON.stringify(results));assert.equal((await f.read()).ghCalls.filter(a=>a[1].endsWith("/merge")).length,1)
+ assert.ok(results.some(r=>r.code===0));assert.ok(results.every(r=>[0,75].includes(r.code)),JSON.stringify(results));assert.equal((await f.read()).ghCalls.filter(merges).length,1)
 })
 test("duplicate PR loops allow only one fixer/reviewer",async t=>{
  const f=await fixture(t,{noProgress:true});await f.approve("REVIEW: BLOCKED\nReviewed-SHA: "+f.head+"\n1. defect")
@@ -416,7 +439,7 @@ test("duplicate PR loops allow only one fixer/reviewer",async t=>{
 test("manual merge edits invalidate deterministic re-approval",async t=>{
  const f=await fixture(t);await f.approve();await fs.writeFile(path.join(f.checkout,"main-change.txt"),"main");f.g("add","main-change.txt");f.g("commit","-qm","Main advances");f.g("push","-q","origin","main")
  f.g("checkout","topic");f.g("merge","--no-commit","origin/main");await fs.writeFile(path.join(f.checkout,"extra.txt"),"hand edit");f.g("add","extra.txt");f.g("commit","-qm","Merge with edits");f.g("push","-q","origin","topic");f.g("checkout","main")
- const r=await f.run("merge-one-core",repo,"7",f.head);assert.equal(r.code,2);assert.match(r.stderr,/HAND EDITS/);assert.equal((await f.read()).state,"OPEN")
+ const r=await f.run("merge-one-core",repo,"7",f.head);assert.equal(r.code,2);assert.match(r.stderr,/needs fresh review/);assert.equal((await f.read()).state,"OPEN")
 })
 
 test("read-only legacy import preserves pending FIFO entries and recent usage",async t=>{
@@ -695,7 +718,7 @@ test("snapshot carries full source inventory and one provider observation",async
  const v=JSON.parse(r.stdout);assert.equal(v.schema,"factory-github-snapshot/v1");assert.equal(v.state,"known");
  assert.equal(v.head.sha,f.head);assert.match(v.base.sha,/^[0-9a-f]{40}$/);
  assert.equal(v.inventory.checkRuns.length,1);assert.equal(v.inventory.comments.length,0);
- assert.equal(v.metrics.providerCalls,5);assert.equal(v.metrics.staleActions,0);assert.ok(Date.parse(v.fetchedAt));
+ assert.equal(v.metrics.providerCalls,7);assert.equal(v.metrics.staleActions,0);assert.ok(Date.parse(v.fetchedAt));
 });
 
 test("latest trusted BLOCK after APPROVE defeats every deployed reader",async t=>{
@@ -709,7 +732,7 @@ test("latest trusted BLOCK after APPROVE defeats every deployed reader",async t=
 for(const replyFault of ["lostMergeReply","emptyMergeReply"]) test(`merged retry after ${replyFault} authenticates ancestry and never repeats the effect`,async t=>{
  const f=await fixture(t);await f.approve();const s=await f.read();s[replyFault]=true;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s));
  ok(await f.wrapper("merge-one-core",repo,"7",f.head));ok(await f.wrapper("merge-one-core",repo,"7",f.head));
- const after=await f.read();assert.equal(after.ghCalls.filter(a=>a[1].endsWith("/merge")).length,1);
+ const after=await f.read();assert.equal(after.ghCalls.filter(a=>a.some(v=>v.endsWith("/merge"))).length,1);
  assert.equal(f.g("rev-parse","origin/main"),after.mergeCommit.oid);
  assert.equal(f.g("merge-base","--is-ancestor",after.mergeCommit.oid,"origin/main"),"");
 });
@@ -722,5 +745,199 @@ for(const body of [h=>`Reviewed-SHA: ${h}`,h=>`APPROVE\nReviewed-SHA: ${h.slice(
 test("later BLOCK at the final action recheck prevents a stale merge",async t=>{
  const f=await fixture(t);await f.approve();const s=await f.read();s.blockBeforeMerge=true;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s));
  assert.equal((await f.wrapper("merge-one-core",repo,"7",f.head)).code,4);
- const after=await f.read();assert.equal(after.state,"OPEN");assert.equal(after.ghCalls.filter(a=>a[1].endsWith("/merge")).length,0);
+ const after=await f.read();assert.equal(after.state,"OPEN");assert.equal(after.ghCalls.filter(a=>a.some(v=>v.endsWith("/merge"))).length,0);
 });
+const advanceMain = async (f, file = "producer-contract.txt") => {
+ await fs.writeFile(path.join(f.checkout,file),"changed contract\n")
+ f.g("add",file); f.g("commit","-qm","Producer contract advances"); f.g("push","-q","origin","main")
+}
+const queueOf = async f => JSON.parse(await fs.readFile(path.join(f.stateDir,"queue.json")))
+const remoteTopic = f => git(f.root,"--git-dir",f.remote,"rev-parse","refs/heads/topic")
+
+test("different-file interaction is integrated before fresh exact-tree review", async t => {
+ const f=await fixture(t); await f.approve(); await advanceMain(f)
+ const r=await f.run("merge-one-core",repo,"7",f.head)
+ assert.equal(r.code,2,JSON.stringify(r)); assert.match(r.stderr,/needs fresh review/)
+ const s=await f.read(); assert.equal(s.state,"OPEN"); assert.notEqual(s.headRefOid,f.head)
+ assert.ok(!s.ghCalls.some(merges))
+ await f.approve(); const integrated=(await f.read()).headRefOid
+ ok(await f.run("merge-one-core",repo,"7",integrated)); assert.equal((await f.read()).state,"MERGED")
+})
+
+test("late main update during delivery evidence cannot deliver an unreviewed tree", async t => {
+ const f=await fixture(t,{advanceMainOnComment:true}); await f.approve()
+ const r=await f.run("merge-one-core",repo,"7",f.head)
+ assert.equal(r.code,1,JSON.stringify(r)); assert.match(r.stderr,/BASE MOVED/)
+ const s=await f.read(); assert.equal(s.state,"OPEN"); assert.equal(s.mergeCommit,undefined)
+ assert.ok(!git(f.root,"--git-dir",f.remote,"ls-tree","-r","--name-only","refs/heads/main").includes("feature.txt"))
+})
+
+for(const [label,state] of [["no strict rule",{rules:[]}],["non-strict rule",{rules:[{type:"required_status_checks",ruleset_id:1,parameters:{strict_required_status_checks_policy:false}}]}],
+  ["bypassable ruleset",{ruleset:{id:1,enforcement:"active",current_user_can_bypass:"always"}}],["evaluate-only ruleset",{ruleset:{id:1,enforcement:"evaluate",current_user_can_bypass:"never"}}]])
+ test(`merge refuses without a server-enforced up-to-date base: ${label}`, async t => {
+  const f=await fixture(t,state); await f.approve()
+  const r=await f.run("merge-one-core",repo,"7",f.head)
+  assert.equal(r.code,9,JSON.stringify(r)); assert.match(r.stderr,/NOT SERVER-ENFORCED/)
+  const s=await f.read(); assert.equal(s.state,"OPEN"); assert.ok(s.ghCalls.every(a=>!a.includes("-X")),"no evidence comment or merge")
+ })
+
+test("merged delivery is validated against the saved integration base", async t => {
+ const f=await fixture(t,{missingAck:true}); await f.approve()
+ ok(await f.run("merge-one-core",repo,"7",f.head))
+ const [name]=await fs.readdir(path.join(f.stateDir,"integrations")), file=path.join(f.stateDir,"integrations",name)
+ const record=JSON.parse(await fs.readFile(file)); record.base=f.head; await fs.writeFile(file,JSON.stringify(record))
+ const r=await f.run("merge-one-core",repo,"7",f.head)
+ assert.equal(r.code,7); assert.match(r.stderr,/MERGE BASE VERIFY/)
+})
+
+for(const mode of ["direct","queued"]) test(`${mode} controller death keeps both leases until its update job is gone`, async t => {
+ const f=await fixture(t); await f.approve(); await advanceMain(f)
+ const marker=path.join(f.root,"write-started"), s=await f.read()
+ s.pauseWrite="update-branch"; s.pauseMarker=marker; await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ if(mode==="queued") ok(await f.run("merge-enqueue",repo,"7",f.head))
+ const controller=spawn(process.execPath,[cli,f.config,...(mode==="direct"?["merge-one-core",repo,"7",f.head]:["merge-queue",repo,"--once"])],{env:f.env,stdio:"ignore"})
+ t.after(()=>{try{controller.kill("SIGKILL")}catch{}})
+ let writer
+ for(let i=0;i<500 && !writer;i++) {try{writer=Number(await fs.readFile(marker,"utf8"))}catch{} await pause(10)}
+ assert.ok(writer,"update write started")
+ const alive=pid=>{try{process.kill(pid,0);return true}catch{return false}}
+ controller.kill("SIGKILL")
+ const locks=path.join(f.stateDir,"locks")
+ let lane, prLease
+ for(let i=0;i<800;i++) {
+  lane=await acquireLease(locks,`merge-${encodeURIComponent(repo)}`)
+  prLease=lane && await acquireLease(locks,`pr-${keyFor(repo,7)}`)
+  if(prLease) break
+  if(lane) await lane()
+  lane=null; await pause(10)
+ }
+ assert.ok(lane && prLease,"successor eventually owns both leases")
+ assert.equal(alive(writer),false,"successor never owns a lease while the old write runs")
+ await pause(3500)
+ assert.equal(remoteTopic(f),f.head,"the interrupted write never lands under the successor")
+ await prLease(); await lane()
+ const r=await f.run("merge-one-core",repo,"7",f.head)
+ assert.equal(r.code,6,JSON.stringify(r)); assert.match(r.stderr,/PENDING/); assert.equal(remoteTopic(f),f.head)
+ assert.equal((await f.read()).ghCalls.filter(a=>a.some(v=>v.endsWith("/update-branch"))).length,1,"interrupted intent is reconciled before any retry")
+})
+
+for(const fault of [502,429,"no-response"]) test(`ambiguous update-branch ${fault} remains pending without duplicate write`, async t => {
+ const f=await fixture(t,{writeFaults:{"update-branch":[fault]}}); await f.approve(); await advanceMain(f)
+ ok(await f.run("merge-enqueue",repo,"7",f.head)); ok(await f.run("merge-queue",repo,"--once"))
+ const [entry]=await queueOf(f)
+ assert.equal(entry.attempts,1); assert.equal(entry.outcome,undefined,JSON.stringify(entry)); assert.equal(remoteTopic(f),f.head)
+ ok(await f.run("merge-queue",repo,"--once"))
+ const [done]=await queueOf(f)
+ assert.equal(done.outcome,undefined); assert.equal(remoteTopic(f),f.head)
+ assert.equal((await f.read()).ghCalls.filter(a=>a.some(v=>v.endsWith("/update-branch"))).length,1)
+})
+
+test("an update applied behind a lost response is read back, not retried or called a conflict", async t => {
+ const f=await fixture(t,{loseUpdateResponse:true}); await f.approve(); await advanceMain(f)
+ ok(await f.run("merge-enqueue",repo,"7",f.head)); ok(await f.run("merge-queue",repo,"--once"))
+ const [entry]=await queueOf(f)
+ assert.equal(entry.outcome.data.code,2); assert.equal(entry.outcome.data.transient,false); assert.notEqual(remoteTopic(f),f.head)
+ assert.equal((await f.read()).ghCalls.filter(a=>a.some(v=>v.endsWith("/update-branch"))).length,1)
+})
+
+test("queue mutation respects the same PR writer lease as a fixer", async t => {
+ const f=await fixture(t); await f.approve(); ok(await f.run("merge-enqueue",repo,"7",f.head))
+ const release=await acquireLease(path.join(f.stateDir,"locks"),`pr-${keyFor(repo,7)}`)
+ assert.ok(release)
+ try {
+  const r=await f.run("merge-queue",repo,"--once"); assert.equal(r.code,75,JSON.stringify(r))
+  assert.equal((await f.read()).state,"OPEN"); assert.equal((await queueOf(f))[0].attempts,0)
+ } finally { await release() }
+ ok(await f.run("merge-queue",repo,"--once")); assert.equal((await f.read()).state,"MERGED")
+})
+
+test("a held CARR-style integration lane does not starve another repo", async t => {
+ const a=await fixture(t), b=await fixture(t), second="fixture/independent"
+ b.cfg.repos={[second]:b.cfg.repos[repo]}; b.cfg.stateDir=a.stateDir
+ const otherState=await b.read();otherState.repo=second;await fs.writeFile(b.env.FAKE_PR,JSON.stringify(otherState))
+ await fs.writeFile(b.config,JSON.stringify(b.cfg))
+ await a.approve(); ok(await b.run("review-pr",second,"7"))
+ ok(await a.run("merge-enqueue",repo,"7",a.head)); ok(await b.run("merge-enqueue",second,"7",b.head))
+ const release=await acquireLease(path.join(a.stateDir,"locks"),`merge-${encodeURIComponent(repo)}`)
+ assert.ok(release)
+ try {
+  assert.equal((await a.run("merge-queue",repo,"--once")).code,75)
+  ok(await b.run("merge-queue",second,"--once")); assert.equal((await b.read()).state,"MERGED")
+  assert.equal((await a.read()).state,"OPEN")
+ } finally { await release() }
+ ok(await a.run("merge-queue",repo,"--once")); assert.equal((await a.read()).state,"MERGED")
+})
+
+test("a real overlapping-file update conflict refuses before final evidence", async t => {
+ const f=await fixture(t); await f.approve(); await advanceMain(f,"feature.txt")
+ const r=await f.run("merge-one-core",repo,"7",f.head)
+ assert.equal(r.code,5); assert.match(r.stderr,/UPDATE-BRANCH FAILED/)
+ const s=await f.read(); assert.equal(s.state,"OPEN"); assert.ok(!s.ghCalls.some(merges))
+})
+
+test("malformed integration read cannot persist provider canary bytes", async t => {
+ const f=await fixture(t,{restFault:"private-canary-123 invalid REST"})
+ const r=await f.run("merge-one-core",repo,"7",f.head)
+ assert.equal(r.code,1); assert.match(r.stderr,/invalid GitHub REST JSON/)
+ assert.ok(!JSON.stringify(r).includes("private-canary-123"))
+ assert.ok(!(await fs.readFile(path.join(f.stateDir,"delivery.jsonl"),"utf8")).includes("private-canary-123"))
+ assert.equal((await f.read()).state,"OPEN")
+})
+
+test("a draft integration candidate stays refused without readiness mutation", async t => {
+ const f=await fixture(t,{isDraft:true}); await f.approve()
+ const r=await f.run("merge-one-core",repo,"7",f.head)
+ assert.equal(r.code,8); assert.match(r.stderr,/DRAFT/)
+ const s=await f.read(); assert.ok(s.ghCalls.every(a=>!a.includes("-X"))); assert.equal(s.state,"OPEN")
+})
+
+for (const body of [h=>`Reviewed-SHA: ${h}`,h=>`REVIEW: BLOCKED \nReviewed-SHA: ${h}\n1. defect`])
+ test("malformed later trusted review defeats authentic approval in deployed wrappers",async t=>{
+ const f=await fixture(t);await f.approve();await f.approve(body(f.head))
+ ok(await f.wrapper("auto-enqueue","--once"));await assert.rejects(fs.readFile(path.join(f.stateDir,"queue.json")),{code:"ENOENT"})
+ assert.equal((await f.wrapper("merge-one-core",repo,"7",f.head)).code,4)
+ const s=await f.read();assert.equal(s.state,"OPEN");assert.equal(s.calls.length,0);assert.equal(s.ghCalls.filter(merges).length,0)
+})
+test("recorded PR base cannot conceal live base movement after evidence",async t=>{
+ const f=await fixture(t);await f.approve();const s=await f.read()
+ s.recordedBase=f.g("rev-parse","origin/main");s.advanceMainOnComment=true;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ const r=await f.run("merge-one-core",repo,"7",f.head)
+ assert.equal(r.code,1,JSON.stringify(r));assert.match(r.stderr,/BASE MOVED/)
+ const after=await f.read();assert.equal(after.state,"OPEN");assert.equal(after.ghCalls.filter(merges).length,0)
+})
+for(const acknowledgement of ["accepted","lost"]) test(`pending ${acknowledgement} update is reconciled without old-head CI, merge or duplicate update`,async t=>{
+ const f=await fixture(t,{pendingUpdate:acknowledgement},{checksTimeoutMs:80});await f.approve();await advanceMain(f)
+ ok(await f.run("merge-enqueue",repo,"7",f.head));ok(await f.run("merge-queue",repo,"--once"))
+ const [entry]=await queueOf(f);assert.equal(entry.outcome,undefined,JSON.stringify(entry))
+ assert.equal((await f.read()).ghCalls.filter(merges).length,0)
+ ok(await f.run("merge-queue",repo,"--once"))
+ const after=await f.read();assert.equal(after.ghCalls.filter(a=>a.some(v=>v.endsWith("/update-branch"))).length,1)
+ assert.equal(after.headRefOid,f.head);assert.equal(after.state,"OPEN")
+ const pendingReads=after.ghCalls.slice(after.ghCalls.findIndex(a=>a.some(v=>v.endsWith("/update-branch")))+1)
+ assert.ok(pendingReads.every(a=>!a.some(v=>/check-runs|statuses/.test(v))),"pending head is observed without consuming its old CI")
+})
+for(const action of ["readiness","review-pr"]) test(`missing local receipt source permits ${action} recovery from a shallow main-only checkout`,async t=>{
+ const f=await fixture(t);await f.approve();const shallow=path.join(f.root,"shallow")
+ execFileSync("git",["clone","--depth=1","--single-branch","--branch","main",`file://${f.remote}`,shallow],{env:f.env,stdio:"ignore"})
+ assert.throws(()=>git(shallow,"rev-parse",`${f.head}^{tree}`))
+ f.cfg.repos[repo].checkout=shallow;await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ ok(await f.run(action,repo,"7"))
+ if(action==="review-pr") {assert.equal((await f.read()).calls.length,1);assert.equal(git(shallow,"rev-parse",`${f.head}^{tree}`),f.g("rev-parse",`${f.head}^{tree}`))}
+ else {const snap=JSON.parse((await f.run("snapshot",repo,"7")).stdout);assert.equal(snap.state,"known");assert.equal(snap.review,null)}
+})
+test("blocking fixture has no receipt artifacts after authentic older approval",async t=>{
+ const f=await fixture(t);await f.approve();const before=await fs.readdir(path.join(f.stateDir,"reviews"))
+ await f.approve(`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. defect`)
+ assert.deepEqual(await fs.readdir(path.join(f.stateDir,"reviews")),before)
+ ok(await f.wrapper("auto-enqueue","--once"));assert.equal((await f.wrapper("merge-one-core",repo,"7",f.head)).code,4)
+})
+
+for(const badUpdate of [false,true]) test(`asynchronous head completion validates its approved-head/main relationship: bad=${badUpdate}`,async t=>{
+ const f=await fixture(t,{pendingUpdate:"accepted",updateAfterReads:3,badUpdate},{checksTimeoutMs:5000});await f.approve();await advanceMain(f)
+ const r=await f.run("merge-one-core",repo,"7",f.head)
+ assert.notEqual(r.code,0,JSON.stringify(r));assert.match(r.stderr,badUpdate?/NON-MERGE COMMIT/:/INTEGRATION UPDATED.*fresh review/)
+ const after=await f.read();assert.notEqual(after.headRefOid,f.head);assert.equal(after.state,"OPEN");assert.equal(after.ghCalls.filter(merges).length,0)
+ const following=after.ghCalls.slice(after.ghCalls.findIndex(a=>a.some(v=>v.endsWith("/update-branch")))+1)
+ assert.ok(following.every(a=>!a.some(v=>/check-runs|statuses/.test(v))))
+ assert.equal(after.ghCalls.filter(a=>a.some(v=>v.endsWith("/update-branch"))).length,1)
+})

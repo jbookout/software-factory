@@ -5,9 +5,9 @@ import { createGithubProvider, latestTrustedReview } from "../src/github-snapsho
 const repo = "jbookout/software-factory", head = "a".repeat(40), base = "b".repeat(40)
 const comment = (id, verdict = "APPROVE", sha = head, login = "reviewer") => ({ id, body: `${verdict}\nReviewed-SHA: ${sha}`,
   user: { login }, created_at: new Date(id * 1000).toISOString(), updated_at: new Date(id * 1000).toISOString() })
-function fixture({ comments = [], fault, move, runs, link } = {}) {
+function fixture({ comments = [], fault, move, runs, link, liveBase = base } = {}) {
   const calls = [], cfg = { requiredChecks: [{ name: "test", appId: 15368 }], trustedReviewers: ["reviewer"], checkout: "/synthetic/factory" }
-  let views = 0
+  let views = 0, refs = 0
   const command = async (argv, cwd) => {
     assert.equal(cwd, cfg.checkout); assert.equal(argv[0], "gh"); assert.equal(argv[1], "api")
     calls.push(argv); await Promise.resolve()
@@ -20,6 +20,9 @@ function fixture({ comments = [], fault, move, runs, link } = {}) {
         head: { sha: move === "head" && views % 2 === 0 ? base : head, ref: "topic", repo: { full_name: repo } },
         base: { sha: move === "base" && views % 2 === 0 ? head : base, ref: "main", repo: { full_name: repo } },
         comments: comments.length, mergeable: true, mergeable_state: "clean" }
+    } else if (url.pathname.includes("/git/ref/heads/")) {
+      refs++
+      value = { ref: "refs/heads/main", object: { type: "commit", sha: move === "live-base" && refs % 2 === 0 ? head : liveBase } }
     } else if (url.pathname.endsWith("/comments")) {
       value = comments.slice((page - 1) * 25, page * 25)
       if (fault === "missing-page" && page === 2) value = []
@@ -44,15 +47,15 @@ test("50 observations share one immutable snapshot per PR across concurrent read
   const ids = new Set()
   for (let pr = 1; pr <= 50; pr++) {
     const values = await Promise.all(Array.from({ length: 4 }, () => f.provider.snapshot(repo, pr)))
-    assert.equal(values[0].state, "known"); assert.equal(values[0].metrics.providerCalls, 5)
+    assert.equal(values[0].state, "known"); assert.equal(values[0].metrics.providerCalls, 7)
     assert.ok(values.every(v => v === values[0])); assert.ok(Object.isFrozen(values[0].inventory.checkRuns))
     ids.add(values[0].observationId)
   }
-  assert.equal(f.calls.length, 250, "five REST reads per observation, not per consumer")
+  assert.equal(f.calls.length, 350, "seven REST reads per observation, not per consumer")
   assert.equal(ids.size, 50)
   const later = await f.provider.snapshot(repo, 50)
   assert.ok(!ids.has(later.observationId))
-  assert.equal(f.calls.length, 255, "later observation reads mutable inputs again")
+  assert.equal(f.calls.length, 357, "later observation reads mutable inputs again")
 })
 for (const fault of ["missing-page", "duplicate-page", "comment-error", "body-error"]) test(`${fault} remains unknown and no failed body becomes source`, async () => {
   const f = fixture({ comments: Array.from({ length: 26 }, (_, i) => comment(i + 1)), fault })
@@ -70,11 +73,11 @@ test("limit+1 comments and out-of-order verdicts use the latest trusted timestam
   const comments = Array.from({ length: 26 }, (_, i) => comment(i + 1)); comments[5] = comment(40, "BLOCK")
   const f = fixture({ comments }); const value = await f.provider.snapshot(repo, 7)
   assert.equal(value.state, "known"); assert.equal(value.inventory.comments.length, 26)
-  assert.equal(value.review.verdict, "BLOCK"); assert.equal(value.metrics.providerCalls, 6)
+  assert.equal(value.review.verdict, "BLOCK"); assert.equal(value.metrics.providerCalls, 8)
 })
 for (const body of [`APPROVE\nReviewed-SHA: ${head.slice(0,7)}`, `APPROVE\nReviewed-SHA: ${head}`]) test("invalid latest trusted approval cannot revive older approval", async () => {
-  const comments = [comment(1), { ...comment(2), body }]
-  const latest = await latestTrustedReview(comments, ["reviewer"], async () => false)
+  const comments = [{ ...comment(1), body: comment(1).body + "\nFactory-Review: older" }, { ...comment(2), body }]
+  const latest = await latestTrustedReview(comments, ["reviewer"], async candidate => candidate.body === comments[0].body)
   assert.equal(latest, null)
 })
 test("trusted BLOCK needs no approval receipt; outsider cannot override it", async () => {
@@ -89,7 +92,7 @@ test("editing an older approval cannot leapfrog a newer blocking verdict", async
 for (const link of ["https://evil.invalid/comments?page=2&per_page=25", `https://api.github.com/repos/${repo}/issues/7/comments?page=3&per_page=25`])
  test("invalid pagination link refuses before following it", async () => {
   const f = fixture({ comments: [comment(1)], link }); const value = await f.provider.snapshot(repo, 7)
-  assert.equal(value.state, "unknown"); assert.equal(f.calls.length, 2)
+  assert.equal(value.state, "unknown"); assert.equal(f.calls.length, 3)
  })
 test("current missing/cancelled/malformed checks are never green", async () => {
  for(const runs of [[], [{id:1,name:"test",head_sha:head,app:{id:15368},status:"completed",conclusion:"cancelled"}], [{}]]) {
@@ -102,8 +105,27 @@ test("scan refuses unapproved candidates without spending provider calls on chec
   const value = await f.provider.snapshot(repo,7,{ requireApproval: true })
   assert.equal(value.state,"refused"); assert.equal(value.review.verdict,"BLOCK")
   assert.equal(value.ci.state,"unobserved"); assert.equal(value.inventory.checkRuns,null)
-  assert.equal(f.calls.length,3)
+  assert.equal(f.calls.length,5)
   const complete = await f.provider.snapshot(repo,7)
   assert.equal(complete.state,"known"); assert.equal(complete.ci.state,"success")
-  assert.equal(f.calls.length,8,"partial scan never substitutes for full observation")
+  assert.equal(f.calls.length,12,"partial scan never substitutes for full observation")
+})
+
+for (const body of [`Reviewed-SHA: ${head}`, `REVIEW: BLOCKED \nReviewed-SHA: ${head}\n1. unresolved`, ` APPROVE\nReviewed-SHA: ${head}`])
+ test("malformed attempted review invalidates an authenticated older approval", async () => {
+  const older = comment(1), newer = { ...comment(2), body }
+  assert.equal((await latestTrustedReview([older], ["reviewer"], async c => c.body === older.body)).verdict, "APPROVE")
+  assert.equal(await latestTrustedReview([older, newer], ["reviewer"], async c => c.body === older.body), null)
+ })
+test("ordinary trusted notes preserve authenticated approval", async () => {
+ const older = comment(1), note = { ...comment(2), body: "Thanks; the next review will follow." }
+ assert.equal((await latestTrustedReview([older, note], ["reviewer"], async c => c.body === older.body)).verdict, "APPROVE")
+})
+test("snapshot base is live target ref rather than recorded PR base", async () => {
+ const value = await fixture({ liveBase: head }).provider.snapshot(repo, 7)
+ assert.equal(value.state, "known"); assert.equal(value.base.sha, head); assert.equal(value.baseRefOid, head)
+})
+test("live target movement invalidates an unchanged PR envelope", async () => {
+ const value = await fixture({ move: "live-base" }).provider.snapshot(repo, 7)
+ assert.equal(value.state, "unknown"); assert.equal(value.metrics.staleActions, 1)
 })
