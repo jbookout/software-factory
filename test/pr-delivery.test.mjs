@@ -21,6 +21,14 @@ const tool = require('node:path').basename(process.argv[1]);
 if(tool === 'codex') {
  let prompt=''; process.stdin.on('data',b=>prompt+=b); process.stdin.on('end',()=>{
  s.calls.push({prompt,cwd:process.cwd(),args}); save();
+ if(s.childReader) {
+ const path=require('node:path');
+ const config=JSON.parse(fs.readFileSync(process.env.FACTORY_PR_CONFIG));
+ fs.writeFileSync(path.join(config.stateDir,'github.json'),JSON.stringify({schema:'factory-github/v1',requests:[],cache:{},failures:{},hold:{state:'quota_hold',pool:'rest',queryErrors:1,terminal:false,retryAt:Date.now()+120000,message:'synthetic quota hold'}}));
+ s.childReaderBefore=s.ghCalls.length;
+ s.childReaderCode=cp.spawnSync(process.execPath,[s.childReader,process.env.FACTORY_PR_CONFIG,'github-read','fixture/new-repository','pulls/7'],{encoding:'utf8'}).status;
+ save();
+ }
  if(s.childCode) { console.error(s.childError??'synthetic child refusal');process.exit(s.childCode); }
  if(s.hang) { process.on('SIGTERM',()=>{}); setInterval(()=>{},1000); return; }
  if(prompt.includes('REVIEW MODE:')) {
@@ -70,7 +78,7 @@ if(tool === 'codex') {
  }
  console.error('unexpected REST write');process.exit(2);
  }
- if(s.restCodes?.length) {const code=s.restCodes.shift();save();console.log('HTTP/2.0 '+code+' synthetic\\nRetry-After: 0\\n'+(s.quotaEvidence?'X-RateLimit-Remaining: 0\\n':'')+'\\n{}');process.exit(1);}
+ if(s.restCodes?.length) {const code=s.restCodes.shift();save();console.log('HTTP/2.0 '+code+' synthetic\\n'+(s.retryAfter!==undefined?'Retry-After: '+s.retryAfter+'\\n':'')+(s.resetAt?'X-RateLimit-Reset: '+s.resetAt+'\\n':'')+(s.quotaEvidence?'X-RateLimit-Remaining: 0\\n':'')+'\\n{}');process.exit(1);}
  if(s.apiHang) { if(s.apiHang!=='fetch') process.stdout.write('HTTP/2.0 200 OK\\n\\n{'); setInterval(()=>{if(s.apiHang==='drip') process.stdout.write(' ');},10); return; }
  if(s.apiFailure) { console.log('HTTP/2.0 403 Forbidden\\nx-ratelimit-remaining: 0\\n\\n{}');console.error('provider unavailable');process.exit(1); }
  if(s.restFault) { if(s.restFault==='exception') process.exit(2); if(s.restFault==='refusal') {console.log('HTTP/2.0 401 Unauthorized\\n\\n{}');process.exit(1);}
@@ -82,9 +90,10 @@ if(tool === 'codex') {
  if(s.moveDuringChecks && ++s.moveViewCount>1) {
  git('-C',s.checkout,'checkout','-q','topic');fs.writeFileSync(s.checkout+'/moved.txt','moved');git('-C',s.checkout,'add','moved.txt');git('-C',s.checkout,'commit','-qm','Move head');git('-C',s.checkout,'push','-q','origin','topic');
  s.headRefOid=git('--git-dir',s.remote,'rev-parse','refs/heads/topic');s.moveDuringChecks=false;save(); }
- save();respond({...pr(),number:Number(route.split('/').at(-1))});
+ save();respond({...pr(),number:Number(route.split('/').at(-1)),...s.prOverrides});
  } else if(route.includes('/pulls?')) {
- const prs=s.listCount?Array.from({length:s.listCount},(_,i)=>({...pr(),body:'x'.repeat(s.listBodyBytes??0),number:i===s.listCount-1?7:i+100})):[pr()];respond(prs.slice((page-1)*pageSize,page*pageSize));
+ const listedPr=()=>{const {merged,mergeable,mergeable_state,...value}=pr();return value};
+ const prs=s.listCount?Array.from({length:s.listCount},(_,i)=>({...listedPr(),body:'x'.repeat(s.listBodyBytes??0),number:i===s.listCount-1?7:i+100})):[listedPr()];respond(prs.slice((page-1)*pageSize,page*pageSize));
  } else if(route.includes('/comments')) {
  const number=Number(/issues\\/([0-9]+)\\//.exec(route)[1]);
  respond(s.comments.filter(c=>(c.pr??7)===number).slice((page-1)*pageSize,page*pageSize));
@@ -127,7 +136,7 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
  const config=path.join(root,"config.json"), stateDir=path.join(root,"state")
  // CLI smoke controls use the trusted host observer; allow room for concurrent
  // host jobs. Capacity refusal itself uses injected snapshots in its own tests.
- const cfg={repos:{"fixture/new-repository":{checkout,originUrl:remote,worktreeRoot:path.join(root,"worktrees"),requiredChecks:[{name:"test"}]}},stateDir,codex:{model:"fixture-model",effort:"high"},resources:{capacity:32,browserConcurrency:1,agentUnits:1},limits:{runsPer24h:8,slots:2,timeoutMs:5000},pollMs:5,retryMs:0,commandTimeoutMs:5000,...configOverrides}
+ const cfg={github:{cacheMs:0},repos:{"fixture/new-repository":{checkout,originUrl:remote,worktreeRoot:path.join(root,"worktrees"),requiredChecks:[{name:"test"}]}},stateDir,codex:{model:"fixture-model",effort:"high"},resources:{capacity:256,browserConcurrency:1,agentUnits:1},limits:{runsPer24h:8,slots:2,timeoutMs:5000},pollMs:5,retryMs:0,commandTimeoutMs:5000,...configOverrides}
  await fs.writeFile(config,JSON.stringify(cfg))
  const read=async()=>JSON.parse(await fs.readFile(env.FAKE_PR,"utf8"))
  const launch=(command,args,workerEnv=env)=>new Promise((resolve,reject)=>{
@@ -170,7 +179,7 @@ test("blocked review -> fix -> re-review uses confirmation scope",async t=>{
  assert.notEqual(s.headRefOid,f.head);assert.match(s.comments.at(-1).body,/^APPROVE\nReviewed-SHA:/)
 })
 for(const action of ["fix-pr","ci-fix"]) test("checked-out branch is reused by "+action+" without exit 128",async t=>{
- const f=await fixture(t);const wt=path.join(f.root,"existing");f.g("worktree","add",wt,"topic")
+ const f=await fixture(t,action === "ci-fix" ? {statusCheckRollup:[{status:"COMPLETED",conclusion:"FAILURE"}]} : {});const wt=path.join(f.root,"existing");f.g("worktree","add",wt,"topic")
  ok(await f.run(action,repo,"7","-", "--no-loop"));assert.equal(await fs.realpath((await f.read()).calls[0].cwd),await fs.realpath(wt))
 })
 test("dirty reused branch is refused without resetting it",async t=>{
@@ -288,8 +297,8 @@ test("a retained same-head review attempt never prevents a fresh attempt",async 
  const s=await f.read();assert.notEqual(s.calls[0].cwd,old)
  assert.equal(git(old,"rev-parse","HEAD"),f.head)
 })
-for(const condition of ["red CI","conflict"]) test("approved PR with "+condition+" receives CI-fix and fresh review",async t=>{
- const f=await fixture(t,condition==="red CI"?{statusCheckRollup:[{status:"COMPLETED",conclusion:"FAILURE"}]}:{mergeable:"CONFLICTING",mergeStateStatus:"DIRTY"});await f.approve()
+test("approved PR with red CI receives CI-fix and fresh review",async t=>{
+ const f=await fixture(t,{statusCheckRollup:[{status:"COMPLETED",conclusion:"FAILURE"}]});await f.approve()
  ok(await f.run("pr-loop",repo,"7","-","3"));const s=await f.read();assert.match(s.calls[0].prompt,/CI-FIX/);assert.match(s.calls[1].prompt,/REVIEW MODE:/);assert.notEqual(s.headRefOid,f.head)
 })
 test("configured repository outside old case list merges",async t=>{
@@ -384,11 +393,13 @@ test("controller death cannot orphan a guarded child or release its occupied slo
  assert.equal(await fs.readFile(path.join(f.stateDir,"usage.json"),"utf8"),usage)
  ok(await f.run("codex-guard",repo,"8","review",process.execPath,"-e","process.exit(0)"))
 })
-test("transient GitHub error is requeued at most three times",async t=>{
+test("GitHub quota requeue waits for the same persisted provider retry time",async t=>{
  const f=await fixture(t,{apiFailure:true},{retryMs:0});await f.approve();ok(await f.run("merge-enqueue",repo,"7",f.head))
  for(let i=0;i<5;i++) ok(await f.run("merge-queue","--once"))
  const queue=JSON.parse(await fs.readFile(path.join(f.stateDir,"queue.json")))
- assert.equal(queue[0].attempts,4);assert.equal(queue[0].outcome.status,"fail");assert.equal((await f.read()).state,"OPEN")
+ const state=JSON.parse(await fs.readFile(path.join(f.stateDir,"github.json")))
+ assert.equal(queue[0].attempts,1);assert.equal(queue[0].availableAt,state.hold.retryAt)
+ assert.equal((await f.read()).ghCalls.length,1);assert.equal((await f.read()).state,"OPEN")
 })
 test("same-head CI recovery queues a fresh bounded attempt and preserves the failed outcome",async t=>{
  const f=await fixture(t,{statusCheckRollup:[{status:"COMPLETED",conclusion:"FAILURE"}]});await f.approve()
@@ -585,16 +596,22 @@ test("obsolete A/B cancellation is superseded for all callers while current C pa
  assert.equal((await f.read()).calls.length,0)
  assert.equal(JSON.parse(await fs.readFile(path.join(f.stateDir,"queue.json")))[0].head,f.head)
 })
-for(const [code,quotaEvidence,retries] of [[401,false,1],[403,false,1],[403,true,3],[429,false,3],[502,false,3]])
- test(`REST ${code} quota=${quotaEvidence} distinguishes bounded transient reads from refusal`,async t=>{
+for(const [code,quotaEvidence,state] of [[401,false,"auth_error"],[403,false,"auth_error"],[403,true,"quota_hold"],[429,false,"quota_hold"],[502,false,"unknown"]])
+ test(`REST ${code} quota=${quotaEvidence} stops at one typed provider refusal`,async t=>{
    const f=await fixture(t,{restCodes:Array(5).fill(code),quotaEvidence})
-   assert.notEqual((await f.run("readiness",repo,"7")).code,0)
-   assert.equal((await f.read()).ghCalls.length,retries)
+   const result=await createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env}).execute("readiness",{repo,pr:7})
+   assert.equal(result.data.state,state)
+   assert.equal((await f.read()).ghCalls.length,1)
    assert.equal((await f.read()).calls.length,0)
  })
-test("transient read recovery resumes the observation without a duplicate model phase",async t=>{
- const f=await fixture(t,{restCodes:[502,429]})
- const r=await f.run("readiness",repo,"7");ok(r);assert.equal(JSON.parse(r.stdout).state,"success")
+test("transient read recovery waits for recorded retry time without a duplicate model phase",async t=>{
+ const f=await fixture(t,{restCodes:[502]})
+ const first=await f.run("readiness",repo,"7");assert.notEqual(first.code,0)
+ const before=(await f.read()).ghCalls.length
+ assert.notEqual((await f.run("readiness",repo,"7")).code,0)
+ assert.equal((await f.read()).ghCalls.length,before)
+ const file=path.join(f.stateDir,"github.json"),state=JSON.parse(await fs.readFile(file));state.hold.retryAt=Date.now()-1;await fs.writeFile(file,JSON.stringify(state))
+ const r=await f.run("readiness",repo,"7");ok(r);assert.equal(JSON.parse(r.stdout).state,"green")
  assert.equal((await f.read()).calls.length,0)
 })
 test("deployed guard keeps the existing rescope caller in the shared budget",async t=>{
@@ -1043,4 +1060,90 @@ test('review 10: timeout exceptions are the sole delivery timeout policy', async
  const source = await fs.readFile(new URL('../src/pr-delivery.mjs', import.meta.url), 'utf8')
  const afterCommand = source.slice(source.indexOf('  const git ='))
  assert.equal(/(?:result|response)\.timedOut/.test(afterCommand), false, 'delivery timeout result paths must be absent')
+})
+
+for (const fault of ["quota", "malformed", "auth"]) test(`retro 2: approved ${fault} observation never dispatches a fixer and exposes its state`, async t => {
+ const f=await fixture(t);await f.approve()
+ const s=await f.read()
+ if(fault==="quota") {s.restCodes=[403];s.quotaEvidence=true;s.retryAfter=120;s.resetAt=Math.ceil(Date.now()/1000)+180}
+ if(fault==="malformed") s.restFault="invalid-json"
+ if(fault==="auth") s.restCodes=[401]
+ await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const result=await adapter.execute("pr:inspect",{repo,pr:7})
+ assert.equal(result.data.state,{quota:"quota_hold",malformed:"unknown",auth:"auth_error"}[fault])
+ assert.equal((await f.read()).calls.length,0)
+ const before=(await f.read()).ghCalls.length
+ if(fault==="quota") {
+  assert.ok(result.data.retryAt >= s.resetAt*1000)
+  assert.equal((await f.run("pr-loop",repo,"7","-","1")).code,75)
+  assert.equal((await f.run("auto-enqueue","--once")).code,75)
+  assert.equal((await f.read()).ghCalls.length,before,"restart and other consumers honor the same hold")
+ }
+})
+test("retro 2: a green approved conflict and direct ci-fix require an observed failed required check", async t => {
+ const f=await fixture(t);await f.approve()
+ const s=await f.read();s.mergeable="CONFLICTING";s.mergeStateStatus="DIRTY";await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ assert.notEqual((await f.run("pr-loop",repo,"7","-","1")).code,0)
+ assert.notEqual((await f.run("ci-fix",repo,"7","-","--no-loop")).code,0)
+ assert.equal((await f.read()).calls.length,0)
+})
+test("retro 2: duplicate events and reconciliation have one enqueue owner", async t => {
+ const f=await fixture(t);await f.approve()
+ ok(await f.run("enqueue-event",repo,"7",f.head))
+ ok(await f.run("enqueue-event",repo,"7",f.head))
+ ok(await f.run("auto-enqueue","--once"))
+ assert.equal(JSON.parse(await fs.readFile(path.join(f.stateDir,"queue.json"))).length,1)
+})
+test("retro 2: request allowance is shared by restarted review and enqueue consumers", async t => {
+ const f=await fixture(t,{}, {github:{requestsPerHour:1,cacheMs:0}})
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const result=await adapter.execute("pr:inspect",{repo,pr:7})
+ assert.equal(result.data.state,"quota_hold")
+ assert.equal((await f.run("auto-enqueue","--once")).code,75)
+ assert.equal((await f.run("review-pr",repo,"7")).code,75)
+ assert.equal((await f.read()).ghCalls.length,1)
+})
+test('retro 2: restarted reconciliation waits for its persisted deadline', async t => {
+ const f=await fixture(t)
+ ok(await f.run('auto-enqueue','--once'))
+ const before=(await f.read()).ghCalls.length
+ ok(await f.run('auto-enqueue','--once'))
+ assert.equal((await f.read()).ghCalls.length,before)
+ const reconciliation=JSON.parse(await fs.readFile(path.join(f.stateDir,'reconciliation.json')))
+ assert.ok(reconciliation.retryAt > Date.now()+290000)
+})
+for (const fault of ['{}','[]']) test(`retro 2: malformed PR structure ${fault} persists unknown across restart`, async t => {
+ const f=await fixture(t);await f.approve()
+ const s=await f.read();s.restFault=fault;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const result=await adapter.execute('pr:inspect',{repo,pr:7})
+ assert.equal(result.data.state,'unknown');assert.ok(result.data.retryAt > Date.now())
+ const before=(await f.read()).ghCalls.length
+ assert.notEqual((await f.run('pr-loop',repo,'7','-','1')).code,0)
+ assert.equal((await f.read()).ghCalls.length,before)
+ assert.equal((await f.read()).calls.length,0)
+})
+
+test('retro 2: a child evidence reader inherits the owning config and cannot bypass its hold', async t => {
+ const f=await fixture(t,{childReader:cli})
+ const result=await f.run('review-pr',repo,'7')
+ assert.equal(result.code,75)
+ const s=await f.read()
+ assert.equal(s.childReaderCode,75)
+ assert.equal(s.ghCalls.length,s.childReaderBefore)
+ assert.match(s.calls[0].prompt,/Never invoke gh directly/)
+ assert.match(s.calls[0].prompt,/github-read/)
+})
+
+test('retro 2: malformed mergeability is unknown with a persisted retry', async t => {
+ const f=await fixture(t);await f.approve()
+ const s=await f.read();s.prOverrides={mergeable_state:42};await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const result=await adapter.execute('pr:inspect',{repo,pr:7})
+ assert.equal(result.data.state,'unknown');assert.ok(result.data.retryAt > Date.now())
+ const before=(await f.read()).ghCalls.length
+ assert.notEqual((await f.run('pr-loop',repo,'7','-','1')).code,0)
+ assert.equal((await f.read()).ghCalls.length,before)
+ assert.equal((await f.read()).calls.length,0)
 })
