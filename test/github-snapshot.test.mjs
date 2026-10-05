@@ -1,4 +1,9 @@
 import test from "node:test"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
+const roots = []
+test.after(() => {for (const root of roots) fs.rmSync(root,{recursive:true,force:true})})
 import assert from "node:assert/strict"
 import { createGithubProvider, latestTrustedReview } from "../src/github-snapshot.mjs"
 
@@ -37,7 +42,8 @@ function fixture({ comments = [], fault, move, runs, link, liveBase = base } = {
     if (fault === "body-error") return { stdout: 'HTTP/2.0 500 Failed\n\n{"head":{"sha":"fatal-canary"}}', code: 1 }
     return { code: 0, stdout: `HTTP/2.0 200 OK\n${headers}\n${JSON.stringify(value)}` }
   }
-  const provider = createGithubProvider({ retryMs: 0, commandTimeoutMs: 100 }, { command,
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(),"snapshot-")); roots.push(stateDir)
+  const provider = createGithubProvider({ stateDir, pollMs:5, github:{cacheMs:0}, retryMs: 0, commandTimeoutMs: 100 }, { command,
     getRepo: r => { assert.equal(r, repo); return cfg }, authenticate: async () => true })
   return { provider, calls, cfg }
 }
@@ -129,3 +135,26 @@ test("live target movement invalidates an unchanged PR envelope", async () => {
  const value = await fixture({ move: "live-base" }).provider.snapshot(repo, 7)
  assert.equal(value.state, "unknown"); assert.equal(value.metrics.staleActions, 1)
 })
+
+for (const failure of ["quota", "before launch", "after launch", "reported uncertainty"])
+ test(`PR46 finding 7: mutation dispatch evidence survives ${failure}`, async () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(),"snapshot-")); roots.push(stateDir)
+  const config = { stateDir, commandTimeoutMs:100, pollMs:5, github:{requestsPerHour:failure === "quota" ? 1 : 20} }
+  if (failure === "quota") fs.writeFileSync(path.join(stateDir,"github.json"),JSON.stringify({
+    schema:'factory-github/v1',requests:[{at:Date.now(),pool:'rest',mutation:false}],cache:{},failures:{}
+  }))
+  let calls = 0
+  const provider = createGithubProvider(config, { getRepo: () => ({checkout:"/synthetic/factory"}), command: async (argv, cwd, options) => {
+    calls++
+    if (failure === "after launch") await options.onSpawn({},undefined)
+    const error = new Error('synthetic transport stop')
+    if (failure === "reported uncertainty") error.uncertain = true
+    throw error
+  } })
+  await assert.rejects(provider.mutate(repo,"PUT","pulls/7/update-branch",{expected_head_sha:head}), error => {
+    assert.equal(error.uncertain, failure === "reported uncertainty" ? true : failure === "after launch" ? undefined : false)
+    if (failure === "quota") assert.equal(error.state,"quota_hold")
+    return true
+  })
+  assert.equal(calls,failure === "quota" ? 0 : 1)
+ })
