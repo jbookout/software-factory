@@ -40,14 +40,18 @@ class CiTest(unittest.TestCase):
     @unittest.skipUnless((ROOT / 'ops/ci.sh').exists(), 'CARR owns the single CI script')
     def test_carr_ci_entrypoint_forwards_arguments_to_local_checker(self):
         scratch = Path(tempfile.mkdtemp(prefix='doc-drift-ci-fixture-'))
-        executable = scratch / 'python'
+        (scratch / 'ops').mkdir()
+        (scratch / 'ops/ci.sh').write_bytes((ROOT / 'ops/ci.sh').read_bytes())
+        (scratch / '.venv/bin').mkdir(parents=True)
+        executable = scratch / '.venv/bin/python'
         executable.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
         executable.chmod(0o755)
-        env = dict(os.environ, CARR_DOC_DRIFT_PYTHON=str(executable))
-        result = subprocess.run(['bash', str(ROOT / 'ops/ci.sh'), '--doc-drift', '--base', 'abc123'],
+        env = dict(os.environ)
+        env.pop('CARR_DOC_DRIFT_PYTHON', None)
+        result = subprocess.run(['bash', str(scratch / 'ops/ci.sh'), '--doc-drift', '--base', 'abc123'],
                                 env=env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.splitlines(), [str(ROOT / 'scripts/doc-drift/ci.py'), '--base', 'abc123'])
+        self.assertEqual(result.stdout.splitlines(), [str(scratch / 'scripts/doc-drift/ci.py'), '--base', 'abc123'])
 
 
 if __name__ == '__main__':
