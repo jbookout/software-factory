@@ -46,6 +46,10 @@ export function tierOneVerdict(head, base, route, ci) {
     `Review-Decision-Policy: ${route.decision.policy_digest}`, `Review-Decision-Diff: ${route.decision.diff_digest}`].join("\n")
 }
 
+// A model's blocking finding is never cleared without a model confirming it;
+// a tier-1 deterministic block (red checks) clears deterministically.
+const dispatchTier = (route, prior) => route.tier === 1 && prior && !/^Review-Tier: 1$/m.test(prior.body) ? 2 : route.tier
+
 export async function loadDeliveryConfig(file) {
   const value = await readJson(file)
   if (!value || !value.repos || !Object.keys(value.repos).length) throw new DeliveryError("config.repos is required", 9)
@@ -400,8 +404,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       const route = await routeReview(repo, dir, mergeBase, head)
       await writeJson(`${artifacts}.decision.json`, route)
       await log({ repo, pr, step: "review-tier", head, tier: route.tier, reason: route.reason, decisionDigest: route.digest })
-      // A blocking finding is never cleared without a model confirming it.
-      const tier = route.tier === 1 && prior ? 2 : route.tier
+      const tier = dispatchTier(route, prior)
       const receipt = { tier, decision: { file: `${artifacts}.decision.json`, digest: digestOf(await fs.readFile(`${artifacts}.decision.json`, "utf8")) } }
       let body
       if (tier === 1) body = tierOneVerdict(head, mergeBase, route, current.ci)
@@ -989,8 +992,8 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
         await git(local.checkout, "fetch", "-q", "origin", snapshot.baseRefOid, head)
         const base = await git(local.checkout, "merge-base", snapshot.baseRefOid, head)
         const route = await routeReview(repo, local.checkout, base, head)
-        const prior = legacy && legacy.verdict !== "APPROVE"
-        const tier = route.tier === 1 && prior ? 2 : route.tier, ci = snapshot.ci.state
+        const prior = legacy?.verdict !== "APPROVE" ? legacy : null
+        const tier = dispatchTier(route, prior), ci = snapshot.ci.state
         const held = Boolean(holdFor(holds, repo, snapshot.title)), frozen = Boolean(freezeFor(holds, repo, snapshot.title))
         const wouldApprove = tier === 1 ? ci === "success" : null
         const approved = tier === 1 ? wouldApprove : legacy?.verdict === "APPROVE" && legacy.sha === head

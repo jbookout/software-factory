@@ -1960,3 +1960,8 @@ test("shadow records tier and would-decisions beside the old path, posts nothing
  const compare=JSON.parse(execFileSync(process.execPath,[fileURLToPath(new URL("../bin/delivery-shadow-compare.mjs",import.meta.url)),path.join(f.stateDir,"shadow.jsonl")],{encoding:"utf8"}))
  assert.deepEqual([compare.heads,compare.modelReviewsAvoided,compare.tier1Approval.agreePercent,compare.merge.agreePercent],[1,1,100,100])
 })
+test("a tier-1 deterministic block (red checks) clears deterministically once checks are green",async t=>{
+ const f=await tiered(t,{"feature.txt":1});await f.approve("REVIEW: BLOCKED\nReviewed-SHA: "+f.g("rev-parse","main")+"\n\n1. Tier-1 deterministic review: hosted checks are not green\nReview-Tier: 1")
+ ok(await f.run("review-pr",repo,"7"));const s=await f.read()
+ assert.equal(s.calls.length,0);assert.match(s.comments.at(-1).body,/^APPROVE\nReviewed-SHA: [0-9a-f]{40}\n\nTier-1 deterministic approval/)
+})
