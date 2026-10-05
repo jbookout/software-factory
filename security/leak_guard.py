@@ -318,7 +318,8 @@ def scan(root, source, corpus, allowed, report_path=None):
         opaque = (b'\0' in raw and not utf16) or raw.startswith((b'%PDF-', b'PK\x03\x04', b'\x1f\x8b'))
         # Uninspectable binary content is refused as a whole, never silently skipped.
         text = '' if opaque else raw.decode('utf-16' if utf16 else 'utf-8', errors='replace')
-        secret_input = path.encode('utf-8', 'surrogateescape') + b'\n' + text.encode('utf-8') + b'\n'
+        filename_line = path.replace('\r', ' ').replace('\n', ' ')
+        secret_input = filename_line.encode('utf-8', 'surrogateescape') + b'\n' + text.encode('utf-8') + b'\n'
         if chunks and batch_bytes + len(secret_input) > 8 * 1048576:
             flush()
             line, batch_bytes = 1, 0

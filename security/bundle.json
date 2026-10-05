@@ -3,8 +3,8 @@
   "upstream": "jbookout/software-factory",
   "scanner_version": "1.0.0",
   "files": {
-    "leak_guard.py": "5009a17d7036d5a6a1603d85ca71c19778ade2401bd18c5fb1f25fa7c86da901",
-    "test_leak_guard.py": "81c163835d048807f589926344edb728736dd5d5721aec28fa5c7337506c1a29",
+    "leak_guard.py": "2ba1381f2454f0929785f6994caee24533bb864e32b70dc200ced4f1f2d56714",
+    "test_leak_guard.py": "3887186e7735e1049866edf1fc47d8a474d90c951d31129a2b4f68b8a8ef2ee1",
     "hash_export.py": "c63c1011ed397dd8e905c7da5f00f3bd2925e342b11c70bdbb78c0015e57464f",
     "install_hook.py": "e998c1c5739b3017161406c887a202e0d6f18b5160708af5c41da4c174175ad3",
     "pre-push": "1f8042c119f5dafed8b524ed8e382d83adaa6c646cad8e5811549375d2a9dc33"

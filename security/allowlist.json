@@ -79,6 +79,33 @@
       "rule": "client-data",
       "value_sha256": "ad4aec556897c6b8b8b6e53b3f8effef35671dd68af8de30632e18c0a722448c",
       "reason": "Reviewed code identifier in detector or synthetic qualification code; no record association. Bound to this token digest and exact source bytes."
+    },
+    {
+      "path": "security/test_leak_guard.py",
+      "sha256": "3887186e7735e1049866edf1fc47d8a474d90c951d31129a2b4f68b8a8ef2ee1",
+      "rule": "pii-email",
+      "reason": "Integration test uses the required public noreply commit identity; all planted contact values are synthetic and assembled at runtime."
+    },
+    {
+      "path": "security/leak_guard.py",
+      "sha256": "2ba1381f2454f0929785f6994caee24533bb864e32b70dc200ced4f1f2d56714",
+      "rule": "client-data",
+      "value_sha256": "ad4aec556897c6b8b8b6e53b3f8effef35671dd68af8de30632e18c0a722448c",
+      "reason": "Reviewed code identifier in detector or synthetic qualification code; no record association. Bound to this token digest and exact source bytes."
+    },
+    {
+      "path": "security/test_leak_guard.py",
+      "sha256": "3887186e7735e1049866edf1fc47d8a474d90c951d31129a2b4f68b8a8ef2ee1",
+      "rule": "client-data",
+      "value_sha256": "4302286f1a3131a2d7d899618999cf753438edad1dcd781dc17a57a89be2ef46",
+      "reason": "Reviewed code identifier in detector or synthetic qualification code; no record association. Bound to this token digest and exact source bytes."
+    },
+    {
+      "path": "security/test_leak_guard.py",
+      "sha256": "3887186e7735e1049866edf1fc47d8a474d90c951d31129a2b4f68b8a8ef2ee1",
+      "rule": "client-data",
+      "value_sha256": "ad4aec556897c6b8b8b6e53b3f8effef35671dd68af8de30632e18c0a722448c",
+      "reason": "Reviewed code identifier in detector or synthetic qualification code; no record association. Bound to this token digest and exact source bytes."
     }
   ]
 }

@@ -115,13 +115,14 @@ class LeakGuardTest(unittest.TestCase):
     def test_utf16_secret_and_sensitive_filename_are_blocked(self):
         value = 'ghp_' + base64.b64encode(bytes(range(27))).decode()
         (self.root / 'sample.txt').write_bytes(('token="' + value + '"\n').encode('utf-16'))
-        (self.root / value).write_text('safe\n')
-        subprocess.run(['git', '-C', str(self.root), 'add', 'sample.txt', value], check=True)
+        filename = 'wrapped\n' + value
+        (self.root / filename).write_text('safe\n')
+        subprocess.run(['git', '-C', str(self.root), 'add', 'sample.txt', filename], check=True)
         result = self.run_guard('--staged', '--generic-only')
         self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertTrue(value not in result.stdout + result.stderr, 'Matched filename value escaped diagnostics')
         self.assertIn('sample.txt:1', result.stdout)
         self.assertIn('[redacted-path:', result.stdout)
-        self.assertNotIn(value, result.stdout + result.stderr)
 
     def test_missing_corpus_and_binary_refuse_without_values(self):
         (self.root / 'asset.dat').write_bytes(b'opaque\0content')
