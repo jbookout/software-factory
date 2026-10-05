@@ -65,7 +65,8 @@ if(tool === 'codex') {
  s.comments.push({body:body.body,pr:Number(route.split('/')[4]),author:{login:body.body.startsWith('DELIVERY VERIFIED')?(s.deliveryPublisher??'reviewer'):'reviewer'}});
  if(s.blockBeforeMerge&&body.body.startsWith('DELIVERY VERIFIED')) s.comments.push({body:'REVIEW: BLOCKED\\nReviewed-SHA: '+s.headRefOid,author:{login:'reviewer'}});
  if(s.advanceMainOnComment&&body.body.startsWith('DELIVERY VERIFIED')) {git('-C',s.checkout,'checkout','-q','main');fs.writeFileSync(s.checkout+'/late-main.txt','late');git('-C',s.checkout,'add','late-main.txt');git('-C',s.checkout,'commit','-qm','Late main');git('-C',s.checkout,'push','-q','origin','main');s.advanceMainOnComment=false;}
- save();if(s.lostCommentReply&&body.body.startsWith('DELIVERY VERIFIED'))reply(502,{});reply(201,{id:s.comments.length,body:body.body});
+ if(s.lostCommentReply&&body.body.startsWith('DELIVERY VERIFIED')) {s.restCodes=s.readbackFault?[s.readbackFault]:s.restCodes;save();reply(502,{})}
+ save();reply(201,{id:s.comments.length,body:body.body});
  } else if(name==='update-branch') {
  if(s.pendingUpdate) {s.updatePending=true;s.pendingReads=0;save();reply(s.pendingUpdate==='lost'?502:202,{message:'Updating pull request branch.'});}
  if(body.expected_head_sha!==s.headRefOid) reply(422,{message:'expected head sha mismatch'});
@@ -183,7 +184,8 @@ const ok = r => assert.equal(r.code,0,JSON.stringify(r))
 const merges = a => a.includes("-X") && a.some(v=>v.endsWith("/merge"))
 
 test("review refuses a rejected comment publication", async t => {
- const f = await fixture(t, { writeFaults: { comments: [500] } })
+ // A definitive refusal; a 5xx is an ambiguous write that reconciles instead.
+ const f = await fixture(t, { writeFaults: { comments: [422] } })
  const result = await f.run("review-pr", repo, "7")
  assert.notEqual(result.code, 0, "review must not succeed when GitHub rejects its comment")
  assert.match(result.stderr, /comment acknowledgement missing/)
@@ -1009,6 +1011,8 @@ test("an update applied behind a lost response is read back, not retried or call
  ok(await f.run("merge-enqueue",repo,"7",f.head)); ok(await f.run("merge-queue",repo,"--once"))
  const [entry]=await queueOf(f)
  assert.equal(entry.outcome.data.code,2); assert.equal(entry.outcome.data.transient,false); assert.notEqual(remoteTopic(f),f.head)
+ assert.equal(entry.state,"acknowledged")
+ await assert.rejects(fs.access(path.join(f.stateDir,"updates",`${keyFor(repo,7)}-${f.head}.json`)),{code:"ENOENT"})
  assert.equal((await f.read()).ghCalls.filter(a=>a.some(v=>v.endsWith("/update-branch"))).length,1)
 })
 
@@ -1404,7 +1408,7 @@ test('retro 7: recovery refuses a still-running check and resumes only after obs
 async function installedFixture(f) {
  const source=path.join(f.root,'factory-source'),installed=path.join(f.root,'installed')
  git(f.checkout,'clone','--quiet','--no-hardlinks',fileURLToPath(new URL('../',import.meta.url)),source)
- const names=['src/orch-installation.mjs','bin/orch-install.mjs','src/github-snapshot.mjs','src/pr-delivery.mjs','src/pr-delivery-prompts.mjs',
+ const names=['src/orch-installation.mjs','bin/orch-install.mjs','src/github-snapshot.mjs','src/evidence.mjs','src/pr-delivery-state.mjs','src/pr-delivery.mjs','src/pr-delivery-prompts.mjs',
    'src/process-group.mjs','src/process-runner.mjs','src/process-launcher.mjs','src/process-supervisor.mjs','bin/pr-delivery.mjs',
    'deploy/orch/factory-verify.mjs','deploy/orch/factory-entry.sh','deploy/orch/test-browser.sh','deploy/orch/branch-wt.sh','deploy/orch/merge-enqueue.sh']
  for(const name of names){await fs.copyFile(fileURLToPath(new URL('../'+name,import.meta.url)),path.join(source,name))}
@@ -1620,7 +1624,7 @@ test('fix12: comment success then lost reply has one publication and one merge',
 })
 for(const fault of ['no-response','empty','partial','exception',502,401]) test(`fix12: comment ${fault} stays typed without duplicate effect`,async t=>{
  const f=await queueFixture(t);await f.approve(undefined,7,30000);const s=await f.read();s.writeFaults={comments:[fault]};s.writeErrorMessage='CANARY_PRIVATE_QUEUE_CLIENT_SECRET';await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
- ok(await f.run('merge-enqueue',repo,'7',f.head));ok(await f.run('merge-queue',repo,'--once'));ok(await f.run('merge-queue',repo,'--once'))
+ ok(await f.run('merge-enqueue',repo,'7',f.head));const first=await f.run('merge-queue',repo,'--once');if(fault===401)assert.equal(first.code,1);else ok(first);ok(await f.run('merge-queue',repo,'--once'))
  assert.equal((await f.read()).ghCalls.filter(a=>a.includes('-X')&&a.some(v=>v.endsWith('/comments'))).length,1)
  const [entry]=await queueOf(f)
  if(fault===401){assert.equal(entry.state,'acknowledged');assert.equal(entry.outcome.status,'fail')}
@@ -1900,4 +1904,116 @@ test('blocking 5: worktree-specific push destination is checked after repository
  const result=await f.run('fix-pr',repo,'7','-')
  assert.equal(result.code,9,JSON.stringify(result));assert.match(result.stdout+result.stderr,/push destination/)
  assert.equal(remoteTopic(f),f.head);assert.equal(git(f.root,'--git-dir',other,'rev-parse','refs/heads/topic'),f.head)
+})
+
+const adapterModule=JSON.stringify(fileURLToPath(new URL('../src/pr-delivery.mjs',import.meta.url)))
+test('fix12: queue-cancel cannot report success while a merge dispatch is still launching',async t=>{
+ const f=await queueFixture(t);await f.approve(undefined,7,30000);ok(await f.run('merge-enqueue',repo,'7',f.head))
+ const marker=path.join(f.root,'cancel-returned-before-dispatch')
+ // The cancel is offered at the last durable step before the provider write.
+ const code=`import {spawn} from 'node:child_process';import fs from 'node:fs';
+ import {loadDeliveryConfig,createPrDeliveryAdapter} from ${adapterModule};
+ const a=createPrDeliveryAdapter(await loadDeliveryConfig(process.argv[1]),{onTransition:async s=>{
+  if(s!=='provider:merge:requested')return
+  const child=spawn(process.execPath,[${JSON.stringify(cli)},process.argv[1],'queue-cancel',${JSON.stringify(repo)},'7',${JSON.stringify(f.head)}],{stdio:'ignore'})
+  let open=true;child.on('exit',c=>{if(open&&c===0)fs.writeFileSync(${JSON.stringify(marker)},'1')})
+  await new Promise(r=>setTimeout(r,1500));open=false
+ }});
+ await a.execute('merge-queue',{repo:${JSON.stringify(repo)}});`
+ await new Promise((resolve,reject)=>{const child=spawn(process.execPath,['--input-type=module','-e',code,f.config],{env:f.env,stdio:'ignore'});child.on('error',reject);child.on('exit',resolve)})
+ const early=await fs.access(marker).then(()=>true,()=>false),sent=(await f.read()).ghCalls.filter(merges).length
+ assert.ok(!(early&&sent),'a cancellation that returned before dispatch must prevent the merge write')
+})
+test('fix12: failed readback after a lost publication reply keeps the effect unresolved',async t=>{
+ const f=await queueFixture(t,{lostCommentReply:true,readbackFault:401});await f.approve(undefined,7,30000)
+ ok(await f.run('merge-enqueue',repo,'7',f.head));await f.run('merge-queue',repo,'--once')
+ let [entry]=await queueOf(f);assert.equal(entry.state,'effect-requested');assert.equal(entry.nextAction,'reconcile-provider')
+ await f.run('merge-queue',repo,'--once');assert.equal((await queueOf(f))[0].state,'effect-requested','a later denied observation must retain the prior intent')
+ const effects=await Promise.all((await fs.readdir(path.join(f.stateDir,'effects'))).map(async file=>JSON.parse(await fs.readFile(path.join(f.stateDir,'effects',file),'utf8'))))
+ assert.equal(effects.filter(e=>e.state==='effect-requested').length,1,'the approval comment is acknowledged; the delivery note stays unresolved')
+ // Simulate repaired authentication by clearing the observer's explicit hold.
+ const providerFile=path.join(f.stateDir,'github.json'),providerState=JSON.parse(await fs.readFile(providerFile));providerState.hold=null;providerState.failures={};await fs.writeFile(providerFile,JSON.stringify(providerState));await expireProvider(f)
+ ok(await f.run('merge-queue',repo,'--once'));[entry]=await queueOf(f)
+ assert.equal(entry.state,'acknowledged');assert.equal(entry.outcome.status,'pass')
+ const s=await f.read();assert.equal(s.comments.filter(c=>c.body.startsWith('DELIVERY VERIFIED')).length,1);assert.equal(s.ghCalls.filter(merges).length,1)
+})
+const offerLegacy=async(f,lines)=>{
+ const legacy=path.join(f.root,'legacy');await fs.mkdir(path.join(legacy,'budget'),{recursive:true})
+ await fs.writeFile(path.join(legacy,'merge-queue.txt'),lines.join('\n')+'\n');await fs.writeFile(path.join(legacy,'merge-queue.done'),'')
+ ok(await f.run('import-legacy',legacy))
+}
+test('fix12: an unresolved retry does not monopolize its repository lane',async t=>{
+ const f=await queueFixture(t);await f.approve(undefined,7,30000)
+ const s=await f.read();s.writeFaults={comments:['no-response']};await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ await offerLegacy(f,[`${repo} 7 ${f.head} first`,`${repo} 8 ${f.head} second`])
+ for(let i=0;i<3;i++) ok(await f.run('merge-queue',repo,'--once'))
+ const jobs=await queueOf(f),first=jobs.find(e=>e.pr===7),second=jobs.find(e=>e.pr===8)
+ assert.equal(first.state,'effect-requested');assert.equal(second.state,'acknowledged')
+ assert.equal((await f.read()).ghCalls.filter(a=>a.includes('-X')&&a.some(v=>v.endsWith('/comments'))).length,1)
+})
+test('fix12: a structurally invalid cancellation journal refuses instead of reporting cancellation',async t=>{
+ const f=await queueFixture(t),file=path.join(f.stateDir,'cancellations.json');await fs.mkdir(f.stateDir,{recursive:true})
+ for(const bad of ['[]','null','{"x":{}}','{"x":null}']) {
+  await fs.writeFile(file,bad)
+  const result=await f.run('queue-cancel',repo,'7',f.head);assert.equal(result.code,9,JSON.stringify(result))
+  assert.equal(await fs.readFile(file,'utf8'),bad)
+ }
+})
+test('fix12: an out-of-order asynchronous offer cannot retire the newer approved head',async t=>{
+ const f=await queueFixture(t),stale=f.head
+ await f.approve(undefined,7,30000)
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ let unblock,arrived
+ const held=new Promise(r=>unblock=r),atLease=new Promise(r=>arrived=r),mkdir=fs.mkdir.bind(fs)
+ let hold=true
+ t.mock.method(fs,'mkdir',async(file,...args)=>{
+  if(hold&&String(file).endsWith('queue-state.claims')){hold=false;arrived();await held}
+  return mkdir(file,...args)
+ })
+ const older=adapter.execute('enqueue',{repo,pr:7,head:stale})
+ try {
+  await atLease
+  f.g('checkout','-q','topic');await fs.writeFile(path.join(f.checkout,'newer.txt'),'newer\n');f.g('add','newer.txt');f.g('commit','-qm','Newer')
+  f.g('push','-q','origin','topic');const current=f.g('rev-parse','HEAD');f.g('checkout','-q','main')
+  await f.approve(undefined,7,30000);ok(await f.run('merge-enqueue',repo,'7',current))
+  unblock();assert.equal((await older).status,'pass')
+  const queued=await queueOf(f),newer=queued.find(e=>e.head===current)
+  assert.equal(newer.state,'pending','the late old observation must not retire the current head')
+  ok(await f.run('merge-queue',repo,'--once'));ok(await f.run('merge-queue',repo,'--once'))
+  assert.equal((await f.read()).state,'MERGED')
+  const done=(await queueOf(f)).find(e=>e.head===current);assert.equal(done.outcome.data.merged,true)
+ } finally {unblock();await older}
+})
+
+test('fix12: update-branch launch fences cancellation before the provider write',async t=>{
+ const f=await queueFixture(t);await f.approve(undefined,7,30000);await advanceMain(f)
+ ok(await f.run('merge-enqueue',repo,'7',f.head))
+ const rename=fs.rename.bind(fs);let early=false,cancel
+ t.mock.method(fs,'rename',async(from,to)=>{
+  const result=await rename(from,to)
+  if(String(to).includes('/updates/')) {
+   let launching=true
+   cancel=f.run('queue-cancel',repo,'7',f.head).then(r=>{if(launching&&r.code===0)early=true;return r})
+   await pause(1500);launching=false
+  }
+  return result
+ })
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ await adapter.execute('merge-queue',{repo});if(cancel)await cancel
+ const sent=(await f.read()).ghCalls.filter(a=>a.includes('-X')&&a.some(v=>v.endsWith('/update-branch'))).length
+ assert.ok(!(early&&sent),'a cancellation that returned before update dispatch must prevent its write')
+})
+test('fix12: failed acknowledgement publication retains intent and reconciles without resend',async t=>{
+ const f=await queueFixture(t);await f.approve(undefined,7,30000);ok(await f.run('merge-enqueue',repo,'7',f.head))
+ const rename=fs.rename.bind(fs);let refuse=true
+ t.mock.method(fs,'rename',async(from,to)=>{
+  if(refuse&&String(to).includes('/effects/')&&JSON.parse(await fs.readFile(from)).state==='acknowledged'){
+   refuse=false;throw Object.assign(Error('synthetic acknowledgement failure'),{code:'ENOSPC'})
+  }
+  return rename(from,to)
+ })
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ await adapter.execute('merge-queue',{repo});assert.equal((await queueOf(f))[0].state,'effect-requested')
+ await adapter.execute('merge-queue',{repo});assert.equal((await queueOf(f))[0].outcome.status,'pass')
+ assert.equal((await f.read()).comments.filter(c=>c.body.startsWith('DELIVERY VERIFIED')).length,1)
 })

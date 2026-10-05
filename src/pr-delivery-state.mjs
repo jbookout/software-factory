@@ -19,18 +19,22 @@ export async function readJson(file, fallback) {
     throw error
   }
 }
-export async function writeJson(file, value) {
+// Journals are durable. Lease claims pass durable: false: owner liveness, not
+// surviving a power loss, recovers them, and they churn on every contention poll.
+export async function writeJson(file, value, { durable = true } = {}) {
   const temp = `${file}.${randomUUID()}.tmp`
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
   let handle
   try {
     handle = await fs.open(temp, "wx", 0o600)
     await handle.writeFile(JSON.stringify(value))
-    await handle.sync()
+    if (durable) await handle.sync()
     await handle.close(); handle = null
     await fs.rename(temp, file)
-    const directory = await fs.open(path.dirname(file), "r")
-    try { await directory.sync() } finally { await directory.close() }
+    if (durable) {
+      const directory = await fs.open(path.dirname(file), "r")
+      try { await directory.sync() } finally { await directory.close() }
+    }
   } finally {
     if (handle) await handle.close()
     await fs.rm(temp, { force: true })
@@ -76,10 +80,11 @@ export async function acquireLease(root, name, { budget } = {}) {
     }
     return result
   }
+  const claim = value => writeJson(file, value, { durable: false })
   try {
-    await writeJson(file, owner)
+    await claim(owner)
     owner.ticket = Math.max(0, ...(await peers()).map(p => p.ticket)) + 1
-    await writeJson(file, owner)
+    await claim(owner)
     const choosingUntil = monotonicNow() + 1000
     let contenders = await peers()
     while (contenders.some(p => p.ticket === 0)) {
@@ -94,7 +99,7 @@ export async function acquireLease(root, name, { budget } = {}) {
     release.bindJob = (job, signal) => {
       binding = binding.then(async () => {
         if (released || signal?.aborted) throw new Error('job lease released or launch revoked')
-        owner = { ...owner, job }; await writeJson(file, owner)
+        owner = { ...owner, job }; await claim(owner)
         return { file, token }
       })
       return binding

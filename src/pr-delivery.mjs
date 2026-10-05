@@ -10,7 +10,7 @@ import { runProcess, validateProcessRequest, observeProcessJob } from "./process
 import { createCodexExecArgs } from "./codex-build.mjs"
 import { normalizeResult } from "./adapters.mjs"
 import { deliveryPrompt } from "./pr-delivery-prompts.mjs"
-import { deliveryEffectId } from "./evidence.mjs"
+import { deliveryEffectId, isDeliveryBinding } from "./evidence.mjs"
 import { validRequiredChecks } from "./pr-readiness.mjs"
 import { createGithubProvider, parseReview } from "./github-snapshot.mjs"
 import { DeliveryError, keyFor, readJson, writeJson, withLease, reserveCodex, deliveryWait, completeDeliveryWait, orphanLeaseCount } from "./pr-delivery-state.mjs"
@@ -285,7 +285,6 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
           config.resources.agentUnits + config.resources.browserConcurrency, queue, { agentUnits: config.resources.agentUnits })
         release = await reserveCodex(config, repo, pr, kind, queue, { beforeAdmission: () => requireNotCancelled(repo, pr, head), identity: { attemptId, effectId, head } })
       })
-      await requireNotCancelled(repo, pr, head)
       const admitted = await view(repo, pr)
       requireOpen(admitted)
       if (admitted.headRefOid !== head) throw new DeliveryError("SUPERSEDED: HEAD MOVED before child dispatch; observe current head", 1)
@@ -305,7 +304,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       }
       await beforeExecution?.(job)
       const runBudget = budget().phaseBudget("execution", config.limits.timeoutMs)
-      const result = await measured("execution", repo, pr, () => deadlines.run(runBudget, () => command(argv, cwd, { input, timeoutMs: config.limits.timeoutMs, allowFailure: true,
+      const result = await measured("execution", repo, pr, () => deadlines.run(runBudget, () => launchFence(repo, pr, head, () => command(argv, cwd, { input, timeoutMs: config.limits.timeoutMs, allowFailure: true,
         job, onStarted: receipt => log({repo,pr,step:kind,status:"running",jobId:receipt.id,receipt:job.receipt}),
         mutation: kind !== "review", captureOutput: false, onOutput: chunk => digest.update(chunk), onSpawn: async (job, signal) => {
           await requireNotCancelled(repo, pr, head)
@@ -313,7 +312,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
           const prLease = prLeases.get(keyFor(repo, pr))
           if (prLease) bindings.push(await prLease.bindJob(job, signal))
           return bindings
-        } })))
+        } }))))
       if (mutationPending && (!afterExecution || result.code)) { await completeDeliveryWait(config, repo, pr, budget()); mutationPending = false }
       const outputDigest = digest.digest("hex")
       await log({ repo, pr, step: kind, status: result.code ? "failed" : "complete", code: result.code,
@@ -613,9 +612,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       for (const entry of queue) {
         // The journal is shared across lanes; dispatch, rather than reading
         // another lane's row, requires a configured repository.
-        if (!REPO.test(entry.repo ?? "") || entry.repo.split("/").some(part => part === "." || part === "..") ||
-            !Number.isSafeInteger(entry.pr) || entry.pr <= 0 || !SHA.test(entry.head) || !entry.id)
-          throw new DeliveryError("invalid queue job binding", 9)
+        if (!isDeliveryBinding(entry) || !entry.id) throw new DeliveryError("invalid queue job binding", 9)
         entry.state ??= entry.outcome ? "acknowledged" : "pending"
         if (!["pending", "claimed", "effect-requested", "reconciled", "acknowledged"].includes(entry.state))
           throw new DeliveryError("invalid queue transition", 9)
@@ -631,24 +628,45 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget: budget() })
   }
   const cancellationKey = (repo, pr, head) => deliveryEffectId({ repo, pr, head, action: "cancel" })
+  const leaseWait = () => ({ waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget: budget() })
+  // Invalid tombstones refuse: dropping one would silently reopen cancelled work.
+  async function readCancellations() {
+    const cancellations = await readJson(cancelFile, {})
+    if (cancellations === null || typeof cancellations !== "object" || Array.isArray(cancellations) ||
+        Object.entries(cancellations).some(([key, value]) => !isDeliveryBinding(value) ||
+          key !== cancellationKey(value.repo, value.pr, value.head) || !Number.isSafeInteger(value.at)))
+      throw new DeliveryError("invalid cancellation journal", 9)
+    return cancellations
+  }
   async function cancelled(repo, pr, head) {
-    return Boolean((await readJson(cancelFile, {}))[cancellationKey(repo, pr, head)])
+    return Object.hasOwn(await readCancellations(), cancellationKey(repo, pr, head))
   }
   async function requireNotCancelled(repo, pr, head) {
     if (await cancelled(repo, pr, head)) {
+      // Refused before any launch: the outcome is known, not uncertain.
       const error = new DeliveryError("QUEUED WORK CANCELLED", 130)
-      error.cancelled = true
+      error.cancelled = true; error.uncertain = false
       throw error
     }
+  }
+  // Every launch of a new effect checks cancellation and dispatches inside this
+  // per-binding fence. Cancellation takes the same fence, so it returns only
+  // after an in-flight dispatch, and no dispatch starts after it returns.
+  const launchFenceName = (repo, pr, head) => `launch-${cancellationKey(repo, pr, head)}`
+  function launchFence(repo, pr, head, fn) {
+    return withLease(locks, launchFenceName(repo, pr, head), async () => {
+      await requireNotCancelled(repo, pr, head)
+      return fn()
+    }, leaseWait())
   }
   async function cancelQueued(repo, pr, head) {
     const key = cancellationKey(repo, pr, head)
     // The tombstone is authoritative if publication of the projection fails.
-    await withLease(locks, "queue-state", async () => {
-      const cancellations = await readJson(cancelFile, {})
+    await withLease(locks, launchFenceName(repo, pr, head), () => withLease(locks, "queue-state", async () => {
+      const cancellations = await readCancellations()
       cancellations[key] = { repo, pr, head, at: Date.now() }
       await writeJson(cancelFile, cancellations)
-    }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget: budget() })
+    }, leaseWait()), leaseWait())
     await queueState(queue => {
       for (const entry of queue.filter(e => e.repo === repo && e.pr === pr && e.head === head && e.state === "pending")) {
         entry.state = "acknowledged"
@@ -676,19 +694,18 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
         return { message: `ALREADY QUEUED or RETRY LIMIT ${repo}#${pr} ${head}`, enqueued: false }
       queue.push({ id: randomUUID(), repo, pr, head, note: note.replaceAll("\n", " "), attempts: 0,
         state: "pending", effectAttempt: prior.length + 1, availableAt: 0, createdAt: Date.now(), recoveryOf: prior.at(-1)?.id ?? null })
-      // Old pending heads cannot start after a newer candidate is offered.
-      for (const entry of queue.filter(e => e.repo === repo && e.pr === pr && e.head !== head && e.state === "pending")) {
-        entry.state = "acknowledged"
-        entry.outcome = pass({ message: "SUPERSEDED queued head", cancelled: true })
-      }
+      // Offers are observed outside this lease and may land out of order, so no
+      // offer retires another head; dispatch refuses any head the PR no longer has.
       return { message: `QUEUED ${repo}#${pr} ${head}`, enqueued: true }
     })
   }
-  async function queueTransition(id, state, fields = {}) {
+  // A retried row moves behind its lane's other work, keeping its identity.
+  async function queueTransition(id, state, fields = {}, { requeue = false } = {}) {
     const entry = await queueState(queue => {
-      const stored = queue.find(e => e.id === id)
+      const index = queue.findIndex(e => e.id === id), stored = queue[index]
       if (!stored) throw new DeliveryError("queue claim disappeared", 9)
       Object.assign(stored, fields, { state })
+      if (requeue) queue.push(...queue.splice(index, 1))
       return structuredClone(stored)
     })
     await onTransition(state, entry)
@@ -717,12 +734,18 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
         }
         return null
       }
+      const unknown = () => {
+        const error = new DeliveryError("EFFECT OUTCOME UNKNOWN: reconcile provider before retry", 6, true)
+        error.uncertain = true
+        return error
+      }
+      // Once an intent is durable, no failure (readback, refusal of the readback,
+      // or journal publication) may turn the unknown outcome into a terminal one.
+      const unresolved = fn => fn().catch(error => { throw record?.state === "refused" || error.uncertain ? error : unknown() })
       const reconcile = async () => {
         const observed = await observeEffect()
         if (observed) return observed
-        const error = new DeliveryError("EFFECT OUTCOME UNKNOWN: reconcile provider before retry", 6, true)
-        error.uncertain = true
-        throw error
+        throw unknown()
       }
       const acknowledge = async result => {
         // Persist only provider identity and typed outcome, never raw errors/body.
@@ -730,25 +753,36 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
           providerId: result.value?.id ?? result.value?.sha ?? null })
         return result
       }
-      if (record && (record.state !== "refused" || reconcileOnly)) return acknowledge(await reconcile())
+      if (record && (record.state !== "refused" || reconcileOnly)) return unresolved(async () => acknowledge(await reconcile()))
       if (reconcileOnly) throw new DeliveryError("missing effect reconciliation intent", 9)
-      await requireNotCancelled(repo, pr, head)
       // A restored checkpoint may predate the intent, while the provider still
       // retains its effect. Observe even when no local journal row survives.
       const observed = await observeEffect()
       record = { schema: "factory-effect/v1", id, repo, pr, head, action,
         attemptId: randomUUID(), attempt: (record?.attempt ?? 0) + 1, state: "effect-requested" }
       if (observed) return acknowledge(observed)
-      await writeJson(file, record)
-      await onTransition(`provider:${action}:requested`, record)
-      const route = action === "comment" ? `issues/${pr}/comments` : `pulls/${pr}/merge`
-      const result = await provider.mutate(repo, action === "comment" ? "POST" : "PUT", route, fields, owners)
-      await onTransition(`provider:${action}:returned`, record)
-      if (result.ok && (action === "comment" ? Number.isSafeInteger(result.value?.id) && result.value.id > 0 && result.value.body === fields.body
-          : result.value?.merged === true && SHA.test(result.value.sha ?? ""))) return acknowledge(result)
-      if (result.transient || result.ok) return acknowledge(await reconcile())
-      await writeJson(file, { ...record, state: "refused", status: result.status })
-      return result
+      return launchFence(repo, pr, head, async () => {
+        await writeJson(file, record)
+        return unresolved(async () => {
+          await onTransition(`provider:${action}:requested`, record)
+          const route = action === "comment" ? `issues/${pr}/comments` : `pulls/${pr}/merge`
+          const result = await provider.mutate(repo, action === "comment" ? "POST" : "PUT", route, fields, owners).catch(async error => {
+            // An explicit write refusal or proven non-launch is known. A failed
+            // reconciliation read is handled separately and remains uncertain.
+            if (error.uncertain === false || error.state === "auth_error") {
+              const refused = { ...record, state: "refused" }
+              await writeJson(file, refused); record = refused
+            }
+            throw error
+          })
+          await onTransition(`provider:${action}:returned`, record)
+          if (result.ok && (action === "comment" ? Number.isSafeInteger(result.value?.id) && result.value.id > 0 && result.value.body === fields.body
+              : result.value?.merged === true && SHA.test(result.value.sha ?? ""))) return acknowledge(result)
+          if (result.transient || result.ok) return acknowledge(await reconcile())
+          await writeJson(file, { ...record, state: "refused", status: result.status })
+          return result
+        })
+      })
     }, { budget: budget() })
   }
   async function verifyApprovedHead(local, head, old, main = "origin/main") {
@@ -831,6 +865,9 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
           await verifyApprovedHead(local, current.headRefOid, pending.head, pending.base)
           if ((await command(["git", "merge-base", "--is-ancestor", pending.base, current.headRefOid], local.checkout, { allowFailure: true })).code)
             throw new DeliveryError("UPDATED HEAD DOES NOT INCLUDE REQUESTED MAIN; needs fresh review", 2)
+          // Verified readback resolves this intent; the old head now needs a
+          // terminal fresh-review outcome rather than further reconciliation.
+          await fs.unlink(updateRecord(repo, pr, pending.head))
           throw new DeliveryError("INTEGRATION UPDATED; needs fresh review and CI of the integrated tree", 2)
         }
         if (Date.now() >= until) throw branchUpdatePending()
@@ -869,14 +906,15 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       requireOpen(current)
       if (current.review?.verdict !== "APPROVE" || current.review.sha !== old || current.isDraft)
         throw new DeliveryError("update-branch preconditions changed", 4)
-      await requireNotCancelled(repo, pr, old)
       const pending = { schema: "factory-branch-update/v1", repo, pr, head: current.headRefOid, base: current.base.sha,
         attemptId: randomUUID(), effectId: deliveryEffectId({ repo, pr, head: old, action: "update-branch:" + current.base.sha }) }
       // Persist intent before sending once. Accepted and ambiguous writes both
       // reconcile this intent, including after a controller restart.
-      await writeJson(updateRecord(repo, pr, old), pending)
-      const update = await provider.mutate(repo, "PUT", `pulls/${pr}/update-branch`, { expected_head_sha: current.headRefOid }, owners).catch(async error => {
-        if (error.uncertain === false) await fs.unlink(updateRecord(repo, pr, old))
+      const update = await launchFence(repo, pr, old, async () => {
+        await writeJson(updateRecord(repo, pr, old), pending)
+        return provider.mutate(repo, "PUT", `pulls/${pr}/update-branch`, { expected_head_sha: current.headRefOid }, owners)
+      }).catch(async error => {
+        if (error.uncertain === false && !error.cancelled) await fs.unlink(updateRecord(repo, pr, old))
         if (!error.uncertain) throw error
         await log({ step: "update", repo, pr, status: "uncertain", code: error.code ?? 1, message: error.message })
         throw branchUpdatePending()
@@ -940,6 +978,17 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
   }
   const integrationLane = (repo, fn) => withLease(locks, `merge-${encodeURIComponent(repo)}`, fn, { budget: budget() })
   const prWriter = (repo, pr, fn) => withLease(locks, `pr-${keyFor(repo, pr)}`, fn, { budget: budget() })
+  async function unresolvedIntent(repo, pr, head) {
+    if (await pendingUpdate(repo, pr, head)) return true
+    const dir = path.join(config.stateDir, "effects")
+    const names = await fs.readdir(dir).catch(error => { if (error.code === "ENOENT") return []; throw error })
+    for (const name of names) {
+      if (!name.endsWith(".json")) continue
+      const record = await readJson(path.join(dir, name), null)
+      if (record?.repo === repo && record.pr === pr && record.head === head && record.state === "effect-requested") return true
+    }
+    return false
+  }
   async function consumeQueue(repo, lane) {
     const entry = await queueState(queue => queue.find(e => e.repo === repo && e.state !== "acknowledged" && e.availableAt <= Date.now()))
     if (!entry) return { message: "QUEUE IDLE", idle: true }
@@ -962,22 +1011,27 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
         if (stored.state === "claimed") stored = await queueTransition(entry.id, "effect-requested")
         try { outcome = pass(await mergeOne(entry.repo, entry.pr, entry.head, entry.note, [lane, writer])) }
         catch (e) {
-          if (e.cancelled) outcome = pass({ message: "QUEUED WORK CANCELLED", cancelled: true })
+          // Provider reads can fail before reaching mutation's reconciliation
+          // path. Durable intents keep their obligation even across those stops.
+          let unresolved = true
+          try { unresolved = await unresolvedIntent(entry.repo, entry.pr, entry.head) } catch { /* Unknown journal state must reconcile. */ }
+          if (unresolved) e.uncertain = true
+          if (e.cancelled && !unresolved) outcome = pass({ message: "QUEUED WORK CANCELLED", cancelled: true })
           else outcome = fail(e)
         }
         await deadlines.run(new Deadline(config.commandTimeoutMs), async () => {
-          if (outcome.data.pendingUpdate || outcome.data.uncertain || outcome.data.transient && stored.attempts < 3 || outcome.data.code === 75) {
-            await queueTransition(entry.id, "effect-requested", { attempts: stored.attempts + 1, availableAt: Date.now() + config.retryMs,
-              owner: null, lastResult: outcome, nextAction: "reconcile-provider" })
+          if (outcome.data.pendingUpdate || outcome.data.uncertain || (outcome.data.state ? !outcome.data.terminal : outcome.data.transient && stored.attempts < 3 || outcome.data.code === 75)) {
+            await queueTransition(entry.id, "effect-requested", { attempts: stored.attempts + 1, availableAt: outcome.data.retryAt ?? Date.now() + config.retryMs,
+              owner: null, lastResult: outcome, nextAction: "reconcile-provider" }, { requeue: true })
           } else {
             stored = await queueTransition(entry.id, "reconciled", { attempts: stored.attempts + 1, outcome })
           }
         })
-        if (stored.state !== "reconciled") return { message: outcome.data.message, processed: true, outcome, code: 0 }
+        if (stored.state !== "reconciled") return outcome.data.state ? { ...outcome, data: { ...outcome.data, processed: true } } : { message: outcome.data.message, processed: true, outcome, code: 0 }
       }
       await deadlines.run(new Deadline(config.commandTimeoutMs), () => queueTransition(entry.id, "acknowledged", { owner: null, nextAction: "none" }))
       await log({ step: "merge", repo: entry.repo, pr: entry.pr, head: entry.head, attemptId: stored.attemptId, effectId: stored.effectId, ...outcome.data })
-      return { message: outcome.data.message, processed: true, outcome, code: 0 }
+      return outcome.data.state ? { ...outcome, data: { ...outcome.data, processed: true } } : { message: outcome.data.message, processed: true, outcome, code: 0 }
     })
   }
   async function queueSummary() {
