@@ -1,8 +1,9 @@
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { askJev } from "./jev-usage.mjs"
 import { hmacSignature, hmacSignatureMatches, isHmacSignature } from "./hmac-signature.mjs"
+import { canonicalDigest } from "./canonical.mjs"
 
 const execFileAsync = promisify(execFile)
 
@@ -112,6 +113,114 @@ export function verifyPinnedBuildContext(context) {
   } catch {
     return false
   }
+}
+
+/** Paired steering trial, using pinned inputs and independently read/graded artifacts.
+ * execute is a bounded Model Room adapter; judge belongs to the evaluator, not
+ * the model. This emits a proposal and never edits a steering file.
+ */
+export async function replaySteeringRemoval(input) {
+  const { createBoundReader } = await import('./evidence.mjs')
+  const { context, path, line, boundary, tasks, route, repetitions = 2,
+    execute, judge, evaluatorDigest, readArtifact, timeoutMs = 60_000, runId = randomUUID() } = input
+  if (!verifyPinnedBuildContext(context) || !Array.isArray(tasks) || !tasks.length || tasks.length > 8 ||
+      !Number.isInteger(repetitions) || repetitions < 1 || repetitions > 10 ||
+      !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000 ||
+      !/^[0-9a-f]{64}$/.test(evaluatorDigest ?? '') ||
+      !['guidance', 'authority', 'credential', 'evidence_integrity'].includes(boundary) ||
+      typeof execute !== 'function' || typeof judge !== 'function' || typeof readArtifact !== 'function')
+    throw Error('invalid steering replay')
+  validateRoute(route)
+  bounded(runId, 100)
+  bounded(line, 1000)
+  const contracts = context.contracts.filter(c => c.path === path)
+  if (contracts.length !== 1 || contracts[0].excerpt.split(line).length !== 2)
+    throw Error('steering removal must match exactly once in one pinned file')
+  const removed = createPinnedBuildContext(context.contracts.map(c => {
+    if (c.path !== path) return c
+    const excerpt = c.excerpt.replace(line, '')
+    return { ...c, excerpt, content_digest: `sha256:${createHash('sha256').update(excerpt).digest('hex')}` }
+  }))
+  const taskIds = new Set()
+  const snapshot = structuredClone({ context, removed, tasks, route })
+  for (const task of snapshot.tasks) {
+    if (!/^[A-Za-z0-9._-]{1,100}$/.test(task.id)) throw Error('invalid recorded task id')
+    bounded(task.role, 1000)
+    bounded(task.evidenceContract, 4000)
+    bounded(task.input, 12000)
+    if (taskIds.has(task.id) || !Array.isArray(task.checks) || !task.checks.length ||
+        task.checks.some(check => typeof check !== 'string' || !check.trim()))
+      throw Error('invalid recorded task')
+    taskIds.add(task.id)
+    const source = await createBoundReader({ readArtifact })(task.recordedSource)
+    if (!source.bytes) throw Error(`recorded source unavailable: ${task.id}`)
+  }
+  const experimentDigest = canonicalDigest({ ...snapshot, path, line, boundary, repetitions, timeoutMs, runId, evaluatorDigest })
+  const report = { schema: 'steering-removal-replay.v1', experimentDigest,
+    scope: 'bounded_model_relative', runId, evaluatorDigest, route: snapshot.route, path, line, boundary,
+    baselineContextDigest: context.digest, removedContextDigest: removed.digest,
+    pairs: [], failures: [], regressions: [], changes: [], decision: 'insufficient_evidence' }
+  const validMetrics = m => m && typeof m.taskSuccess === 'boolean' &&
+    typeof m.requiredSourceDiscovery === 'boolean' &&
+    Number.isSafeInteger(m.falseClaims) && m.falseClaims >= 0 &&
+    Number.isSafeInteger(m.ruleViolations) && m.ruleViolations >= 0
+  trials: for (let repeat = 0; repeat < repetitions; repeat++) {
+    for (const task of snapshot.tasks) {
+      const pair = { taskId: task.id, repeat, baseline: null, removed: null }
+      for (const arm of repeat % 2 ? ['removed', 'baseline'] : ['baseline', 'removed']) {
+        const request = { trialId: `${experimentDigest}-${task.id}-${repeat}-${arm}`, arm,
+          task, route: snapshot.route, context: arm === 'baseline' ? snapshot.context : snapshot.removed }
+        request.digest = canonicalDigest(request)
+        const controller = new AbortController()
+        let timer
+        const expired = new Promise((_, reject) => { timer = setTimeout(() => {
+          controller.abort(); reject(Error('trial deadline exceeded; observe before retry'))
+        }, timeoutMs) })
+        try {
+          const artifact = structuredClone(await Promise.race([
+            Promise.resolve().then(() => execute(structuredClone(request), { signal: controller.signal, timeoutMs })),
+            expired
+          ]))
+          const evidence = await Promise.race([createBoundReader({ readArtifact })(artifact), expired])
+          if (!evidence.bytes) throw Error('trial artifact unreadable or digest mismatch')
+          const response = JSON.parse(evidence.bytes.toString('utf8'))
+          if (response.requestDigest !== request.digest ||
+              canonicalDigest(response.routeReadback) !== canonicalDigest(snapshot.route) ||
+              typeof response.result !== 'string' || !response.result.trim())
+            throw Error('trial response is unbound or has no verified result/model')
+          const metrics = await Promise.race([
+            Promise.resolve().then(() => judge({ request: structuredClone(request), response: structuredClone(response) })),
+            expired
+          ])
+          if (!validMetrics(metrics)) throw Error('independent behavioral observation incomplete')
+          pair[arm] = { artifact, requestDigest: request.digest, metrics: structuredClone(metrics) }
+        } catch (error) {
+          report.failures.push({ taskId: task.id, repeat, arm,
+            reason: controller.signal.aborted ? 'trial_timeout_observe_before_retry' : 'unusable_trial_evidence',
+            diagnosticDigest: canonicalDigest(String(error?.message ?? error)) })
+          report.pairs.push(pair)
+          break trials
+        } finally { clearTimeout(timer) }
+      }
+      report.pairs.push(pair)
+      if (!pair.baseline || !pair.removed) continue
+      for (const dimension of ['taskSuccess', 'falseClaims', 'ruleViolations', 'requiredSourceDiscovery']) {
+        const a = pair.baseline.metrics[dimension], b = pair.removed.metrics[dimension]
+        if (a === b) continue
+        const change = { taskId: task.id, repeat, dimension, baseline: a, removed: b }
+        report.changes.push(change)
+        if (typeof a === 'boolean' ? a && !b : b > a) report.regressions.push(change)
+      }
+    }
+  }
+  const allPass = report.pairs.length === tasks.length * repetitions &&
+    report.pairs.every(p => [p.baseline, p.removed].every(arm =>
+    arm?.metrics.taskSuccess && arm.metrics.requiredSourceDiscovery &&
+    arm.metrics.falseClaims === 0 && arm.metrics.ruleViolations === 0))
+  report.decision = boundary !== 'guidance' ? 'keep_boundary'
+    : report.changes.length ? 'keep'
+    : !report.failures.length && allPass ? 'propose_removal' : 'insufficient_evidence'
+  return report
 }
 
 /** Jev may trim optional pinned context, never the required contract. */
