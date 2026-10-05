@@ -123,6 +123,19 @@ test("failed run and concurrent observations create one owned diagnosis; reopen 
     "open",
   );
 });
+test("app browser suite receipt is compatible with the shared nightly contract", () => {
+  const appPolicy = {
+    ...policy,
+    repository: "jbookout/doctorcre-app",
+    suite: "app-e2e",
+  };
+  const appReceipt = {
+    ...receipt(),
+    repository: appPolicy.repository,
+    suite: appPolicy.suite,
+  };
+  assert.equal(assessNightly(appReceipt, appPolicy, base + 2000).state, "fresh");
+});
 test("full suite child executes seeded regression, binds counts and omits private output", async (t) => {
   const root = await tmp(t);
   await fs.writeFile(

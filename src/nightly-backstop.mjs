@@ -15,7 +15,7 @@ const sha = (value) => /^[0-9a-f]{40}$/.test(value ?? "");
 export function assessNightly(receipt, policy, now = Date.now()) {
   if (
     !/^jbookout\/(software-factory|doctorcre-app)$/.test(policy.repository) ||
-    !/^[a-z-]+$/.test(policy.suite) ||
+    !/^[a-z0-9-]+$/.test(policy.suite) ||
     ![policy.cadenceSeconds, policy.deadlineSeconds].every(
       (n) => Number.isSafeInteger(n) && n > 0,
     ) ||
