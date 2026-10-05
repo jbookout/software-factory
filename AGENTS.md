@@ -87,11 +87,11 @@ comment links and follow-up scopes. Each rule below is required.
 - Authenticate executable inputs and installation bindings before evaluating their code; never use an unbound fallback (3 findings).
 - Reject malformed or incomplete inputs explicitly; unknown, missing and invalid must never become success (22 findings).
 - Exercise the production guard with a valid control and one defect per fixture; require the expected refusal reason and count executed test bodies (4 findings).
-- Derive success from bound artifact bytes and exercised operations, including required traps, stored values and producer outcomes (21 findings).
-- Bind evidence to source, target, policy and destination; reobserve mutable bindings immediately before effects (27 findings).
+- Derive success from bound artifact bytes and exercised operations, including required traps, stored values and producer outcomes (22 findings).
+- Bind evidence to source, target, policy and destination; reobserve mutable bindings immediately before effects (29 findings).
 - Keep pending, failed, unknown and complete distinct; incomplete observations must preserve known evidence and missing denominators (21 findings).
 - Persist intent before effects; reconcile interruption before retry and test contention, cancellation, recovery and fairness (28 findings).
-- Parse supported syntax with its parser and normalize equivalent forms; report unsupported forms as unmeasured (15 findings).
+- Parse supported syntax with its parser and normalize equivalent forms; report unsupported forms as unmeasured (12 findings).
 
 `test/schema-artifact-authority.test.mjs`, included in `npm test`, rejects
 inline copies of two-field artifact contracts, missing local owners and unused
