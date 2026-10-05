@@ -2,6 +2,8 @@
 
 Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
 
+This repository is public. Never put client data, CARR business records, deal detail or credentials in an issue, comment, label or PR body; a factory job that needs that context references the CARR Work Request instead.
+
 ## Conventions
 
 - **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.
