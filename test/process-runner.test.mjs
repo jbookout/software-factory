@@ -188,12 +188,49 @@ test('a permission error on a live group remains a refusal',async t=>{
 
 test('macOS retired-group readback uses the system observer rather than a PATH shim',async t=>{
  if(process.platform!=='darwin') return t.skip('macOS retired-group EPERM behavior')
+ const {execFileSync}=await import('node:child_process')
+ const groups=new Set(execFileSync('/bin/ps',['-axo','pgid='],{encoding:'utf8'}).trim().split(/\s+/).map(Number))
+ let group=32766
+ while(groups.has(group)) group--
  const {killOwnedGroup,ownedGroupAlive}=await import('../src/process-group.mjs')
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-group-observer-')),prior=process.env.PATH
  t.after(async()=>{process.env.PATH=prior;await fs.rm(root,{recursive:true,force:true})})
- await fs.writeFile(path.join(root,'ps'),'#!/bin/sh\necho "2147483646 2147483646 R"\n',{mode:0o755})
+ await fs.writeFile(path.join(root,'ps'),`#!/bin/sh\necho "${group} ${group} R"\n`,{mode:0o755})
  process.env.PATH=root+path.delimiter+prior
  t.mock.method(process,'kill',()=>{const error=Error('synthetic retired-group EPERM');error.code='EPERM';throw error})
- assert.equal(ownedGroupAlive(2147483646),false)
- assert.doesNotThrow(()=>killOwnedGroup(2147483646,'SIGKILL'))
+ assert.equal(ownedGroupAlive(group),false)
+ assert.doesNotThrow(()=>killOwnedGroup(group,'SIGKILL'))
+})
+
+test('macOS retired-group cleanup does not require a global process-table scan',async t=>{
+ if(process.platform!=='darwin') return t.skip('macOS retired-group EPERM behavior')
+ const cp=await import('node:child_process'),{syncBuiltinESMExports}=await import('node:module')
+ const {killOwnedGroup,ownedGroupAlive}=await import('../src/process-group.mjs')
+ let readback={status:0,stdout:'31234 31234 Z\n',stderr:''}
+ const observer=t.mock.method(cp.default,'spawnSync',(file,args)=>{
+  assert.equal(file,'/bin/ps')
+  if(args.includes('-axo')) return {error:Object.assign(Error('global scan stalled'),{code:'ETIMEDOUT'}),status:null}
+  assert.deepEqual(args,['-g','31234','-o','pid=,pgid=,stat='])
+  return readback
+ })
+ syncBuiltinESMExports()
+ t.mock.method(process,'kill',()=>{throw Object.assign(Error('retired group'),{code:'EPERM'})})
+ try {
+  assert.equal(ownedGroupAlive(31234),false)
+  assert.doesNotThrow(()=>killOwnedGroup(31234,'SIGKILL'))
+  readback={status:1,stdout:'',stderr:''}
+  assert.equal(ownedGroupAlive(31234),false)
+  assert.doesNotThrow(()=>killOwnedGroup(31234,'SIGKILL'))
+  for(const result of [
+   {error:Error('observer stalled'),status:null},
+   {status:1,stdout:'',stderr:'observer failed'},
+   {status:0,stdout:'unreadable',stderr:''},
+   {status:0,stdout:'31235 31235 Z\n',stderr:''},
+   {status:0,stdout:'31235 31234 R\n',stderr:''}
+  ]) {
+   readback=result
+   assert.equal(ownedGroupAlive(31234),true)
+   assert.throws(()=>killOwnedGroup(31234,'SIGKILL'),{code:'EPERM'})
+  }
+ } finally {observer.mock.restore();syncBuiltinESMExports()}
 })
