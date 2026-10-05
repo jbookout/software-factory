@@ -1,7 +1,7 @@
 {
   "schema": "doc-drift/v1",
   "owner": "orchestrator",
-  "source_sha": "9a92c30ecf5eca1409f27c1b00fea3936cb095a4",
+  "source_sha": "6c0d41e2f4734d04e17efe8d115cfbc9ea9f416b",
   "scope": "full",
   "files_checked": [
     "AGENTS.md",
@@ -408,5 +408,6 @@
     }
   ],
   "unchecked_count": 156,
-  "note": "Remaining missing-reference candidates at this source revision. The orchestrator resolves ambiguous external, generated or intended references; this is a dated scan, not a live verdict."
+  "note": "Remaining missing-reference candidates at this source revision. The orchestrator resolves ambiguous external, generated or intended references; this is a dated scan, not a live verdict.",
+  "scanned_at": "2026-10-05T20:04:09.503195+00:00"
 }
