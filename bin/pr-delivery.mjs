@@ -11,7 +11,7 @@ try {
   const [repo, number, extra, fourth] = args
   const once = args.includes("--once"), pr = Number(number)
   const daemons = ["merge-queue", "auto-enqueue", "recover"]
-  if (!daemons.includes(action) && !["branch-wt", "import-legacy", "github-read"].includes(action) && (!Number.isSafeInteger(pr) || pr <= 0)) throw new Error("PR number must be a positive integer")
+  if (!daemons.includes(action) && !["branch-wt", "import-legacy", "github-read", "github-logs"].includes(action) && (!Number.isSafeInteger(pr) || pr <= 0)) throw new Error("PR number must be a positive integer")
   const request = { repo, pr }
   const loop = () => runPrDelivery({ ...request, worktree: extra, rounds: Number(fourth ?? 3) }, adapter)
   const report = result => {
@@ -44,7 +44,7 @@ try {
       process.exitCode = 0
       const interval = action === "auto-enqueue" ? Math.max(300_000, adapter.config.autoPollMs) : adapter.config.pollMs
       await pause(Math.max(interval, result.data.retryAt ? result.data.retryAt - Date.now() :
-        result.status === "fail" ? queryBackoffMs(result.data.queryErrors ?? 1) : 0))
+        result.status === "fail" && result.data.state ? queryBackoffMs(result.data.queryErrors ?? 1) : 0))
     } while (true)
   } else if (["review-pr", "fix-pr", "ci-fix"].includes(action)) {
     await adapter.exclusive(repo, pr, async () => {
@@ -56,12 +56,16 @@ try {
   } else if (action === "import-legacy") report(await adapter.execute(action, { root: repo }))
   else if (action === "branch-wt") report(await adapter.execute(action, { repo, branch: number, fallback: extra }))
   else if (action === "codex-guard") report(await adapter.exclusive(repo, pr, () => adapter.execute(action, { ...request, kind: extra, argv: args.slice(3) })))
+  else if (action === "github-logs") {
+    if (!/^[1-9][0-9]*$/.test(number)) throw new Error("GitHub logs needs a job id")
+    report(await adapter.execute(action, {repo,job:number}))
+  }
   else if (action === "github-read") {
     if (!number || !/^[A-Za-z0-9_./?=&%-]+$/.test(number) || number.startsWith("/") || number.includes("..")) throw new Error("GitHub read needs a repository-relative REST route")
     report(await adapter.execute(action, { repo, route: number }))
   }
   else if (action === "enqueue-event") report(await adapter.execute(action, { ...request, head: extra }))
-  else if (action === "readiness") report(await adapter.execute(action, { ...request, head: extra }))
+  else if (["readiness", "snapshot"].includes(action)) report(await adapter.execute(action, { ...request, head: extra }))
   else if (["merge-enqueue", "merge-one-core"].includes(action))
     report(await adapter.execute(action === "merge-enqueue" ? "enqueue" : action, { ...request, head: extra, note: fourth }))
   else throw new Error(`unknown delivery action: ${action}`)
