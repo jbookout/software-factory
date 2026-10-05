@@ -381,6 +381,9 @@ test("48-hour wall-clock driver survives restarts at quota/worker/provider seams
   });
   assert.equal(interrupted.status, "failed");
   assert.equal(interrupted.pendingWallclockProof, true);
+  assert.equal(interrupted.measurements.conservation, "unproven");
+  assert.equal(interrupted.measurements.waitingOwnership, "unproven");
+  assert.equal(interrupted.nextAction, "inspect-failed-disposable-replay-before-rehearsal");
 });
 test("workflow backstop runs full main suites in shadow with preserved gates", async () => {
   const { parse } = await import("yaml");

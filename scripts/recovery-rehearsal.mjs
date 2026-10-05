@@ -72,6 +72,7 @@ export async function rehearse({
         ),
       );
   } while (true);
+  const verified = cycles.every((c) => c.status === "passed");
   const receipt = {
     schema: "recovery-rehearsal.v1",
     mode: "shadow",
@@ -82,19 +83,23 @@ export async function rehearse({
     elapsedHours: (clock() - started) / 3600000,
     cycles,
     status:
-      cycles.every((c) => c.status === "passed") &&
+      verified &&
       (!wallclock || clock() - started >= duration)
         ? "passed"
         : "failed",
     owner: "orchestrator",
-    nextAction: wallclock
-      ? "inspect-conservation-and-recovery-assertions"
-      : "run-opt-in-48-hour-wall-clock-rehearsal",
+    nextAction: !verified
+      ? "inspect-failed-disposable-replay-before-rehearsal"
+      : wallclock
+        ? "inspect-conservation-and-recovery-assertions"
+        : "run-opt-in-48-hour-wall-clock-rehearsal",
     measurements: {
       cycleSeconds: cycles.map((c) => c.durationSeconds),
       operationalRecoverySeconds: cycles.map((c) => c.recoverySeconds),
-      conservation: "asserted-by-existing-queue-tests",
-      waitingOwnership: "queue-consumer-with-persisted-availableAt",
+      conservation: verified ? "asserted-by-existing-queue-tests" : "unproven",
+      waitingOwnership: verified
+        ? "queue-consumer-with-persisted-availableAt"
+        : "unproven",
     },
     pendingWallclockProof: !wallclock,
   };
