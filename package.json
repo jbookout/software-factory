@@ -34,7 +34,8 @@
     "factory": "node ./bin/factory.mjs",
     "design-cloud:qualify": "node ./bin/design-cloud-qualify.mjs",
     "e2e:qualify": "node ./capabilities/agentic-ui-evaluation/qualify.mjs",
-    "model-room:evidence": "node ./bin/model-room-evidence.mjs"
+    "model-room:evidence": "node ./bin/model-room-evidence.mjs",
+    "ci:fast": "node --test test/pr-validation-workflows.test.mjs"
   },
   "devDependencies": {
     "@shadcn/lint": "0.1.0",

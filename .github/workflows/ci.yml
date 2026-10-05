@@ -28,6 +28,7 @@ jobs:
           cache: npm
       - run: npm ci
         timeout-minutes: 5
+      - run: npm run ci:fast
       - run: npm test
         timeout-minutes: 45
       - run: python3 capabilities/jev-browser-select/test_select.py
