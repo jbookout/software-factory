@@ -4,6 +4,17 @@ import { DeadlineError } from "./deadline.mjs"
 import { randomUUID } from "node:crypto"
 import { createGitHubObservation } from "./github-observation.mjs"
 
+export function readProbe(client,route,result) {
+ const tls=/x509: OSStatus -?\d+/.exec(result.stderr??'')?.[0]
+ return {client,route,ok:result.code===0,kind:result.code===0?'success':tls?'tls':'transport',
+  ...result.code===0?{}:{error:tls??`transport exit ${result.code}`}}
+}
+export function probeAvailability(probes) {
+ const route=probes[0]?.route
+ return {route,availability:probes.some(p=>p.route===route && p.ok)?'reachable':'unproven',probes}
+}
+
+
 const SHA = /^[0-9a-f]{40}$/
 const PAGE_SIZE = 25
 const MAX_ROWS = 10_000
@@ -44,7 +55,7 @@ export async function latestTrustedReview(comments, trustedReviewers, authentica
 
 function prValue(value, repo, pr) {
   if (!value || value.number !== pr || !["open", "closed"].includes(value.state) ||
-      typeof value.merged !== "boolean" || typeof value.draft !== "boolean" || typeof value.title !== "string" ||
+      typeof value.merged !== "boolean" || typeof value.draft !== "boolean" || typeof value.title !== "string" || (value.body != null && typeof value.body !== "string") ||
       !SHA.test(value.head?.sha ?? "") || !SHA.test(value.base?.sha ?? "") ||
       typeof value.head.ref !== "string" || !value.head.ref || typeof value.base.ref !== "string" || !value.base.ref ||
       value.base.repo?.full_name !== repo || typeof value.head.repo?.full_name !== "string" ||
@@ -69,24 +80,27 @@ export function createGithubProvider(config, { command, getRepo, authenticate, n
     const argv = ["gh", "api", `repos/${repo}/${route}`, "--include"]
     if (format === "text") argv.push("--allow-escape-sequences")
     if (method !== "GET") argv.push("-X", method, "--input", "-")
-    let launched = false
+    let launched = false, probe
     const response = await observer.request({pool: "rest", key: `${repo}/${route}`, mutation: method !== "GET",
       cache: route.startsWith("commits/"), validate, observation, format}, async () => {
       if (metrics) metrics.providerCalls++
-      return command(argv, getRepo(repo).checkout, {allowFailure:true,
+      const result = await command(argv, getRepo(repo).checkout, {allowFailure:true,
         maxOutputBytes:format === "text" ? 4_000_000 : 16_000_000,
         ...(method !== "GET" ? {input:JSON.stringify(fields), mutation:true,
           onSpawn:(job,signal)=>{
             launched=true
             return Promise.all(owners.map(owner=>owner.bindJob(job,signal)))
           }} : {})})
+      probe = readProbe("gh", `repos/${repo}/${route}`, result)
+      return result
     }, budget()).catch(error => {
       // A provider hold or a pre-launch stop cannot have sent this mutation.
       // Once supervised launch starts, only the runner can prove non-dispatch.
       if (method !== "GET" && !launched) error.uncertain ??= false
+      if (probe) error.probe = probe
       throw error
     })
-    return {...response, value:response.body}
+    return {...response, value:response.body, probe}
   }
   const request = (repo, route, options = {}) => withRead(repo, () => transport(repo, route, options))
   const mutate = (repo, method, route, fields, owners = []) => transport(repo, route, { method, fields, owners })
@@ -147,7 +161,8 @@ export function createGithubProvider(config, { command, getRepo, authenticate, n
     try {
       const policy = structuredClone({ requiredChecks: getRepo(repo).requiredChecks, trustedReviewers: getRepo(repo).trustedReviewers })
       if (!Number.isSafeInteger(pr) || pr <= 0 || head !== undefined && !SHA.test(head)) fail("invalid GitHub snapshot request")
-      const initial = await liveTarget(repo, prValue((await request(repo, `pulls/${pr}`, { metrics, observation, validate: value => {prValue(value,repo,pr);return true} })).value, repo, pr), metrics, observation)
+      const initialRead = await request(repo, `pulls/${pr}`, { metrics, observation, validate: value => {prValue(value,repo,pr);return true} })
+      const initial = await liveTarget(repo, prValue(initialRead.value, repo, pr), metrics, observation)
       const observedHead = head ?? initial.headRefOid
       const comments = await pages(repo, `issues/${pr}/comments`, { expected: initial.commentCount, metrics, observation, validateRow: c => {
         if (typeof c.body !== "string" || typeof c.user?.login !== "string" ||
@@ -161,13 +176,15 @@ export function createGithubProvider(config, { command, getRepo, authenticate, n
       const statuses = refused || !observeChecks ? null : (await pages(repo, `commits/${observedHead}/statuses`, { metrics, observation, validateRow: row => {
         if (classifyChecks({head:observedHead,observedHead,requiredChecks:policy.requiredChecks,checkRuns:[],statuses:[{...row,head_sha:observedHead}]}).state === "provider-unknown") fail("invalid hosted checks response")
       } })).map(s => ({ ...s, head_sha: observedHead }))
-      const final = await liveTarget(repo, prValue((await request(repo, `pulls/${pr}`, { metrics, observation, validate: value => {prValue(value,repo,pr);return true} })).value, repo, pr), metrics, observation)
+      const finalRead = await request(repo, `pulls/${pr}`, { metrics, observation, validate: value => {prValue(value,repo,pr);return true} })
+      const final = await liveTarget(repo, prValue(finalRead.value, repo, pr), metrics, observation)
+      const availability = probeAvailability([initialRead.probe, finalRead.probe])
       if (JSON.stringify(initial) !== JSON.stringify(final) || JSON.stringify(policy) !==
           JSON.stringify({ requiredChecks: getRepo(repo).requiredChecks, trustedReviewers: getRepo(repo).trustedReviewers })) {
         metrics.staleActions++
         fail("GitHub snapshot bindings changed during observation", true)
       }
-      if (refused) return freeze({ ...base, ...final, state: "refused", prState: final.state,
+      if (refused) return freeze({ ...base, ...final, state: "refused", prState: final.state, availability,
         reason: "no-current-trusted-approval", comments, review, ci: { state: "unobserved", nextAction: "await-trusted-review" },
         inventory: { comments, checkRuns: null, statuses: null, requiredChecks: policy.requiredChecks },
         fetchedAt: new Date(now()).toISOString(), errors: [] })
@@ -175,14 +192,14 @@ export function createGithubProvider(config, { command, getRepo, authenticate, n
         : { state: "unobserved", nextAction: "await-updated-head" }
       if (ci.state === "provider-unknown") fail("invalid hosted checks response")
       await observer.complete(observation, budget())
-      return freeze({ ...base, ...final, state: "known", prState: final.state, comments, ci, review,
+      return freeze({ ...base, ...final, state: "known", prState: final.state, availability, comments, ci, review,
         inventory: { comments, checkRuns, statuses, requiredChecks: policy.requiredChecks },
         fetchedAt: new Date(now()).toISOString(), errors: [] })
     } catch (error) {
-      return freeze({ ...base, state: "unknown", fetchedAt: new Date(now()).toISOString(),
+      return freeze({ ...base, state: "unknown", availability:probeAvailability(error.probe?[error.probe]:[]), fetchedAt: new Date(now()).toISOString(),
         ci: { state: "provider-unknown", nextAction: "retry-provider-observation" }, review: null,
         errors: [{ message: error instanceof DeliveryError || error instanceof DeadlineError ? error.message : "GitHub snapshot unavailable", transient: error.transient ?? false,
-          code: error.code, state: error.state, pool: error.pool, retryAt: error.retryAt, queryErrors: error.queryErrors, terminal: error.terminal,
+          ...(error.probe ? {probe:error.probe} : {}), code: error.code, state: error.state, pool: error.pool, retryAt: error.retryAt, queryErrors: error.queryErrors, terminal: error.terminal,
           ...(error.phase ? { phase: error.phase, nextAction: error.nextAction } : {}) }] })
     }
   }
