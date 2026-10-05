@@ -530,8 +530,8 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     await persist("push_pending")
     if(remoteHead!==record.head) {
       const transport=repairTransport(record.pushDestination)
-      await command(["git",...transport.options,"push",transport.remote,`${record.head}:refs/heads/${record.branch}`],cwd,
-        {onSpawn:async(job,signal)=>{const owner=prLeases.get(keyFor(repo,pr));return owner?[await owner.bindJob(job,signal)]:[]}})
+      await launchFence(repo,pr,record.baseHead,()=>command(["git",...transport.options,"push",transport.remote,`${record.head}:refs/heads/${record.branch}`],cwd,
+        {onSpawn:async(job,signal)=>{const owner=prLeases.get(keyFor(repo,pr));return owner?[await owner.bindJob(job,signal)]:[]}}))
     }
     record.remoteHead=await repairRemote(repo,record)
     if(record.remoteHead!==record.head)throw new DeliveryError("PUSH PENDING: remote head differs from tested source",1)

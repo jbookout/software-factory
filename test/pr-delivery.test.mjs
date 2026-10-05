@@ -1920,6 +1920,32 @@ test('blocking 5: worktree-specific push destination is checked after repository
 })
 
 const adapterModule=JSON.stringify(fileURLToPath(new URL('../src/pr-delivery.mjs',import.meta.url)))
+test('fix12 R1: cancellation of the original repair head prevents runner push and recovery',async t=>{
+ const f=await fixture(t,{builderNoPush:true})
+ const file=path.join(f.stateDir,'repairs',`${keyFor(repo,7)}.json`),rename=fs.rename.bind(fs)
+ let cancelled=false
+ t.mock.method(fs,'rename',async(from,to)=>{
+  const result=await rename(from,to)
+  if(!cancelled && to===file && (await currentRepair(f)).status==='push_pending') {
+   cancelled=true
+   assert.notEqual((await currentRepair(f)).head,f.head,'the candidate has a different head from its cancellation binding')
+   ok(await f.run('queue-cancel',repo,'7',f.head))
+   assert.equal(remoteTopic(f),f.head,'cancellation completes before any runner push')
+  }
+  return result
+ })
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const result=await adapter.execute('fix',{repo,pr:7})
+ assert.equal(cancelled,true)
+ assert.equal(result.data.code,130,JSON.stringify(result));assert.equal(result.data.cancelled,true)
+ assert.equal(remoteTopic(f),f.head)
+ const record=await currentRepair(f)
+ assert.equal(record.status,'push_pending');assert.equal(record.testedHead,record.head)
+ assert.equal(await fs.access(path.join(f.stateDir,'repair-receipts',`${record.id}.json`)).then(()=>true,()=>false),false)
+ const recovered=await adapter.execute('fix',{repo,pr:7,repairId:record.id})
+ assert.equal(recovered.data.code,130,JSON.stringify(recovered));assert.equal(remoteTopic(f),f.head)
+ assert.equal((await f.read()).calls.length,1,'recovery must not repeat the builder or publish cancelled source')
+})
 test('fix12: queue-cancel cannot report success while a merge dispatch is still launching',async t=>{
  const f=await queueFixture(t);await f.approve(undefined,7,30000);ok(await f.run('merge-enqueue',repo,'7',f.head))
  const marker=path.join(f.root,'cancel-returned-before-dispatch')
