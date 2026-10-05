@@ -1356,6 +1356,21 @@ async function expireProvider(f) {
  const queue=await fs.readFile(queueFile,'utf8').then(JSON.parse).catch(()=>null)
  if(queue) {for(const entry of queue) entry.availableAt=0;await fs.writeFile(queueFile,JSON.stringify(queue))}
 }
+test('PR46 finding 7: undispatched quota refusal retires update intent and recovers after reset',async t=>{
+ const f=await fixture(t);await f.approve();await advanceMain(f)
+ await fs.writeFile(path.join(f.stateDir,'github.json'),JSON.stringify({schema:'factory-github/v1',requests:[],cache:{},failures:{}}))
+ const config=await loadDeliveryConfig(f.config);config.github={cacheMs:0,requestsPerHour:14}
+ const first=await createPrDeliveryAdapter(config,{env:f.env}).execute('merge-one-core',{repo,pr:7,head:f.head})
+ assert.equal(first.data.state,'quota_hold',JSON.stringify(first));assert.equal(first.data.code,75)
+ const updates=s=>s.ghCalls.filter(a=>a.some(v=>v.endsWith('/update-branch'))).length
+ assert.equal(updates(await f.read()),0);assert.equal(remoteTopic(f),f.head)
+ assert.deepEqual(await fs.readdir(path.join(f.stateDir,'updates')),[],"undispatched update must not remain pending")
+ await expireProvider(f);config.github.requestsPerHour=100
+ const next=await createPrDeliveryAdapter(config,{env:f.env}).execute('merge-one-core',{repo,pr:7,head:f.head})
+ assert.equal(next.data.code,2,JSON.stringify(next));assert.match(next.data.message,/INTEGRATION UPDATED/)
+ assert.equal(updates(await f.read()),1);assert.notEqual(remoteTopic(f),f.head)
+ assert.equal((await f.read()).state,'OPEN',"updated head still requires fresh review and CI")
+})
 test('PR46 finding 1: admission quota expires without a permanent capacity wait',async t=>{
  const f=await fixture(t,{}, {github:{cacheMs:0,requestsPerHour:20}})
  const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})

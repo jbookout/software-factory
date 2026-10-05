@@ -536,6 +536,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       // reconcile this intent, including after a controller restart.
       await writeJson(updateRecord(repo, pr, old), pending)
       const update = await provider.mutate(repo, "PUT", `pulls/${pr}/update-branch`, { expected_head_sha: current.headRefOid }, owners).catch(async error => {
+        if (error.uncertain === false) await fs.unlink(updateRecord(repo, pr, old))
         if (!error.uncertain) throw error
         await log({ step: "update", repo, pr, status: "uncertain", code: error.code ?? 1, message: error.message })
         throw branchUpdatePending()

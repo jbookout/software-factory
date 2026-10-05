@@ -69,14 +69,23 @@ export function createGithubProvider(config, { command, getRepo, authenticate, n
     const argv = ["gh", "api", `repos/${repo}/${route}`, "--include"]
     if (format === "text") argv.push("--allow-escape-sequences")
     if (method !== "GET") argv.push("-X", method, "--input", "-")
+    let launched = false
     const response = await observer.request({pool: "rest", key: `${repo}/${route}`, mutation: method !== "GET",
       cache: route.startsWith("commits/"), validate, observation, format}, async () => {
       if (metrics) metrics.providerCalls++
       return command(argv, getRepo(repo).checkout, {allowFailure:true,
         maxOutputBytes:format === "text" ? 4_000_000 : 16_000_000,
         ...(method !== "GET" ? {input:JSON.stringify(fields), mutation:true,
-          onSpawn:(job,signal)=>Promise.all(owners.map(owner=>owner.bindJob(job,signal)))} : {})})
-    }, budget())
+          onSpawn:(job,signal)=>{
+            launched=true
+            return Promise.all(owners.map(owner=>owner.bindJob(job,signal)))
+          }} : {})})
+    }, budget()).catch(error => {
+      // A provider hold or a pre-launch stop cannot have sent this mutation.
+      // Once supervised launch starts, only the runner can prove non-dispatch.
+      if (method !== "GET" && !launched) error.uncertain ??= false
+      throw error
+    })
     return {...response, value:response.body}
   }
   const request = (repo, route, options = {}) => withRead(repo, () => transport(repo, route, options))
