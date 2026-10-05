@@ -25,7 +25,13 @@ try {
   else if (action === "recover") {
     do {
       for (const candidate of await adapter.recoveryCandidates()) {
-        try { report(await adapter.exclusive(candidate.repo, candidate.pr, () => runPrDelivery(candidate, adapter))) }
+        try { report(await adapter.exclusive(candidate.repo, candidate.pr, async () => {
+          if (candidate.repairId) {
+            const result = await adapter.execute("fix",candidate)
+            if (result.status !== "pass") return result
+          }
+          return runPrDelivery({repo:candidate.repo,pr:candidate.pr},adapter)
+        })) }
         catch (e) {
           if (e.code !== 75) throw e
           report({ status: "fail", data: { code: e.code, message: e.message } })
@@ -65,7 +71,7 @@ try {
     report(await adapter.execute(action, { repo, route: number }))
   }
   else if (action === "enqueue-event") report(await adapter.execute(action, { ...request, head: extra }))
-  else if (["readiness", "snapshot"].includes(action)) report(await adapter.execute(action, { ...request, head: extra }))
+  else if (["readiness", "repair-status", "snapshot"].includes(action)) report(await adapter.execute(action, { ...request, head: extra }))
   else if (["merge-enqueue", "merge-one-core"].includes(action))
     report(await adapter.execute(action === "merge-enqueue" ? "enqueue" : action, { ...request, head: extra, note: fourth }))
   else throw new Error(`unknown delivery action: ${action}`)
