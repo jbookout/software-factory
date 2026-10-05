@@ -4,7 +4,8 @@
 import { openSync, closeSync, fstatSync, readSync, writeFileSync, constants } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
-import { parseDocument, isMap, isScalar } from 'yaml'
+import { isMap, isScalar } from 'yaml'
+import { parseWorkflowDocument } from '../src/workflow-audit.mjs'
 import { canonicalDigest, canonicalJson } from '../src/canonical.mjs'
 import { classifyChecks, validRequiredChecks } from '../src/pr-readiness.mjs'
 
@@ -50,20 +51,24 @@ function workflowParity(x) {
   need(typeof x.originalSelector === 'string' && /^[a-zA-Z0-9_-]+$/.test(x.originalSelector) &&
     typeof x.candidateSelector === 'string' && /^[a-zA-Z0-9_-]+$/.test(x.candidateSelector) && x.originalSelector !== x.candidateSelector, 'selectors')
   need(typeof x.originalWorkflow === 'string' && typeof x.candidateWorkflow === 'string', 'workflow-evidence')
+  let original, candidate
+  try {
+    original = parseWorkflowDocument(x.originalWorkflow)
+    candidate = parseWorkflowDocument(x.candidateWorkflow)
+  } catch { stop('unknown', 'workflow-syntax-or-indirection') }
+  need(!x.originalWorkflow.includes('\r') && !x.candidateWorkflow.includes('\r'), 'workflow-line-endings')
   const before = x.originalWorkflow.split('\n'), after = x.candidateWorkflow.split('\n')
   need(before.length === after.length, 'workload-changed', 'rejected')
   const changed = before.map((line, i) => line === after[i] ? -1 : i).filter(i => i !== -1)
   need(changed.length === 1, 'workload-changed', 'rejected')
   const i = changed[0], match = before[i].match(/^( +)runs-on: ([a-zA-Z0-9_-]+)$/)
   need(match && match[2] === x.originalSelector && after[i] === `${match[1]}runs-on: ${x.candidateSelector}`, 'workload-changed', 'rejected')
-  const original = parseDocument(x.originalWorkflow), candidate = parseDocument(x.candidateWorkflow)
-  need(!original.errors.length && !candidate.errors.length, 'workflow-syntax')
   const jobs = original.get('jobs', true)
   need(isMap(jobs), 'workflow-jobs')
   const lineStart = before.slice(0, i).reduce((total, line) => total + line.length + 1, 0)
   const selected = jobs.items.filter(job => {
     const node = isScalar(job.key) ? original.getIn(['jobs', job.key.value, 'runs-on'], true) : null
-    return isScalar(node) && node.value === x.originalSelector && node.range?.[0] === lineStart + before[i].indexOf(x.originalSelector)
+    return isScalar(node) && node.value === x.originalSelector && node.range?.[0] === lineStart + match[1].length + 'runs-on: '.length
   })
   need(selected.length === 1, 'not-a-job-selector', 'rejected')
   const afterNode = candidate.getIn(['jobs', selected[0].key.value, 'runs-on'], true)
@@ -117,15 +122,10 @@ const distribution = values => {
   const s = [...values].sort((a, b) => a - b), n = s.length
   return { median: (s[Math.floor((n - 1) / 2)] + s[Math.floor(n / 2)]) / 2, p95: s[Math.ceil(.95 * n) - 1] }
 }
-function lifecycleDistribution(runs) {
-  return Object.fromEntries(['queueToGreenSeconds', 'greenToReviewSeconds', 'mergeToLiveSeconds'].map(key => {
-    const values = runs.map(r => r.lifecycle?.[key]).filter(number)
-    return [key, { status: values.length === runs.length ? 'complete' : 'unknown', samples: values.length,
-      missing: runs.length - values.length, ...(values.length ? distribution(values) : { median: null, p95: null }) }]
-  }))
-}
-
 export function assessBenchmark(input, { now = new Date().toISOString() } = {}) {
+  const assessedReceipt = (state, reason, extra = {}) => receipt(state, reason, {
+    assessedAt: Number.isFinite(timestamp(now)) ? now : null, ...extra
+  })
   try {
     const x = input
     need(x?.schema === 'ci-runner-experiment/v1' && x.repo === 'jbookout/doctorcre-app' && Number.isFinite(timestamp(now)), 'experiment-evidence')
@@ -166,22 +166,20 @@ export function assessBenchmark(input, { now = new Date().toISOString() } = {}) 
     const before = distribution(baseline), after = distribution(candidate)
     need(before.median > 0, 'zero-baseline')
     const metrics = { pairs: 10, baseline: before, candidate: after, medianImprovement: (before.median - after.median) / before.median,
-      baselineUsd: baselineCost, candidateUsd: candidateCost, observations,
-      downstream: { baseline: lifecycleDistribution(x.pairs.map(p => p.baseline)),
-        candidate: lifecycleDistribution(x.pairs.map(p => p.candidate)) } }
+      baselineUsd: baselineCost, candidateUsd: candidateCost, observations }
     const extra = { inputDigest: canonicalDigest(x), baselineDigest: x.baselineDigest, metrics }
-    if (candidateCost > x.provider.maxTrialUsd) return receipt('rejected', 'cost-ceiling', extra)
-    if (after.p95 > before.p95) return receipt('rejected', 'p95-regression', extra)
-    if (after.median > before.median * .8) return receipt('rejected', 'median-below-proposed-bar', extra)
-    return receipt('qualified-shadow', 'proposed-bar-met-not-measured-adoption-proof', extra)
+    if (candidateCost > x.provider.maxTrialUsd) return assessedReceipt('rejected', 'cost-ceiling', extra)
+    if (after.p95 > before.p95) return assessedReceipt('rejected', 'p95-regression', extra)
+    if (after.median > before.median * .8) return assessedReceipt('rejected', 'median-below-proposed-bar', extra)
+    return assessedReceipt('qualified-shadow', 'proposed-bar-met-not-measured-adoption-proof', extra)
   } catch (error) {
-    return receipt(error?.benchmarkState ?? 'unknown', error?.benchmarkState ? error.reason : 'invalid-evidence')
+    return assessedReceipt(error?.benchmarkState ?? 'unknown', error?.benchmarkState ? error.reason : 'invalid-evidence')
   }
 }
 
 // Each bounded REST GET is independent; an unavailable owner never zero-fills
 // or discards owners that did return. No provider installation or purchase API.
-export async function observeOwners({ now = new Date().toISOString(), run = args => spawnSync('gh', args, { encoding: 'utf8', timeout: 15000, maxBuffer: 1024 * 1024 }) } = {}) {
+export async function observeOwners({ run = args => spawnSync('gh', args, { encoding: 'utf8', timeout: 15000, maxBuffer: 1024 * 1024 }) } = {}) {
   const owners = []
   for (const repo of REPOS) {
     try {
@@ -189,7 +187,7 @@ export async function observeOwners({ now = new Date().toISOString(), run = args
       if (result.status !== 0 || result.error) throw Error()
       const data = JSON.parse(result.stdout)
       if (data.full_name !== repo || !['User', 'Organization'].includes(data.owner?.type)) throw Error()
-      owners.push({ repo, type: data.owner.type, observed_at: now, evidenceDigest: canonicalDigest(data), state: 'observed' })
+      owners.push({ repo, type: data.owner.type, observed_at: new Date().toISOString(), evidenceDigest: canonicalDigest(data), state: 'observed' })
     } catch { owners.push({ repo, state: 'unknown' }) }
   }
   return { schema: 'ci-runner-owner-observation/v1', mode: 'shadow', gateAuthority: false,
@@ -208,6 +206,8 @@ async function main(args) {
       'ten first-attempt pairs on one source/tree with matched cold/warm input/cache/load/environment,\n' +
       'Actions timestamps/check artifacts, hashed test inventories, PG/browser/runtime/network/artifact\n' +
       'parity, hardware, full setup/test/build phases and observed rounded charges including overhead.\n' +
+      '--now controls assessment replay only; observed_at always uses the real clock.\n' +
+      'Assessment receipts record assessedAt; downstream lifecycle timing belongs to measure-runs.py.\n' +
       'All inputs are caller-supplied evidence, not independently authenticated. Keep raw artifacts private.\n' +
       'Exit: 0 qualified-shadow/owners observed; 1 decline/rejection; 2 unknown. Retain original selector.\n')
     return
@@ -224,7 +224,7 @@ async function main(args) {
     if (Boolean(options['--input']) === Boolean(options['--observe-owners'])) throw Error()
     const now = options['--now'] ?? new Date().toISOString()
     if (!Number.isFinite(timestamp(now))) throw Error()
-    if (options['--observe-owners']) result = await observeOwners({ now })
+    if (options['--observe-owners']) result = await observeOwners()
     else {
       const fd = openSync(options['--input'], constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
       let bytes

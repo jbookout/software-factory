@@ -122,13 +122,52 @@ test('unknown can recover after evidence arrives without changing or disposing e
   const x = fixture(); const original = JSON.stringify(x); const partial = structuredClone(x); partial.pairs.pop()
   assert.equal(assess(partial).state, 'unknown'); assert.equal(assess(x).state, 'qualified-shadow'); assert.equal(JSON.stringify(x), original)
 })
-test('downstream timings are separate distributions with missing evidence retained', () => {
+test('downstream lifecycle measurement stays with measure-runs', () => {
   const x = fixture(); x.pairs[0].baseline.lifecycle.greenToReviewSeconds = 12
   const result = assess(x)
-  assert.equal(result.metrics.downstream.baseline.greenToReviewSeconds.samples, 1)
-  assert.equal(result.metrics.downstream.baseline.greenToReviewSeconds.missing, 9)
-  assert.equal(result.metrics.downstream.baseline.greenToReviewSeconds.status, 'unknown')
-  assert.equal(result.metrics.downstream.candidate.mergeToLiveSeconds.median, null)
+  assert.equal(result.state, 'qualified-shadow')
+  assert.equal(Object.hasOwn(result.metrics, 'downstream'), false)
+})
+for (const [name, source] of [
+  ['aliased job', 'jobs:\n  a: &base\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n  b: *base\n'],
+  ['merged job', 'jobs:\n  a: &base\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n  b:\n    <<: *base\n'],
+  ['nested step anchor', workflow + '      - &shared\n        run: echo hello\n'],
+  ['unreferenced job anchor', workflow.replace('test:', 'test: &base')],
+]) test(`${name} cannot qualify a single-job experiment`, () => {
+  const x = fixture()
+  x.originalWorkflow = source; x.candidateWorkflow = source.replace('ubuntu-latest', 'trial-4cpu')
+  for (const pair of x.pairs) {
+    pair.baseline.workflowDigest = canonicalDigest(x.originalWorkflow)
+    pair.candidate.workflowDigest = canonicalDigest(x.candidateWorkflow)
+    pair.baseline.workloadDigest = pair.candidate.workloadDigest = canonicalDigest(x.originalWorkflow)
+  }
+  assert.equal(assess(x).state, 'unknown')
+})
+test('assessment receipts disclose the clock for qualified, stale and future evidence', () => {
+  for (const clock of [now, '2026-10-14T20:00:00Z', '2026-10-03T20:00:00Z']) {
+    const result = assessBenchmark(fixture(), { now: clock })
+    assert.equal(result.assessedAt, clock)
+  }
+  assert.equal(assessBenchmark(fixture(), { now: '2026-10-14T20:00:00Z' }).state, 'unknown')
+})
+test('observation ignores a supplied now and stamps each completed read with the real clock', async () => {
+  const before = Date.now()
+  const result = await observeOwners({ now: '2030-01-01T00:00:00Z', run: args => ({
+    status: 0, stdout: JSON.stringify({ full_name: args[3].slice(6), owner: { type: 'User' } })
+  }) })
+  const after = Date.now()
+  assert.equal(result.state, 'observed')
+  for (const owner of result.owners) assert.ok(Date.parse(owner.observed_at) >= before && Date.parse(owner.observed_at) <= after)
+})
+test('CLI owner observation cannot fabricate timestamps with --now', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'runner-owner-clock-'))
+  writeFileSync(join(dir, 'gh'), `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({full_name: process.argv[5].slice(6), owner: {type: 'User'}}));\n`, { mode: 0o755 })
+  const before = Date.now()
+  const result = spawnSync(process.execPath, ['scripts/ci-runner-benchmark.mjs', '--observe-owners', '--now', '2030-01-01T00:00:00Z'],
+    { encoding: 'utf8', env: { ...process.env, PATH: dir } })
+  const after = Date.now()
+  assert.equal(result.status, 0)
+  for (const owner of JSON.parse(result.stdout).owners) assert.ok(Date.parse(owner.observed_at) >= before && Date.parse(owner.observed_at) <= after)
 })
 test('owner observation uses only REST GET and isolates all result faults', async () => {
   const faults = [() => ({ status: 0, stdout: '' }), () => ({ status: 1, stderr: 'CANARY_SECRET' }),
@@ -162,4 +201,19 @@ test('CLI persisted bytes and errors never echo input, nested PII, URL secrets o
     { encoding: 'utf8', env: { ...process.env, PATH: dir } })
   assert.equal(refused.status, 2)
   assert.doesNotMatch(refused.stdout + refused.stderr + readFileSync(ownerOutput, 'utf8'), /CANARY_/)
+})
+
+for (const [name, source, originalSelector, state] of [
+  ['selector also occurs in runs-on key', workflow.replace('ubuntu-latest', 'on'), 'on', 'qualified-shadow'],
+  ['CRLF workflow is unsupported evidence', workflow.replaceAll('\n', '\r\n'), 'ubuntu-latest', 'unknown'],
+]) test(name, () => {
+  const x = fixture(); x.originalSelector = originalSelector
+  x.originalWorkflow = source; x.candidateWorkflow = source.replace(`runs-on: ${originalSelector}`, 'runs-on: trial-4cpu')
+  for (const pair of x.pairs) {
+    pair.baseline.selector = originalSelector
+    pair.baseline.workflowDigest = canonicalDigest(x.originalWorkflow)
+    pair.candidate.workflowDigest = canonicalDigest(x.candidateWorkflow)
+    pair.baseline.workloadDigest = pair.candidate.workloadDigest = canonicalDigest(x.originalWorkflow)
+  }
+  assert.equal(assess(x).state, state)
 })
