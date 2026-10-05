@@ -411,7 +411,7 @@ export function evaluateMobileVerification(project, availableCapabilities, evide
     : { status: 'pass', message: 'reported mobile evidence covers each declared mobile platform' }
 }
 
-// Interview snapshots are values for the future factory journal, never a private store.
+// Interview snapshots are values; durable persistence lives in design-journal.
 const entryPlaybooks = {
   'new-product': { inputs: [], artifact: 'product-brief', focus: 'Bound users, jobs, outcomes and the first product version.' },
   feature: { inputs: ['existing-contract'], artifact: 'feature-delta', focus: 'Compare the feature to the existing product contract and protect adjacent workflows.' },

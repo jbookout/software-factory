@@ -240,7 +240,7 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
               return result.findings.length ? result.findings : [{ role: reviewRoles[index], reason: "review did not pass" }]
             })
             if (!failed.length) break
-            const current = hash(failed ?? [])
+            const current = hash(failed)
             if (current === previous) {
               stopped = "review:stalled"
               break

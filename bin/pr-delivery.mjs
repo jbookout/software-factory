@@ -53,7 +53,7 @@ try {
   } else if (action === "import-legacy") report(await adapter.execute(action, { root: repo }))
   else if (action === "branch-wt") report(await adapter.execute(action, { repo, branch: number, fallback: extra }))
   else if (action === "codex-guard") report(await adapter.exclusive(repo, pr, () => adapter.execute(action, { ...request, kind: extra, argv: args.slice(3) })))
-  else if (action === "readiness") report(await adapter.execute(action, { ...request, head: extra }))
+  else if (["readiness", "snapshot"].includes(action)) report(await adapter.execute(action, { ...request, head: extra }))
   else if (["merge-enqueue", "merge-one-core"].includes(action))
     report(await adapter.execute(action === "merge-enqueue" ? "enqueue" : action, { ...request, head: extra, note: fourth }))
   else throw new Error(`unknown delivery action: ${action}`)
