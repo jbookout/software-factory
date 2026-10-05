@@ -14,7 +14,7 @@ import { deliveryPrompt } from "./pr-delivery-prompts.mjs"
 import { deliveryEffectId, isDeliveryBinding } from "./evidence.mjs"
 import { validRequiredChecks } from "./pr-readiness.mjs"
 import { createGithubProvider, parseReview } from "./github-snapshot.mjs"
-import { DeliveryError, keyFor, readJson, writeJson, withLease, reserveCodex, deliveryWait, completeDeliveryWait, orphanLeaseCount } from "./pr-delivery-state.mjs"
+import { DeliveryError, validateQueueJournal, keyFor, readJson, writeJson, withLease, reserveCodex, deliveryWait, completeDeliveryWait, orphanLeaseCount } from "./pr-delivery-state.mjs"
 
 const SHA = /^[0-9a-f]{40}$/
 const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
@@ -626,21 +626,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
   }
   async function queueState(fn) {
     return withLease(locks, "queue-state", async () => {
-      const queue = await readJson(queueFile, [])
-      if (!Array.isArray(queue)) throw new DeliveryError("invalid queue journal", 9)
-      for (const entry of queue) {
-        // The journal is shared across lanes; dispatch, rather than reading
-        // another lane's row, requires a configured repository.
-        if (!isDeliveryBinding(entry) || !entry.id) throw new DeliveryError("invalid queue job binding", 9)
-        entry.state ??= entry.outcome ? "acknowledged" : "pending"
-        if (!["pending", "claimed", "effect-requested", "reconciled", "acknowledged"].includes(entry.state))
-          throw new DeliveryError("invalid queue transition", 9)
-        if (["claimed", "effect-requested", "reconciled"].includes(entry.state) &&
-            (typeof entry.attemptId !== "string" || !/^[0-9a-f]{64}$/.test(entry.effectId ?? "")))
-          throw new DeliveryError("unbound queue claim", 9)
-        if (["reconciled", "acknowledged"].includes(entry.state) && !["pass", "fail"].includes(entry.outcome?.status))
-          throw new DeliveryError("missing queue outcome", 9)
-      }
+      const queue = validateQueueJournal(await readJson(queueFile, []))
       const result = await fn(queue)
       await writeJson(queueFile, queue)
       return result

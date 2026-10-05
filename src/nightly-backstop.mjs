@@ -94,6 +94,10 @@ export function assessNightly(receipt, policy, now = Date.now()) {
     source: valid
       ? { sha: receipt.source.sha, tree: receipt.source.tree }
       : null,
+    workflow: valid
+      ? { runId: String(receipt.workflow.runId), attempt: String(receipt.workflow.attempt) }
+      : null,
+    completedAt: valid ? receipt.completedAt : null,
     staleGreenAgeSeconds: receipt?.status === "passed" ? age : null,
     escapeDelaySeconds:
       state === "failed" && Number.isFinite(introduced) && introduced <= end
@@ -130,9 +134,19 @@ export async function recordDiagnosis(root, observation) {
       )
         return prior;
       if (observation.state === "fresh" && !prior) return null;
+      if (prior?.workflow && observation.workflow) {
+        const run = BigInt(observation.workflow.runId), previousRun = BigInt(prior.workflow.runId);
+        const attempt = BigInt(observation.workflow.attempt), previousAttempt = BigInt(prior.workflow.attempt);
+        const order = run === previousRun ? attempt - previousAttempt : run - previousRun;
+        if (order < 0 || (order === 0 && observation.state === "fresh" && prior.status === "open")) return prior;
+      }
+      if (observation.state === "fresh" &&
+          !(Date.parse(observation.completedAt) > Date.parse(prior.completedAt ?? prior.observedAt))) return prior;
       const status = observation.state === "fresh" ? "closed" : "open";
       const record = {
         ...observation,
+        workflow: observation.workflow ?? prior?.workflow ?? null,
+        completedAt: observation.completedAt ?? prior?.completedAt ?? null,
         id,
         status,
         fingerprint: canonicalDigest([

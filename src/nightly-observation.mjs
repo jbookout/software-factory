@@ -52,8 +52,8 @@ export async function observeNightly(
     if (
       !Array.isArray(payload.workflow_runs) ||
       !Number.isSafeInteger(payload.total_count) ||
-      payload.total_count < payload.workflow_runs.length ||
-      payload.workflow_runs.length > 100
+      payload.total_count < 0 ||
+      payload.workflow_runs.length !== Math.min(payload.total_count, 100)
     )
       throw Error();
     if (payload.workflow_runs.some((r) =>
@@ -104,6 +104,7 @@ export async function observeNightly(
         observationLagSeconds: Math.max(0, (now - updated) / 1000),
         source: { sha: run.head_sha, tree: null },
         workflow: { runId: String(run.id), attempt: String(run.run_attempt) },
+        completedAt: run.updated_at,
       };
     const artifacts = await get(
       `repos/${policy.repository}/actions/runs/${run.id}/artifacts?per_page=100`,
@@ -112,7 +113,8 @@ export async function observeNightly(
       !Array.isArray(artifacts.artifacts) ||
       !Number.isSafeInteger(artifacts.total_count) ||
       artifacts.total_count < 0 ||
-      artifacts.total_count > 100
+      artifacts.total_count > 100 ||
+      artifacts.artifacts.length !== artifacts.total_count
     )
       throw Error();
     const matched = artifacts.artifacts.filter(

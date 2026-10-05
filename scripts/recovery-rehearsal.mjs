@@ -4,8 +4,19 @@ import { writeJson } from "../src/pr-delivery-state.mjs";
 import { monotonicNow } from "../src/deadline.mjs";
 import { fullSuiteEnvironment } from "../src/nightly-backstop.mjs";
 
-export const recoveryPattern =
-  "fix12: kill after|fix12: restored requested checkpoint|PR46 finding 1: admission quota|PR46 finding 7: undispatched quota|fix12: cancelled pending job|fix30: 48-hour virtual";
+export const recoveryScenarios = [
+  ...["claimed", "effect-requested", "reconciled", "acknowledged"].map(state =>
+    `fix12: kill after ${state} recovers one logical job/effect`),
+  ...["comment", "merge"].map(effect =>
+    `fix12: kill after provider ${effect} success before recording acknowledgement`),
+  "fix12: restored requested checkpoint reconciles success before another write",
+  "PR46 finding 1: admission quota expires without a permanent capacity wait",
+  "PR46 finding 7: undispatched quota refusal retires update intent and recovers after reset",
+  "fix12: cancelled pending job never starts when PR capacity frees",
+  "fix30: 48-hour virtual quota wait, provider recovery and repeated consumption conserve one effect",
+];
+const escapePattern = value => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export const recoveryPattern = `^(?:${recoveryScenarios.map(escapePattern).join("|")})$`;
 export async function rehearse({
   output,
   wallclock = false,
@@ -43,24 +54,26 @@ export async function rehearse({
       total = Number(/^# tests ([0-9]+)$/m.exec(output)?.[1]),
       passed = Number(/^# pass ([0-9]+)$/m.exec(output)?.[1]),
       failed = Number(/^# fail ([0-9]+)$/m.exec(output)?.[1]);
+    const recoverySeconds = Number(/^# FIX30_RECOVERY_SECONDS ([0-9.]+)$/m.exec(output)?.[1]);
     const healthy =
       result.code === 0 &&
       !result.timedOut &&
       /^TAP version 13$/m.test(output) &&
       Number.isInteger(total) &&
-      total >= 10 &&
+      total >= recoveryScenarios.length &&
       total ===
         passed + Number(/^# skipped ([0-9]+)$/m.exec(output)?.[1] ?? 0) &&
-      passed >= 10 &&
-      failed === 0;
+      passed === recoveryScenarios.length &&
+      failed === 0 &&
+      Number.isFinite(recoverySeconds) && recoverySeconds >= 0 &&
+      recoveryScenarios.every(name =>
+        [...output.matchAll(new RegExp(`^ok [0-9]+ - ${escapePattern(name)}$`, "gm"))].length === 1);
     cycles.push({
       elapsedSeconds: (at - started) / 1000,
       durationSeconds: (clock() - at) / 1000,
       status: healthy ? "passed" : "failed",
       tests: Number.isInteger(total) ? total : null,
-      recoverySeconds: /^# FIX30_RECOVERY_SECONDS ([0-9.]+)$/m.test(output)
-        ? Number(/^# FIX30_RECOVERY_SECONDS ([0-9.]+)$/m.exec(output)[1])
-        : null,
+      recoverySeconds: Number.isFinite(recoverySeconds) ? recoverySeconds : null,
     });
     if (!healthy) break;
     if (!wallclock || clock() - started >= duration) break;

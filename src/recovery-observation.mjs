@@ -1,4 +1,7 @@
 import { canonicalDigest } from "./canonical.mjs";
+import { validateQueueJournal } from "./pr-delivery-state.mjs";
+
+const representableTime = value => Number.isSafeInteger(value) && Number.isFinite(new Date(value).getTime());
 
 export function assessRecovery(
   queue,
@@ -13,17 +16,20 @@ export function assessRecovery(
     autoClear: "all-offered-jobs-accounted-and-waits-owned",
   };
   if (
-    !Array.isArray(queue) ||
     !Array.isArray(offeredIds) ||
     !Array.isArray(effectIds) ||
     !Array.isArray(expectedEffectIds) ||
     typeof owner !== "string" ||
     !/^factory-[a-z-]+$/.test(owner) ||
-    !Number.isFinite(now)
+    !representableTime(now)
   )
     return { ...base, state: "unknown" };
+  try {
+    queue = validateQueueJournal(queue);
+  } catch {
+    return { ...base, state: "unknown", reason: "invalid-queue-journal" };
+  }
   if (
-    queue.some((e) => !e || typeof e.id !== "string" || !e.id) ||
     [offeredIds, effectIds, expectedEffectIds].some((ids) =>
       ids.some((id) => typeof id !== "string" || !id),
     )
@@ -36,20 +42,20 @@ export function assessRecovery(
       offeredIds.filter((id) => !unique.has(id)).length +
       expectedEffectIds.filter((id) => !effectIds.includes(id)).length,
     duplicates =
-      ids.length - unique.size + effectIds.length - new Set(effectIds).size;
+      ids.length - unique.size + effectIds.length - new Set(effectIds).size,
+    unexpected = new Set(effectIds.filter(id => !expectedEffectIds.includes(id))).size;
   if (
     lost ||
     duplicates ||
+    unexpected ||
     offered.size !== offeredIds.length ||
     ids.some((id) => !offered.has(id))
   )
-    return { ...base, state: "breach", lost, duplicates };
+    return { ...base, state: "breach", lost, duplicates, unexpected };
   const waiting = [],
     failures = [];
   for (const entry of queue) {
     if (entry.state === "acknowledged") {
-      if (!["pass", "fail"].includes(entry.outcome?.status))
-        return { ...base, state: "unknown" };
       if (entry.outcome.status === "fail")
         failures.push({
           id: canonicalDigest(entry.id),
@@ -59,10 +65,7 @@ export function assessRecovery(
         });
     } else {
       if (
-        !["pending", "claimed", "effect-requested", "reconciled"].includes(
-          entry.state,
-        ) ||
-        !Number.isSafeInteger(entry.availableAt) ||
+        !representableTime(entry.availableAt) ||
         entry.availableAt < 0
       )
         return { ...base, state: "breach", reason: "waiting-without-wakeup" };
@@ -86,6 +89,7 @@ export function assessRecovery(
         : "recovered",
     lost,
     duplicates,
+    unexpected,
     offered: offered.size,
     terminal: queue.length - waiting.length,
     waiting,

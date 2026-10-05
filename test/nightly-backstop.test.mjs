@@ -112,12 +112,14 @@ test("failed run and concurrent observations create one owned diagnosis; reopen 
   assert.equal(entry.status, "open");
   assert.ok(entry.wakeupAt);
   assert.ok(entry.nextAction);
-  await recordDiagnosis(root, assessNightly(receipt(), policy, base + 3000));
+  await recordDiagnosis(root, assessNightly({ ...receipt(), workflow: { runId: "124", attempt: "1" },
+    completedAt: new Date(base + 2000).toISOString() }, policy, base + 3000));
   assert.equal(
     JSON.parse(await fs.readFile(path.join(root, files[0]))).status,
     "closed",
   );
-  await recordDiagnosis(root, { ...observation, observedAt: new Date(base + 4000).toISOString() });
+  await recordDiagnosis(root, { ...observation, workflow: { runId: "125", attempt: "1" },
+    completedAt: new Date(base + 3000).toISOString(), observedAt: new Date(base + 4000).toISOString() });
   assert.equal(
     JSON.parse(await fs.readFile(path.join(root, files[0]))).status,
     "open",
@@ -131,7 +133,8 @@ test("delayed cached green cannot close a newer owned failure", async (t) => {
   assert.equal((await recordDiagnosis(root, olderGreen)).status, "open");
   const sameTimeGreen = assessNightly(receipt(), policy, base + 3000);
   assert.equal((await recordDiagnosis(root, sameTimeGreen)).status, "open");
-  const nextGreen = assessNightly(receipt(), policy, base + 4000);
+  const nextGreen = assessNightly({ ...receipt(), workflow: { runId: "124", attempt: "1" },
+    completedAt: new Date(base + 3500).toISOString() }, policy, base + 4000);
   assert.equal((await recordDiagnosis(root, nextGreen)).status, "closed");
   assert.equal((await recordDiagnosis(root, failed)).status, "closed");
 });
@@ -412,7 +415,7 @@ test("REST observation binds latest scheduled source/attempt and never falls bac
 });
 
 test("48-hour wall-clock driver survives restarts at quota/worker/provider seams only on disposable adapters", async (t) => {
-  const { rehearse, recoveryPattern } = await import(
+  const { rehearse, recoveryPattern, recoveryScenarios } = await import(
     "../scripts/recovery-rehearsal.mjs"
   );
   const root = await tmp(t);
@@ -434,7 +437,7 @@ test("48-hour wall-clock driver survives restarts at quota/worker/provider seams
       tick += 1000;
       return {
         code: 0,
-        stdout: "TAP version 13\n# tests 10\n# pass 10\n# fail 0\n",
+        stdout: `TAP version 13\n${recoveryScenarios.map((name, i) => `ok ${i + 1} - ${name}`).join("\n")}\n# FIX30_RECOVERY_SECONDS 1\n# tests ${recoveryScenarios.length}\n# pass ${recoveryScenarios.length}\n# fail 0\n`,
         stderr: "CANARY_PRIVATE_SECRET",
       };
     },
@@ -491,10 +494,11 @@ test("conservation oracle rejects dropped/duplicate effects and waiting without 
   const { assessRecovery } = await import("../src/recovery-observation.mjs");
   const waiting = {
     id: "job",
+    repo: policy.repository, pr: 60, head: sha, attemptId: "attempt",
     state: "effect-requested",
     availableAt: base + 1000,
     nextAction: "reconcile-provider",
-    effectId: "effect",
+    effectId: "d".repeat(64),
   };
   const expected = {
     offeredIds: ["job"],
@@ -556,6 +560,7 @@ for (const scale of [1, 10, 25])
     const offeredIds = Array.from({ length: 20 * scale }, (_, i) => `job-${i}`);
     const queue = offeredIds.map((id, i) => ({
       id,
+      repo: policy.repository, pr: 60, head: sha,
       state: i % 2 ? "pending" : "acknowledged",
       availableAt: base + 1000,
       outcome: { status: "pass" },
