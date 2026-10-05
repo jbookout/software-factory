@@ -283,7 +283,8 @@ test("REST observation binds latest scheduled source/attempt and never falls bac
       updated_at: r.completedAt,
     };
   let latest = run,
-    downloaded = r;
+    downloaded = r,
+    expired = false;
   const routes = [];
   const get = async (route) => {
     routes.push(route);
@@ -295,7 +296,7 @@ test("REST observation binds latest scheduled source/attempt and never falls bac
             {
               name: "full-main-factory-receipt",
               id: 99,
-              expired: false,
+              expired,
               size_in_bytes: 1000,
             },
           ],
@@ -308,6 +309,11 @@ test("REST observation binds latest scheduled source/attempt and never falls bac
       now: base + 2000,
     });
   assert.equal((await observe()).state, "fresh");
+  for (const unknownExpiry of [undefined, null, 0, "false", true]) {
+    expired = unknownExpiry;
+    assert.equal((await observe()).state, "unknown");
+  }
+  expired = false;
   assert.ok(routes.every((route) => !route.includes("graphql")));
   for (const mutation of [
     { source: { ...r.source, sha: "d".repeat(40) } },

@@ -110,7 +110,8 @@ export async function observeNightly(
     )
       throw Error();
     const matched = artifacts.artifacts.filter(
-      (a) => a.name === `full-main-${policy.suite}-receipt` && !a.expired,
+      (a) =>
+        a.name === `full-main-${policy.suite}-receipt` && a.expired === false,
     );
     if (
       matched.length !== 1 ||
