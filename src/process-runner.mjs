@@ -98,6 +98,7 @@ export function runProcess(argv, { cwd, env = process.env, input = '', timeoutMs
       const uncertain = mutation && Boolean(groupPid) && Boolean(timedOut || cancelled || overflow || result?.signal || exitSignal || !result)
       resolve({ code: timedOut ? 142 : cancelled ? 130 : overflow ? 1 : result?.code ?? code ?? 1,
         signal: result?.signal ?? exitSignal, stdout, stderr, timedOut, overflow, cancelled,
+        ...(result?.launchCode ? { launchCode: result.launchCode } : {}),
         uncertain, ...(uncertain ? { nextAction: 'readback-before-retry' } : {}), pid: child.pid, started })
     })
     Promise.resolve().then(async () => {

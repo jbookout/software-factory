@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process"
+import { runProcess } from "./process-runner.mjs"
 import { createHash } from "node:crypto"
 import path from "node:path"
 
@@ -42,7 +42,7 @@ export function createScriptAdapter({ root, commands, timeoutMs = 120_000, maxOu
   if (!commands || typeof commands !== "object") throw new Error("commands are required")
 
   return {
-    async execute(step, request) {
+    async execute(step, request, { signal } = {}) {
       let argv = commands[step]
       if (step === "build" && argv && !Array.isArray(argv) && request.route) {
         const route = request.route
@@ -57,52 +57,35 @@ export function createScriptAdapter({ root, commands, timeoutMs = 120_000, maxOu
         throw new Error("the factory cannot execute product deployment authority")
       }
 
-      const result = await new Promise((resolve, reject) => {
-        const child = spawn(argv[0], argv.slice(1), {
-          cwd: resolvedRoot,
-          env: { PATH: process.env.PATH, ...environment },
-          shell: false,
-          stdio: ["pipe", "pipe", "pipe"]
-        })
-        let stdout = ""
-        let stderr = ""
-        let outputBytes = 0
-        let forcedTimer
-        const timer = setTimeout(() => {
-          child.kill("SIGTERM")
-          forcedTimer = setTimeout(() => child.kill("SIGKILL"), 1_000)
-        }, timeoutMs)
-        function collect(current, chunk) {
-          outputBytes += chunk.length
-          if (outputBytes > maxOutputBytes) {
-            child.kill("SIGTERM")
-            return current
-          }
-          return current + chunk
-        }
-        child.stdout.on("data", (chunk) => { stdout = collect(stdout, chunk) })
-        child.stderr.on("data", (chunk) => { stderr = collect(stderr, chunk) })
-        child.on("error", reject)
-        child.on("close", (code, signal) => {
-          clearTimeout(timer)
-          clearTimeout(forcedTimer)
-          if (outputBytes > maxOutputBytes) return reject(new Error(`${step} exceeded output limit`))
-          if (signal) return reject(new Error(`${step} terminated by ${signal}`))
-          if (code !== 0) {
-            const stderrDigest = createHash("sha256").update(stderr).digest("hex")
-            return resolve({ status: "fail", findings: [{ code, stderrDigest, stderrBytes: Buffer.byteLength(stderr) }] })
-          }
-          // Exit code zero is not a result; the step must say what it observed.
-          if (!stdout.trim()) return reject(new Error(`${step} emitted no result`))
-          try {
-            resolve(JSON.parse(stdout))
-          } catch {
-            reject(new Error(`${step} did not emit JSON`))
-          }
-        })
-        child.stdin.end(JSON.stringify(request))
+      const result = await runProcess(argv, {
+        cwd: resolvedRoot,
+        env: { PATH: process.env.PATH, ...environment },
+        input: JSON.stringify(request), timeoutMs, maxOutputBytes, signal, mutation: true
       })
-      return normalizeResult(result, step)
+      if (result.launchCode) throw Object.assign(new Error(`spawn ${argv[0]} ${result.launchCode}`), {
+        code: result.launchCode, syscall: `spawn ${argv[0]}`, path: argv[0], spawnargs: argv.slice(1)
+      })
+      const interruption = result.overflow ? `${step} exceeded output limit`
+        : result.signal ? `${step} terminated by ${result.signal}`
+        : result.timedOut ? `${step} terminated by SIGTERM`
+        : result.cancelled ? `${step} terminated by SIGTERM` : null
+      if (interruption) {
+        const error = new Error(interruption)
+        if (result.cancelled) error.cancelled = true
+        if (result.uncertain) { error.uncertain = true; error.nextAction = result.nextAction }
+        throw error
+      }
+      if (result.code !== 0) {
+        const stderrDigest = createHash("sha256").update(result.stderr).digest("hex")
+        return normalizeResult({ status: "fail", findings: [{ code: result.code,
+          stderrDigest, stderrBytes: Buffer.byteLength(result.stderr) }] }, step)
+      }
+      // Exit code zero is not a result; the step must say what it observed.
+      if (!result.stdout.trim()) throw new Error(`${step} emitted no result`)
+      let value
+      try { value = JSON.parse(result.stdout) }
+      catch { throw new Error(`${step} did not emit JSON`) }
+      return normalizeResult(value, step)
     }
   }
 }
