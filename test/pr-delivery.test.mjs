@@ -127,8 +127,9 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
  const config=path.join(root,"config.json"), stateDir=path.join(root,"state")
  // CLI smoke controls use the trusted host observer. The shared development
  // host exceeded 32 occupied units before these fake workers could start.
+ // Admission keeps its own budget when a test shortens execution.
  // Capacity refusal itself uses injected snapshots in its own tests.
- const cfg={repos:{"fixture/new-repository":{checkout,originUrl:remote,worktreeRoot:path.join(root,"worktrees"),requiredChecks:[{name:"test"}]}},stateDir,codex:{model:"fixture-model",effort:"high"},resources:{capacity:128,browserConcurrency:1,agentUnits:1},limits:{runsPer24h:8,slots:2,timeoutMs:5000},pollMs:5,retryMs:0,commandTimeoutMs:5000,...configOverrides}
+ const cfg={repos:{"fixture/new-repository":{checkout,originUrl:remote,worktreeRoot:path.join(root,"worktrees"),requiredChecks:[{name:"test"}]}},stateDir,codex:{model:"fixture-model",effort:"high"},resources:{capacity:128,browserConcurrency:1,agentUnits:1},limits:{runsPer24h:8,slots:2,timeoutMs:5000},pollMs:5,retryMs:0,commandTimeoutMs:5000,queueTimeoutMs:5000,...configOverrides}
  await fs.writeFile(config,JSON.stringify(cfg))
  const read=async()=>JSON.parse(await fs.readFile(env.FAKE_PR,"utf8"))
  const launch=(command,args,workerEnv=env)=>new Promise((resolve,reject)=>{
