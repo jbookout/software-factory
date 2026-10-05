@@ -1,3 +1,4 @@
+import { createDeliveryJournal, deliveryPass as pass, deliveryFailure as fail } from "./pr-delivery-journal.mjs"
 import {writeReviewEvidence,readReviewEvidence} from "./review-evidence.mjs"
 import { createGitHubObservation } from "./github-observation.mjs"
 import { AsyncLocalStorage } from "node:async_hooks"
@@ -9,28 +10,15 @@ import { createHash, randomUUID } from "node:crypto"
 import { reserveCompute } from "./process-capacity.mjs"
 import { runProcess, validateProcessRequest, observeProcessJob } from "./process-runner.mjs"
 import { createCodexExecArgs } from "./codex-build.mjs"
-import { normalizeResult } from "./adapters.mjs"
 import { deliveryPrompt } from "./pr-delivery-prompts.mjs"
-import { deliveryEffectId, isDeliveryBinding } from "./evidence.mjs"
+import { deliveryEffectId } from "./evidence.mjs"
 import { validRequiredChecks } from "./pr-readiness.mjs"
 import { createGithubProvider, parseReview } from "./github-snapshot.mjs"
-import { DeliveryError, keyFor, readJson, writeJson, withLease, reserveCodex, deliveryWait, completeDeliveryWait, orphanLeaseCount } from "./pr-delivery-state.mjs"
+import { DeliveryError, keyFor, readJson, writeJson, withLease, reserveCodex } from "./pr-delivery-state.mjs"
 
 const SHA = /^[0-9a-f]{40}$/
 const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 const digestOf = value => createHash("sha256").update(value).digest("hex")
-const effectIdentity = (repo, pr, head, action, fields) => deliveryEffectId({ repo, pr, head, action: `${action}:${digestOf(JSON.stringify(fields))}` })
-const pass = data => normalizeResult({ status: "pass", data }, "delivery")
-const fail = error => normalizeResult({ status: "fail",
-  data: { code: Number.isInteger(error.code) ? error.code : 1, message: error.message, transient: error.transient ?? false,
-    ...(error.observation ?? {}),
-    ...(error.cancelled ? { cancelled: true, nextAction: "none" } : {}),
-    ...(error.state ? { state: error.state, pool: error.pool, retryAt: error.retryAt, queryErrors: error.queryErrors, terminal: error.terminal, nextAction: "wait-for-provider-observation" } : {}),
-    ...(error.pendingUpdate ? { pendingUpdate: true } : {}),
-    ...(error.phase ? { phase: error.phase, nextAction: error.nextAction } : {}),
-    ...(error.uncertain ? { uncertain: true, nextAction: "readback-before-retry" } : {}),
-    ...(error.wait ? { cause: error.wait.cause, resetAt: error.wait.resetAt, head: error.wait.head, nextAction: error.wait.cause === "mutation-uncertain" ? "readback-before-retry" : "wait-for-input-or-reset", admitted: false } : {}) },
-  findings: [{ reason: error.message }] }, "delivery")
 
 export async function loadDeliveryConfig(file) {
   const value = await readJson(file)
@@ -90,13 +78,15 @@ export async function loadDeliveryConfig(file) {
 }
 
 export function createPrDeliveryAdapter(config, { env = process.env, onTransition = async () => {} } = {}) {
-  const locks = path.join(config.stateDir, "locks"), queueFile = path.join(config.stateDir, "queue.json")
+  const locks = path.join(config.stateDir, "locks")
   const github = createGitHubObservation(config)
   const prLeases = new Map()
-  const cancelFile = path.join(config.stateDir, "cancellations.json")
   const deadlines = new AsyncLocalStorage()
   const inAttempt = fn => deadlines.getStore() ? fn() : deadlines.run(new Deadline(config.attemptTimeoutMs), fn)
   const budget = () => deadlines.getStore()
+  const journal = createDeliveryJournal(config, { budget, onTransition })
+  const { cancelled, requireNotCancelled, launchFence } = journal
+  const cancelQueued = journal.queue.cancel
   async function measured(phase, repo, pr, fn) {
     const start = budget().clock.now()
     let code = 0
@@ -214,12 +204,12 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
   }
   async function suspend(repo, pr, head, stop) {
     const { budgetAvailable, ...input } = await waitInput(repo, pr, head)
-    const wait = await deliveryWait(config, repo, pr, input, { repo, pr, ...stop }, budget())
+    const wait = await journal.waits.record(repo, pr, input, { repo, pr, ...stop })
     if (wait.recorded) await log({ repo, pr, step: "wait", status: "suspended", ...input, ...stop })
     return wait
   }
   async function eligible(repo, pr, head) {
-    await deliveryWait(config, repo, pr, await waitInput(repo, pr, head), null, budget())
+    await journal.waits.record(repo, pr, await waitInput(repo, pr, head), null)
   }
   async function waitChecks(repo, pr, head, completedOnly = false, initial) {
     const phase = budget().phaseBudget("readiness", config.checksTimeoutMs)
@@ -305,8 +295,8 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       // callback to write uncertainty. A completed child retires this marker.
       if (kind !== "review") {
         const { budgetAvailable, ...inputBinding } = await waitInput(repo, pr, head)
-        await deliveryWait(config, repo, pr, inputBinding, { repo, pr, cause: "mutation-uncertain", code: 130,
-          message: "MUTATION UNCERTAIN: readback required before retry", resetAt: null }, budget())
+        await journal.waits.record(repo, pr, inputBinding, { repo, pr, cause: "mutation-uncertain", code: 130,
+          message: "MUTATION UNCERTAIN: readback required before retry", resetAt: null })
         mutationPending = true
       }
       await beforeExecution?.(job)
@@ -320,7 +310,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
           if (prLease) bindings.push(await prLease.bindJob(job, signal))
           return bindings
         } }))))
-      if (mutationPending && (!afterExecution || result.code)) { await completeDeliveryWait(config, repo, pr, budget()); mutationPending = false }
+      if (mutationPending && (!afterExecution || result.code)) { await journal.waits.complete(repo, pr); mutationPending = false }
       const outputDigest = digest.digest("hex")
       await log({ repo, pr, step: kind, status: result.code ? "failed" : "complete", code: result.code,
         outputDigest })
@@ -330,11 +320,11 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       }
       if (result.code) throw new DeliveryError(`${kind} exited ${result.code}`, result.code)
       const completed = afterExecution ? await afterExecution(compute) : { ...result, outputDigest }
-      if (mutationPending) { await completeDeliveryWait(config, repo, pr, budget()); mutationPending = false }
+      if (mutationPending) { await journal.waits.complete(repo, pr); mutationPending = false }
       return completed
     } catch (error) {
       if (mutationPending && error.uncertain === false)
-        await completeDeliveryWait(config, repo, pr, budget())
+        await journal.waits.complete(repo, pr)
       if (budget().remaining() && error.phase === "queue" && error.code === 142)
         error.wait = await suspend(repo, pr, head, { cause: "slot-wait", code: 142, message: error.message, resetAt: null })
       if (budget().remaining() && error.uncertain)
@@ -412,20 +402,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
         await git(local.checkout, "worktree", "remove", "--force", dir)
     }
   }
-  const repairFile = (repo, pr) => path.join(config.stateDir,"repairs",`${keyFor(repo,pr)}.json`)
-  const repairReceipt = record => path.join(config.stateDir,"repair-receipts",`${record.id}.json`)
-  async function retainRepair(record) {
-    const file=repairReceipt(record), bytes=JSON.stringify(record)
-    await fs.mkdir(path.dirname(file),{recursive:true,mode:0o700})
-    const temp=`${file}.${randomUUID()}.tmp`
-    await writeJson(temp,record)
-    try {await fs.link(temp,file)}
-    catch(error) {
-      if(error.code!=="EEXIST")throw error
-      if(await fs.readFile(file,"utf8")!==bytes)throw new DeliveryError("terminal repair receipt changed",9)
-    } finally {await fs.unlink(temp)}
-    return file
-  }
+  const retainRepair = journal.repairs.retain
   const checkPolicyFor = local => digestOf(JSON.stringify({checks:local.checks,timeoutMs:local.checkTimeoutMs ?? config.checksTimeoutMs}))
   async function verifyRepairSource(repo,pr,record) {
     const local=getRepo(repo),cwd=record.worktree
@@ -473,8 +450,8 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     return observed
   }
   async function finishRepair(repo, pr, record, ownedCompute) {
-    const local=getRepo(repo),cwd=record.worktree,file=repairFile(repo,pr)
-    const persist=async status=>{record={...record,status};await writeJson(file,record)}
+    const local=getRepo(repo),cwd=record.worktree
+    const persist=async status=>{record={...record,status};await journal.repairs.save(record)}
     await verifyRepairSource(repo,pr,record)
     let remoteHead=await repairRemote(repo,record)
     // A checked push may have succeeded before its controller died. Any earlier
@@ -536,12 +513,8 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     record.remoteHead=await repairRemote(repo,record)
     if(record.remoteHead!==record.head)throw new DeliveryError("PUSH PENDING: remote head differs from tested source",1)
     await repairObservation(repo,pr,record,[record.head])
-    const terminal={...record,status:"delivered"},receipt=await retainRepair(terminal)
-    if(config.orchInbox) {
-      await persist("inbox_pending")
-      await command([config.orchInbox.command,"--store",config.orchInbox.store,"inbox","push","PlatformEngineer",`${repo}#${pr}`,"delivered","--report",receipt],cwd,{captureOutput:false})
-    }
-    record=terminal;await writeJson(file,record)
+    const { receipt } = await journal.repairs.deliver(record, config.orchInbox ? receipt =>
+      command([config.orchInbox.command,"--store",config.orchInbox.store,"inbox","push","PlatformEngineer",`${repo}#${pr}`,"delivered","--report",receipt],cwd,{captureOutput:false}) : null)
     await log({repo,pr,step:"repair-delivery",status:"delivered",head:record.head,testedHead:record.testedHead,remoteHead:record.remoteHead,receipt})
     return {head:record.head,receipt}
   }
@@ -552,7 +525,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     await verifyRepairSource(repo,pr,record)
     await repairRemote(repo,record)
     await repairObservation(repo,pr,record,[record.baseHead])
-    await writeJson(repairFile(repo,pr),record)
+    await journal.repairs.save(record)
     // Even a clean commit from an interrupted builder has no completion claim.
     // Recovery observes it; an explicit fix request may dispatch a corrective builder.
     return record
@@ -560,7 +533,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
   async function fix(repo, pr, kind, worktree, repairId) {
     const local=getRepo(repo)
     if(!local.checks?.length)throw new DeliveryError("repository-owned checks required before repair",9)
-    let prior=await readJson(repairFile(repo,pr),null)
+    let prior=await journal.repairs.read(repo,pr)
     if(repairId && (!prior || prior.status==="delivered"))return {message:"REPAIR ALREADY RECONCILED"}
     if(repairId && prior.id!==repairId)throw new DeliveryError("repair recovery receipt changed; observe before retry",75)
     const current=await view(repo,pr)
@@ -585,7 +558,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
           // A changed repository-owned policy can recheck the same source, but
           // the failed attempt remains immutable and keeps its original ID.
           prior={...prior,id:randomUUID(),corrects:prior.id,status:"built"}
-          await writeJson(repairFile(repo,pr),prior)
+          await journal.repairs.save(prior)
         }
         return finishRepair(repo,pr,prior)
       }
@@ -593,7 +566,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       if(await repairRemote(repo,prior)!==prior.baseHead)throw new DeliveryError("corrective repair remote moved",9)
       await repairObservation(repo,pr,prior,[prior.baseHead])
       await retainRepair(prior)
-      await completeDeliveryWait(config,repo,pr,budget())
+      await journal.waits.complete(repo,pr)
     }
     if (kind === "ci-fix" && !corrective) {
       requireKnownCi(current.ci)
@@ -614,85 +587,15 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       prompt,current.headRefOid,async compute=>{
         const head=await git(cwd,"rev-parse","HEAD")
         if(head===inputHead) {
-          record={...record,status:"no_progress"};await writeJson(repairFile(repo,pr),record);await retainRepair(record)
+          record={...record,status:"no_progress"};await journal.repairs.save(record);await retainRepair(record)
           const error=new DeliveryError("NO-PROGRESS: fix produced no commit",2)
           error.wait=await suspend(repo,pr,current.headRefOid,{cause:"source-no-progress",code:2,message:error.message,resetAt:null})
           throw error
         }
         record={...record,head,tree:await git(cwd,"rev-parse","HEAD^{tree}"),status:"built"}
-        await writeJson(repairFile(repo,pr),record)
+        await journal.repairs.save(record)
         return finishRepair(repo,pr,record,compute)
-      },async job=>{record.builderJob=job;await writeJson(repairFile(repo,pr),record)})
-  }
-  async function queueState(fn) {
-    return withLease(locks, "queue-state", async () => {
-      const queue = await readJson(queueFile, [])
-      if (!Array.isArray(queue)) throw new DeliveryError("invalid queue journal", 9)
-      for (const entry of queue) {
-        // The journal is shared across lanes; dispatch, rather than reading
-        // another lane's row, requires a configured repository.
-        if (!isDeliveryBinding(entry) || !entry.id) throw new DeliveryError("invalid queue job binding", 9)
-        entry.state ??= entry.outcome ? "acknowledged" : "pending"
-        if (!["pending", "claimed", "effect-requested", "reconciled", "acknowledged"].includes(entry.state))
-          throw new DeliveryError("invalid queue transition", 9)
-        if (["claimed", "effect-requested", "reconciled"].includes(entry.state) &&
-            (typeof entry.attemptId !== "string" || !/^[0-9a-f]{64}$/.test(entry.effectId ?? "")))
-          throw new DeliveryError("unbound queue claim", 9)
-        if (["reconciled", "acknowledged"].includes(entry.state) && !["pass", "fail"].includes(entry.outcome?.status))
-          throw new DeliveryError("missing queue outcome", 9)
-      }
-      const result = await fn(queue)
-      await writeJson(queueFile, queue)
-      return result
-    }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget: budget() })
-  }
-  const cancellationKey = (repo, pr, head) => deliveryEffectId({ repo, pr, head, action: "cancel" })
-  const leaseWait = () => ({ waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget: budget() })
-  // Invalid tombstones refuse: dropping one would silently reopen cancelled work.
-  async function readCancellations() {
-    const cancellations = await readJson(cancelFile, {})
-    if (cancellations === null || typeof cancellations !== "object" || Array.isArray(cancellations) ||
-        Object.entries(cancellations).some(([key, value]) => !isDeliveryBinding(value) ||
-          key !== cancellationKey(value.repo, value.pr, value.head) || !Number.isSafeInteger(value.at)))
-      throw new DeliveryError("invalid cancellation journal", 9)
-    return cancellations
-  }
-  async function cancelled(repo, pr, head) {
-    return Object.hasOwn(await readCancellations(), cancellationKey(repo, pr, head))
-  }
-  async function requireNotCancelled(repo, pr, head) {
-    if (await cancelled(repo, pr, head)) {
-      // Refused before any launch: the outcome is known, not uncertain.
-      const error = new DeliveryError("QUEUED WORK CANCELLED", 130)
-      error.cancelled = true; error.uncertain = false
-      throw error
-    }
-  }
-  // Every launch of a new effect checks cancellation and dispatches inside this
-  // per-binding fence. Cancellation takes the same fence, so it returns only
-  // after an in-flight dispatch, and no dispatch starts after it returns.
-  const launchFenceName = (repo, pr, head) => `launch-${cancellationKey(repo, pr, head)}`
-  function launchFence(repo, pr, head, fn) {
-    return withLease(locks, launchFenceName(repo, pr, head), async () => {
-      await requireNotCancelled(repo, pr, head)
-      return fn()
-    }, leaseWait())
-  }
-  async function cancelQueued(repo, pr, head) {
-    const key = cancellationKey(repo, pr, head)
-    // The tombstone is authoritative if publication of the projection fails.
-    await withLease(locks, launchFenceName(repo, pr, head), () => withLease(locks, "queue-state", async () => {
-      const cancellations = await readCancellations()
-      cancellations[key] = { repo, pr, head, at: Date.now() }
-      await writeJson(cancelFile, cancellations)
-    }, leaseWait()), leaseWait())
-    await queueState(queue => {
-      for (const entry of queue.filter(e => e.repo === repo && e.pr === pr && e.head === head && e.state === "pending")) {
-        entry.state = "acknowledged"
-        entry.outcome = pass({ message: "QUEUED WORK CANCELLED", cancelled: true })
-      }
-    })
-    return { message: "QUEUED WORK CANCELLED", cancelled: true }
+      },async job=>{record.builderJob=job;await journal.repairs.save(record)})
   }
   async function enqueue(repo, pr, head, note = "", mode = "manual") {
     getRepo(repo)
@@ -705,104 +608,28 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
           current.ci.state !== "success" || current.mergeable !== "MERGEABLE" || current.isDraft)
         throw new DeliveryError("enqueue preconditions not satisfied", 4)
     }
-    return queueState(async queue => {
-      if (await cancelled(repo, pr, head)) return { message: "QUEUED WORK CANCELLED", enqueued: false }
-      const prior = queue.filter(e => e.repo === repo && e.pr === pr && e.head === head)
-      if (prior.some(e => mode === "import" || e.state !== "acknowledged" || e.outcome?.status === "pass") ||
-          mode !== "manual" && prior.filter(e => (e.createdAt ?? 0) >= Date.now() - 86400_000).length >= config.queueRunsPer24h)
-        return { message: `ALREADY QUEUED or RETRY LIMIT ${repo}#${pr} ${head}`, enqueued: false }
-      queue.push({ id: randomUUID(), repo, pr, head, note: note.replaceAll("\n", " "), attempts: 0,
-        state: "pending", effectAttempt: prior.length + 1, availableAt: 0, createdAt: Date.now(), recoveryOf: prior.at(-1)?.id ?? null })
-      // Offers are observed outside this lease and may land out of order, so no
-      // offer retires another head; dispatch refuses any head the PR no longer has.
-      return { message: `QUEUED ${repo}#${pr} ${head}`, enqueued: true }
-    })
+    return journal.queue.offer({ repo, pr, head }, { note, mode })
   }
-  // A retried row moves behind its lane's other work, keeping its identity.
-  async function queueTransition(id, state, fields = {}, { requeue = false } = {}) {
-    const entry = await queueState(queue => {
-      const index = queue.findIndex(e => e.id === id), stored = queue[index]
-      if (!stored) throw new DeliveryError("queue claim disappeared", 9)
-      Object.assign(stored, fields, { state })
-      if (requeue) queue.push(...queue.splice(index, 1))
-      return structuredClone(stored)
-    })
-    await onTransition(state, entry)
-    return entry
-  }
-  // A durable intent is never resent on missing acknowledgement. Provider state
-  // must reconcile it first; confirmed refusals may be retried with a new attempt.
   async function mutation(repo, pr, head, action, fields, owners, { reconcileOnly = false, publication = "review" } = {}) {
-    const id = effectIdentity(repo, pr, head, action, fields)
-    const file = path.join(config.stateDir, "effects", `${id}.json`)
-    return withLease(locks, `effect-${id}`, async () => {
-      let record = await readJson(file, null)
-      if (record && (record.schema !== "factory-effect/v1" || record.id !== id || record.repo !== repo || record.pr !== pr ||
-          record.head !== head || record.action !== action || !Number.isSafeInteger(record.attempt) || record.attempt <= 0 ||
-          !/^[0-9a-f-]{36}$/.test(record.attemptId ?? "") || !["effect-requested", "acknowledged", "refused"].includes(record.state)))
-        throw new DeliveryError("invalid persisted effect binding", 9)
-      const observeEffect = async () => {
+    return journal.effects.execute({ repo, pr, head, action, fields }, {
+      reconcileOnly,
+      observe: async () => {
         const current = await view(repo, pr)
         if (action === "comment") {
-          // Delivery notes do not authorize review or merge; their exact body
-          // is the effect. Approval envelopes still require a trusted author.
+          // Delivery notes identify publication; review envelopes need a trusted author.
           const match = current.comments.find(c => c.body === fields.body && (publication === "delivery" || getRepo(repo).trustedReviewers.some(login => login.toLowerCase() === c.user.login.toLowerCase())))
           if (match) return { ok: true, status: 201, value: { id: match.id, body: fields.body } }
         } else if (action === "merge" && current.state === "MERGED") {
           return { ok: true, status: 200, value: { merged: true, sha: current.mergeCommit.oid } }
         }
         return null
-      }
-      const unknown = () => {
-        const error = new DeliveryError("EFFECT OUTCOME UNKNOWN: reconcile provider before retry", 6, true)
-        error.uncertain = true
-        return error
-      }
-      // Once an intent is durable, no failure (readback, refusal of the readback,
-      // or journal publication) may turn the unknown outcome into a terminal one.
-      const unresolved = fn => fn().catch(error => { throw record?.state === "refused" || error.uncertain ? error : unknown() })
-      const reconcile = async () => {
-        const observed = await observeEffect()
-        if (observed) return observed
-        throw unknown()
-      }
-      const acknowledge = async result => {
-        // Persist only provider identity and typed outcome, never raw errors/body.
-        await writeJson(file, { ...record, state: "acknowledged", status: result.status,
-          providerId: result.value?.id ?? result.value?.sha ?? null })
-        return result
-      }
-      if (record && (record.state !== "refused" || reconcileOnly)) return unresolved(async () => acknowledge(await reconcile()))
-      if (reconcileOnly) throw new DeliveryError("missing effect reconciliation intent", 9)
-      // A restored checkpoint may predate the intent, while the provider still
-      // retains its effect. Observe even when no local journal row survives.
-      const observed = await observeEffect()
-      record = { schema: "factory-effect/v1", id, repo, pr, head, action,
-        attemptId: randomUUID(), attempt: (record?.attempt ?? 0) + 1, state: "effect-requested" }
-      if (observed) return acknowledge(observed)
-      return launchFence(repo, pr, head, async () => {
-        await writeJson(file, record)
-        return unresolved(async () => {
-          await onTransition(`provider:${action}:requested`, record)
-          const route = action === "comment" ? `issues/${pr}/comments` : `pulls/${pr}/merge`
-          const result = await provider.mutate(repo, action === "comment" ? "POST" : "PUT", route, fields, owners).catch(async error => {
-            // An explicit write refusal or proven non-launch is known. A failed
-            // reconciliation read is handled separately and remains uncertain.
-            if (error.uncertain === false || error.state === "auth_error") {
-              const refused = { ...record, state: "refused" }
-              await writeJson(file, refused); record = refused
-            }
-            throw error
-          })
-          await onTransition(`provider:${action}:returned`, record)
-          if (result.ok && (action === "comment" ? Number.isSafeInteger(result.value?.id) && result.value.id > 0 && result.value.body === fields.body
-              : result.value?.merged === true && SHA.test(result.value.sha ?? ""))) return acknowledge(result)
-          if (result.transient || result.ok) return acknowledge(await reconcile())
-          await writeJson(file, { ...record, state: "refused", status: result.status })
-          return result
-        })
-      })
-    }, { budget: budget() })
+      },
+      dispatch: () => provider.mutate(repo, action === "comment" ? "POST" : "PUT",
+        action === "comment" ? `issues/${pr}/comments` : `pulls/${pr}/merge`, fields, owners),
+      confirmed: result => action === "comment"
+        ? Number.isSafeInteger(result.value?.id) && result.value.id > 0 && result.value.body === fields.body
+        : result.value?.merged === true && SHA.test(result.value.sha ?? "")
+    })
   }
   async function verifyApprovedHead(local, head, old, main = "origin/main") {
     let cursor = head, hops = 0
@@ -905,8 +732,8 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     let current = await view(repo, pr)
     if (current.state === "MERGED") {
       const delivered = await verifyDelivery(repo, pr, current, old, await integrationBase(repo, pr, old))
-      const id = effectIdentity(repo, pr, current.headRefOid, "merge", { merge_method: "squash", sha: current.headRefOid })
-      if (await readJson(path.join(config.stateDir, "effects", `${id}.json`), null))
+      if (await journal.effects.has({ repo, pr, head: current.headRefOid, action: "merge",
+        fields: { merge_method: "squash", sha: current.headRefOid } }))
         await mutation(repo, pr, current.headRefOid, "merge", { merge_method: "squash", sha: current.headRefOid }, owners, { reconcileOnly: true })
       return delivered
     }
@@ -999,74 +826,14 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
   const prWriter = (repo, pr, fn) => withLease(locks, `pr-${keyFor(repo, pr)}`, fn, { budget: budget() })
   async function unresolvedIntent(repo, pr, head) {
     if (await pendingUpdate(repo, pr, head)) return true
-    const dir = path.join(config.stateDir, "effects")
-    const names = await fs.readdir(dir).catch(error => { if (error.code === "ENOENT") return []; throw error })
-    for (const name of names) {
-      if (!name.endsWith(".json")) continue
-      const record = await readJson(path.join(dir, name), null)
-      if (record?.repo === repo && record.pr === pr && record.head === head && record.state === "effect-requested") return true
-    }
-    return false
+    return journal.effects.hasPending({ repo, pr, head })
   }
-  async function consumeQueue(repo, lane) {
-    const entry = await queueState(queue => queue.find(e => e.repo === repo && e.state !== "acknowledged" && e.availableAt <= Date.now()))
-    if (!entry) return { message: "QUEUE IDLE", idle: true }
-    return prWriter(entry.repo, entry.pr, async writer => {
-      let stored = await queueState(queue => structuredClone(queue.find(e => e.id === entry.id)))
-      if (stored.state === "acknowledged") return { message: stored.outcome.data.message, processed: true }
-      if (stored.state === "pending") {
-        if (await cancelled(repo, stored.pr, stored.head)) {
-          await cancelQueued(repo, stored.pr, stored.head)
-          return { message: "QUEUED WORK CANCELLED", processed: true }
-        }
-        stored = await queueTransition(entry.id, "claimed", { owner: process.pid, attemptId: randomUUID(),
-          effectId: deliveryEffectId({ repo, pr: entry.pr, head: entry.head, action: "queue-merge", attempt: entry.effectAttempt ?? 1 }) })
-      }
-      stored = await queueState(queue => {
-        const owned = queue.find(e => e.id === entry.id); owned.owner = process.pid; return structuredClone(owned)
-      })
-      let outcome = stored.outcome
-      if (stored.state !== "reconciled") {
-        if (stored.state === "claimed") stored = await queueTransition(entry.id, "effect-requested")
-        try { outcome = pass(await mergeOne(entry.repo, entry.pr, entry.head, entry.note, [lane, writer])) }
-        catch (e) {
-          // Provider reads can fail before reaching mutation's reconciliation
-          // path. Durable intents keep their obligation even across those stops.
-          let unresolved = true
-          try { unresolved = await unresolvedIntent(entry.repo, entry.pr, entry.head) } catch { /* Unknown journal state must reconcile. */ }
-          if (unresolved) e.uncertain = true
-          if (e.cancelled && !unresolved) outcome = pass({ message: "QUEUED WORK CANCELLED", cancelled: true })
-          else outcome = fail(e)
-        }
-        await deadlines.run(new Deadline(config.commandTimeoutMs), async () => {
-          if (outcome.data.pendingUpdate || outcome.data.uncertain || (outcome.data.state ? !outcome.data.terminal : outcome.data.transient && stored.attempts < 3 || outcome.data.code === 75)) {
-            await queueTransition(entry.id, "effect-requested", { attempts: stored.attempts + 1, availableAt: outcome.data.retryAt ?? Date.now() + config.retryMs,
-              owner: null, lastResult: outcome, nextAction: "reconcile-provider" }, { requeue: true })
-          } else {
-            stored = await queueTransition(entry.id, "reconciled", { attempts: stored.attempts + 1, outcome })
-          }
-        })
-        if (stored.state !== "reconciled") return outcome.data.state ? { ...outcome, data: { ...outcome.data, processed: true } } : { message: outcome.data.message, processed: true, outcome, code: 0 }
-      }
-      await deadlines.run(new Deadline(config.commandTimeoutMs), () => queueTransition(entry.id, "acknowledged", { owner: null, nextAction: "none" }))
-      await log({ step: "merge", repo: entry.repo, pr: entry.pr, head: entry.head, attemptId: stored.attemptId, effectId: stored.effectId, ...outcome.data })
-      return outcome.data.state ? { ...outcome, data: { ...outcome.data, processed: true } } : { message: outcome.data.message, processed: true, outcome, code: 0 }
-    })
-  }
-  async function queueSummary() {
-    return queueState(async queue => {
-      const pending = queue.filter(e => e.state === "pending").length
-      const terminal = queue.filter(e => e.state === "acknowledged").length
-      const owned = queue.length - pending - terminal
-      const effectIds = queue.map(e => e.effectId).filter(Boolean)
-      const orphanLeases = await orphanLeaseCount(locks, { recover: true, budget: budget() })
-      return { offered: queue.length, pending, owned, terminal,
-        orphanLeases,
-        duplicateEffectIds: effectIds.length - new Set(effectIds).size,
-        nextAction: effectIds.length !== new Set(effectIds).size ? "stop-and-reconcile-duplicate-effects"
-          : orphanLeases ? "wait-for-supervised-child-or-recover-lease" : owned ? "reconcile-provider" : "consume-pending" }
-    })
-  }
+  const consumeQueue = (repo, lane) => journal.queue.consume(repo, {
+    perform: (entry, writer) => mergeOne(entry.repo, entry.pr, entry.head, entry.note, [lane, writer]),
+    hasUnresolved: entry => unresolvedIntent(entry.repo, entry.pr, entry.head),
+    onOutcome: log
+  })
+  const queueSummary = journal.queue.summary
   const enqueueOwner = fn => withLease(locks, "enqueue-owner", fn, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget: budget() })
   async function enqueueObserved(repo, current, eventHead, mode = "automatic") {
     if (eventHead && eventHead !== current.headRefOid) return { enqueued: false }
@@ -1143,23 +910,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
   }
   return {
     config,
-    async recoveryCandidates() {
-      const candidates = new Map()
-      for (const [directory, schema] of [["waits","factory-delivery-wait/v1"],["repairs","factory-repair-delivery/v1"]]) {
-        const dir = path.join(config.stateDir,directory)
-        const names = await fs.readdir(dir).catch(e => { if (e.code === "ENOENT") return []; throw e })
-        for (const name of names) {
-          if (!name.endsWith(".json")) continue
-          const record = await readJson(path.join(dir,name))
-          if (record.schema !== schema || !config.repos[record.repo] || !Number.isSafeInteger(record.pr) || record.pr <= 0 ||
-              directory === "repairs" && (typeof record.id !== "string" || !record.id))
-            throw new DeliveryError("invalid delivery recovery record",9)
-          if (directory === "repairs" ? !["delivered","no_progress"].includes(record.status) : ["suspended","resumable"].includes(record.status))
-            candidates.set(keyFor(record.repo,record.pr),{repo:record.repo,pr:record.pr,...(directory === "repairs" ? {repairId:record.id} : {})})
-        }
-      }
-      return [...candidates.values()]
-    },
+    recoveryCandidates: journal.recoveryCandidates,
     async exclusive(repo, pr, fn) {
       getRepo(repo)
       return inAttempt(() => withLease(locks, `pr-${keyFor(repo, pr)}`, async release => {
@@ -1194,7 +945,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
             case "review": data = await review(repo, pr); break
             case "github-logs": data = {body: (await provider.request(repo, `actions/jobs/${request.job}/logs`, {format:"text"})).value}; break
             case "github-read": data = { body: (await provider.request(repo, request.route)).value }; break
-            case "repair-status": data = await readJson(repairFile(repo,pr),{status:"absent"});
+            case "repair-status": data = await journal.repairs.read(repo,pr,{status:"absent"});
               if(data.checkJob) data = {...data,job:await observeProcessJob(data.checkJob.receipt)}; break
             case "readiness": {
               const current = await view(repo, pr, { head })
@@ -1204,7 +955,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
               break
             }
             case "pr:suspend": data = await suspend(repo, pr, head, request.stop); break
-            case "pr:complete": await completeDeliveryWait(config, repo, pr, budget()); data = {}; break
+            case "pr:complete": await journal.waits.complete(repo, pr); data = {}; break
             case "fix": case "ci-fix": data = await fix(repo, pr, step, worktree, request.repairId); break
             case "branch-wt": data = { worktree: await branchWorktree(repo, request.branch, request.fallback) }; break
             case "codex-guard": data = await guarded(repo, pr, request.kind, request.argv, getRepo(repo).checkout, ""); break

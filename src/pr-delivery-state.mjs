@@ -161,43 +161,6 @@ export async function reserveCodex(config, repo, pr, kind, budget = new Deadline
   }
 }
 
-// All recovery writers use the same record. Reading eligibility is advisory;
-// callers still take the PR lease and reserve the budget at dispatch time.
-export async function deliveryWait(config, repo, pr, input, stop, budget) {
-  return withLease(path.join(config.stateDir, "locks"), `wait-${keyFor(repo, pr)}`, async () => {
-    const file = path.join(config.stateDir, "waits", `${keyFor(repo, pr)}.json`)
-    const prior = await readJson(file, null)
-    if (stop) {
-      const record = { schema: "factory-delivery-wait/v1", status: "suspended", ...input, ...stop }
-      if (prior?.status === "suspended" && JSON.stringify(prior) === JSON.stringify(record)) return { ...prior, recorded: false }
-      await writeJson(file, record)
-      return { ...record, recorded: true }
-    }
-    if (!prior || prior.status !== "suspended") return null
-    const changed = prior.head !== input.head || prior.dependency !== input.dependency
-    const budgetOpen = prior.cause === "budget-exhausted" && input.budgetAvailable
-    // Slot waits retry admission; reserveCodex remains the atomic arbiter.
-    // Capacity signals cannot reopen a deterministic source/dependency stop.
-    if (prior.cause === "slot-wait" && !changed) return null
-    const budgetReset = prior.cause === "budget-exhausted" && prior.resetAt && Date.now() >= prior.resetAt
-    if (changed || budgetOpen || budgetReset) {
-      await writeJson(file, { ...prior, status: "resumable" })
-      return null
-    }
-    const error = new DeliveryError(prior.message, prior.code)
-    error.wait = prior
-    throw error
-  }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget })
-}
-
-export async function completeDeliveryWait(config, repo, pr, budget) {
-  return withLease(path.join(config.stateDir, "locks"), `wait-${keyFor(repo, pr)}`, async () => {
-    const file = path.join(config.stateDir, "waits", `${keyFor(repo, pr)}.json`)
-    const prior = await readJson(file, null)
-    if (prior) await writeJson(file, { ...prior, status: "complete" })
-  }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget })
-}
-
 // Projection recovery reuses admission to retire dead, unowned claim files.
 // A surviving supervisor/group retains its claim and remains visible as orphaned.
 export async function orphanLeaseCount(root, { recover = false, budget } = {}) {

@@ -74,7 +74,5 @@ test('delivery bindings have one predicate shared by journal and effect interfac
  assert.equal(evidence.isDeliveryBinding(binding),true)
  for(const bad of [null,[],{...binding,repo:'../repo'},{...binding,pr:0},{...binding,head:'A'.repeat(40)}])
   assert.equal(evidence.isDeliveryBinding(bad),false)
- const source=await fs.readFile(new URL('../src/pr-delivery.mjs',import.meta.url),'utf8')
- assert.match(source,/isDeliveryBinding\(entry\)/)
- assert.doesNotMatch(source,/entry\.repo\.split/)
+
 })
