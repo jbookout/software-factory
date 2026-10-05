@@ -51,7 +51,7 @@ if(tool === 'codex') {
  if(typeof fault==='number') reply(fault,{message:s.writeErrorMessage??'synthetic'});
  const topicHasMain=()=>{try{git('--git-dir',s.remote,'merge-base','--is-ancestor','refs/heads/main','refs/heads/topic');return true}catch{return false}};
  if(name==='comments') {
- s.comments.push({body:body.body,pr:Number(route.split('/')[4]),author:{login:'reviewer'}});
+ s.comments.push({body:body.body,pr:Number(route.split('/')[4]),author:{login:body.body.startsWith('DELIVERY VERIFIED')?(s.deliveryPublisher??'reviewer'):'reviewer'}});
  if(s.blockBeforeMerge&&body.body.startsWith('DELIVERY VERIFIED')) s.comments.push({body:'REVIEW: BLOCKED\\nReviewed-SHA: '+s.headRefOid,author:{login:'reviewer'}});
  if(s.advanceMainOnComment&&body.body.startsWith('DELIVERY VERIFIED')) {git('-C',s.checkout,'checkout','-q','main');fs.writeFileSync(s.checkout+'/late-main.txt','late');git('-C',s.checkout,'add','late-main.txt');git('-C',s.checkout,'commit','-qm','Late main');git('-C',s.checkout,'push','-q','origin','main');s.advanceMainOnComment=false;}
  save();if(s.lostCommentReply&&body.body.startsWith('DELIVERY VERIFIED'))reply(502,{});reply(201,{id:s.comments.length,body:body.body});
@@ -1343,4 +1343,13 @@ test('fix12: restoring a checkpoint before a successful publication does not rep
  ok(await f.run('merge-queue',repo,'--once'))
  const s=await f.read();assert.equal(s.comments.filter(c=>c.body.startsWith('DELIVERY VERIFIED')).length,1)
  assert.equal(s.ghCalls.filter(merges).length,1);assert.equal((await queueOf(f))[0].state,'acknowledged')
+})
+
+
+test('fix12: lost delivery publication reply reconciles a publisher distinct from the reviewer',async t=>{
+ const f=await queueFixture(t,{lostCommentReply:true,deliveryPublisher:'merge-bot'});await f.approve(undefined,7,30000)
+ ok(await f.run('merge-enqueue',repo,'7',f.head));ok(await f.run('merge-queue',repo,'--once'))
+ const [entry]=await queueOf(f);assert.equal(entry.state,'acknowledged');assert.equal(entry.outcome.status,'pass')
+ const s=await f.read();assert.equal(s.comments.filter(c=>c.body.startsWith('DELIVERY VERIFIED')).length,1)
+ assert.equal(s.ghCalls.filter(merges).length,1)
 })

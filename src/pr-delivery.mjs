@@ -471,7 +471,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
   }
   // A durable intent is never resent on missing acknowledgement. Provider state
   // must reconcile it first; confirmed refusals may be retried with a new attempt.
-  async function mutation(repo, pr, head, action, fields, owners, reconcileOnly = false) {
+  async function mutation(repo, pr, head, action, fields, owners, { reconcileOnly = false, publication = "review" } = {}) {
     const id = effectIdentity(repo, pr, head, action, fields)
     const file = path.join(config.stateDir, "effects", `${id}.json`)
     return withLease(locks, `effect-${id}`, async () => {
@@ -483,7 +483,9 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       const observeEffect = async () => {
         const current = await view(repo, pr)
         if (action === "comment") {
-          const match = current.comments.find(c => c.body === fields.body && getRepo(repo).trustedReviewers.some(login => login.toLowerCase() === c.user.login.toLowerCase()))
+          // Delivery notes do not authorize review or merge; their exact body
+          // is the effect. Approval envelopes still require a trusted author.
+          const match = current.comments.find(c => c.body === fields.body && (publication === "delivery" || getRepo(repo).trustedReviewers.some(login => login.toLowerCase() === c.user.login.toLowerCase())))
           if (match) return { ok: true, status: 201, value: { id: match.id, body: fields.body } }
         } else if (action === "merge" && current.state === "MERGED") {
           return { ok: true, status: 200, value: { merged: true, sha: current.mergeCommit.oid } }
@@ -624,7 +626,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       const delivered = await verifyDelivery(repo, pr, current, old, await integrationBase(repo, pr, old))
       const id = effectIdentity(repo, pr, current.headRefOid, "merge", { merge_method: "squash", sha: current.headRefOid })
       if (await readJson(path.join(config.stateDir, "effects", `${id}.json`), null))
-        await mutation(repo, pr, current.headRefOid, "merge", { merge_method: "squash", sha: current.headRefOid }, owners, true)
+        await mutation(repo, pr, current.headRefOid, "merge", { merge_method: "squash", sha: current.headRefOid }, owners, { reconcileOnly: true })
       return delivered
     }
     if (current.state !== "OPEN") throw new DeliveryError(`${repo}#${pr} NOT OPEN (${current.state})`, 8)
@@ -676,7 +678,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     if (await git(local.checkout, "rev-parse", "origin/main") !== base)
       throw new DeliveryError("INTEGRATION BASE MOVED; needs fresh integration, review and CI", 2)
     await writeJson(integrationRecord(repo, pr, head), { schema: "factory-integration/v1", repo, pr, head, base })
-    const evidence = await mutation(repo, pr, head, "comment", { body: `DELIVERY VERIFIED\nSource-SHA: ${head}\nIntegration-Base: ${base}\n\nExact integrated head, independent review and hosted checks verified. ${note}` }, owners)
+    const evidence = await mutation(repo, pr, head, "comment", { body: `DELIVERY VERIFIED\nSource-SHA: ${head}\nIntegration-Base: ${base}\n\nExact integrated head, independent review and hosted checks verified. ${note}` }, owners, { publication: "delivery" })
     if (!evidence.ok) throw new DeliveryError("DELIVERY EVIDENCE REFUSED" + (evidence.transient ? ": transient service error" : ""), 6, evidence.transient)
     // The reviewed source and all mutable predicates are checked again after
     // publishing evidence. REST's sha field is the provider's final head CAS.
