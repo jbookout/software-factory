@@ -372,12 +372,12 @@ export function inspectProjectPlatforms(platforms, { dependencies, paths, appJso
   if (appJsonPlatforms !== undefined && !sharedAnswerValidators.platforms(appJsonPlatforms))
     throw new TypeError('appJsonPlatforms must be a non-empty array of known project platforms')
   const mobileDependency = dependencies.some(name => name === 'react-native' || name === 'expo')
-  const native = platform => paths.some(path => path === `${platform}/` || path.startsWith(`${platform}/`))
   const appJson = paths.includes('app.json')
   const swift = usesSwiftUI === true || paths.some(path => path.endsWith('.swift'))
   const detected = PROJECT_PLATFORMS.filter(platform =>
     (platform === 'ios' && swift)
-    || ((platform === 'ios' || platform === 'android') && (mobileDependency || native(platform)
+    || ((platform === 'ios' || platform === 'android') && (mobileDependency
+      || paths.some(path => path === `${platform}/` || path.startsWith(`${platform}/`))
       || (appJson && appJsonPlatforms === undefined)))
     || (appJson && appJsonPlatforms?.includes(platform)))
   const missing = detected.filter(platform => !platforms.includes(platform))

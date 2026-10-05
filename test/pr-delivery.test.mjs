@@ -169,6 +169,16 @@ const repo="fixture/new-repository"
 const ok = r => assert.equal(r.code,0,JSON.stringify(r))
 const merges = a => a.includes("-X") && a.some(v=>v.endsWith("/merge"))
 
+test("review refuses a rejected comment publication", async t => {
+ const f = await fixture(t, { writeFaults: { comments: [500] } })
+ const result = await f.run("review-pr", repo, "7")
+ assert.notEqual(result.code, 0, "review must not succeed when GitHub rejects its comment")
+ assert.match(result.stderr, /comment acknowledgement missing/)
+ const state = await f.read()
+ assert.equal(state.comments.length, 0)
+ assert.ok(state.ghCalls.some(args => args.includes("POST") && args.some(arg => arg.endsWith("/issues/7/comments"))))
+})
+
 test("approve -> enqueue -> serial squash merge verifies main",async t=>{
  const f=await fixture(t);ok(await f.run("review-pr",repo,"7"));const s=await f.read()
  assert.equal(s.comments[0].body.split("\n")[0],"APPROVE");assert.equal(s.comments[0].body.split("\n")[1],"Reviewed-SHA: "+f.head)

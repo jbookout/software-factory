@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Qualification tasks</title>
+<h1>Tasks</h1><label>Title <input id="title"></label><button id="save">Save</button>
+<p role="alert" id="error"></p><p data-testid="success" hidden>Saved</p>
+<p data-testid="state"></p><ul data-testid="tasks"></ul><a href="/help" target="_blank">Help</a>
+<script>
+const list = document.querySelector('ul');
+const state = document.querySelector('[data-testid=state]');
+const seed = [{ title: 'Completed task', done: true }, { title: 'Pending task', done: false }];
+let tasks = JSON.parse(localStorage.getItem('tasks') || JSON.stringify(seed));
+const filter = new URL(location.href).searchParams.get('filter');
+function render() {
+  list.replaceChildren();
+  const rows = filter === 'archived' ? [] : tasks;
+  for (const row of rows) { const li = document.createElement('li'); li.textContent = row.title; list.append(li); }
+}
+if (location.pathname === '/admin') {
+  document.body.innerHTML = '<h1>Admin</h1><p role="alert">Permission denied</p>';
+} else if (location.pathname === '/help') {
+  document.body.innerHTML = '<h1>Task help</h1><p>Enter a title and save it. Blank titles are refused.</p>';
+} else {
+  render();
+  if (filter === 'archived') { state.textContent = 'Loading'; setTimeout(() => { state.textContent = 'No archived tasks'; }, 150); }
+  document.querySelector('#save').onclick = () => {
+    const title = document.querySelector('#title').value.trim();
+    if (!title) { document.querySelector('#error').textContent = 'Title required'; return; }
+    tasks.push({ title, done: false });
+    render(); document.querySelector('[data-testid=success]').hidden = false;
+  };
+}
+</script></html>
