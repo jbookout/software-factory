@@ -51,11 +51,17 @@ export async function observeNightly(
     );
     if (
       !Array.isArray(payload.workflow_runs) ||
-      !Number.isSafeInteger(payload.total_count)
+      !Number.isSafeInteger(payload.total_count) ||
+      payload.total_count < payload.workflow_runs.length ||
+      payload.workflow_runs.length > 100
     )
       throw Error();
+    if (payload.workflow_runs.some((r) =>
+      r?.event !== "schedule" || r.head_branch !== "main" ||
+      !Number.isSafeInteger(r.id) || r.id < 1 ||
+      !Number.isFinite(Date.parse(r.created_at)) || Date.parse(r.created_at) > now
+    )) throw Error();
     const runs = payload.workflow_runs
-      .filter((r) => r.event === "schedule" && r.head_branch === "main")
       .sort(
         (a, b) =>
           Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id,

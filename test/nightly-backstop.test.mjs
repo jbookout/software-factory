@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn, execFileSync } from "node:child_process";
 import {
   assessNightly,
   recordDiagnosis,
@@ -134,6 +134,43 @@ test("delayed cached green cannot close a newer owned failure", async (t) => {
   const nextGreen = assessNightly(receipt(), policy, base + 4000);
   assert.equal((await recordDiagnosis(root, nextGreen)).status, "closed");
   assert.equal((await recordDiagnosis(root, failed)).status, "closed");
+});
+test("concurrent monitor callers cannot publish cached green over a newer failure", async (t) => {
+  const root = await tmp(t), bin = path.join(root, "bin"), state = path.join(root, "state");
+  await fs.mkdir(bin);
+  const completedAt = new Date(Date.now() - 4000).toISOString();
+  const startedAt = new Date(Date.now() - 4500).toISOString();
+  const r = { ...receipt(), startedAt, completedAt };
+  await fs.writeFile(path.join(root, "receipt.json"), JSON.stringify(r));
+  execFileSync("zip", ["-q", path.join(root, "receipt.zip"), "receipt.json"], { cwd: root });
+  const marker = path.join(root, "first-read");
+  await fs.writeFile(path.join(bin, "gh"), `#!/usr/bin/env node
+const fs=require('node:fs'); const route=process.argv.at(-1), r=JSON.parse(fs.readFileSync(process.env.FIX30_RECEIPT));
+if(route.includes('/workflows/')) {
+ if(process.env.FIX30_SLOW==='1'){fs.writeFileSync(process.env.FIX30_MARKER,'started');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,1800);}
+ console.log(JSON.stringify({total_count:1,workflow_runs:[{id:process.env.FIX30_SLOW==='1'?123:124,run_attempt:1,event:'schedule',head_branch:'main',head_sha:r.source.sha,status:'completed',conclusion:process.env.FIX30_SLOW==='1'?'success':'failure',created_at:r.startedAt,updated_at:r.completedAt}]}));
+} else if(route.endsWith('/zip')) process.stdout.write(fs.readFileSync(process.env.FIX30_ZIP));
+else console.log(JSON.stringify({total_count:1,artifacts:[{id:99,name:'full-main-factory-receipt',expired:false,size_in_bytes:1000}]}));
+`, { mode: 0o755 });
+  const run = slow => new Promise(resolve => {
+    const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH,
+      FIX30_RECEIPT: path.join(root, "receipt.json"), FIX30_ZIP: path.join(root, "receipt.zip"),
+      FIX30_MARKER: marker, FIX30_SLOW: slow ? "1" : "0" };
+    delete env.NODE_TEST_CONTEXT;
+    const child = spawn(process.execPath, ["scripts/nightly-watch.mjs", state, policy.repository],
+      { env, stdio: ["ignore", "ignore", "ignore"] });
+    child.on("close", code => resolve(code));
+  });
+  const first = run(true);
+  const until = Date.now() + 5000;
+  while (!await fs.stat(marker).then(() => true, () => false)) {
+    if (Date.now() > until) throw Error("synthetic monitor never started");
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  const second = run(false);
+  assert.deepEqual(await Promise.all([first, second]), [0, 1]);
+  const snapshot = JSON.parse(await fs.readFile(path.join(state, "observation.json")));
+  assert.equal(snapshot.observations[0].state, "failed");
 });
 test("app browser suite receipt is compatible with the shared nightly contract", () => {
   const appPolicy = {
@@ -304,13 +341,14 @@ test("REST observation binds latest scheduled source/attempt and never falls bac
       updated_at: r.completedAt,
     };
   let latest = run,
+    older = { ...run, id: 122 },
     downloaded = r,
     expired = false;
   const routes = [];
   const get = async (route) => {
     routes.push(route);
     return route.includes("/workflows/")
-      ? { total_count: 2, workflow_runs: [{ ...run, id: 122 }, latest] }
+      ? { total_count: 2, workflow_runs: [older, latest] }
       : {
           total_count: 1,
           artifacts: [
@@ -335,6 +373,13 @@ test("REST observation binds latest scheduled source/attempt and never falls bac
     assert.equal((await observe()).state, "unknown");
   }
   expired = false;
+  older = run;
+  for (const partial of [{ created_at: undefined }, { event: undefined }, { head_branch: undefined }, { id: undefined }]) {
+    latest = { ...run, id: 124, ...partial };
+    assert.equal((await observe()).state, "unknown", "unorderable latest run cannot fall back to green");
+  }
+  older = { ...run, id: 122 };
+  latest = run;
   assert.ok(routes.every((route) => !route.includes("graphql")));
   for (const mutation of [
     { source: { ...r.source, sha: "d".repeat(40) } },

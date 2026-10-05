@@ -1,6 +1,6 @@
 import { observeNightly } from "../src/nightly-observation.mjs";
 import { recordDiagnosis } from "../src/nightly-backstop.mjs";
-import { writeJson } from "../src/pr-delivery-state.mjs";
+import { writeJson, withLease } from "../src/pr-delivery-state.mjs";
 try {
   const [root, repository] = process.argv.slice(2);
   if (
@@ -35,26 +35,26 @@ try {
       deadlineSeconds: 600,
     },
   ];
-  const observations = [];
-  for (const policy of policies.filter(
-    (p) => !repository || p.repository === repository,
-  )) {
-    const result = await observeNightly(policy);
-    await recordDiagnosis(root, result);
-    observations.push(result);
-  }
-  await writeJson(`${root}/observation.json`, {
-    schema: "nightly-watch.v1",
-    mode: "shadow",
-    gateAuthority: false,
-    observations,
-  });
-  process.stdout.write(JSON.stringify(observations) + "\n");
-  process.exitCode = observations.every(
-    (r) => r.state === "fresh" || r.state === "pending",
-  )
-    ? 0
-    : 1;
+  await withLease(`${root}/locks`, "nightly-snapshot", async () => {
+    const observations = [];
+    for (const policy of policies.filter(
+      (p) => !repository || p.repository === repository,
+    )) {
+      const result = await observeNightly(policy);
+      const recorded = await recordDiagnosis(root, result);
+      observations.push(result.state === "pending" ? result : recorded ?? result);
+    }
+    await writeJson(`${root}/observation.json`, {
+      schema: "nightly-watch.v1",
+      mode: "shadow",
+      gateAuthority: false,
+      observations,
+    });
+    process.stdout.write(JSON.stringify(observations) + "\n");
+    process.exitCode = observations.every(
+      (r) => r.state === "fresh" || r.state === "pending",
+    ) ? 0 : 1;
+  }, { waitMs: 10000, pollMs: 10 });
 } catch {
   process.stderr.write(
     "nightly observation unknown; owner orchestrator; retry bounded REST read\n",
