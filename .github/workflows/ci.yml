@@ -30,3 +30,7 @@ jobs:
         timeout-minutes: 5
       - run: npm test
       - run: python3 capabilities/jev-browser-select/test_select.py
+
+      - name: Audit installed workflow configuration (non-blocking pilot)
+        continue-on-error: true
+        run: npm run workflow:audit -- .

@@ -28,7 +28,7 @@ if(tool === 'codex') {
  const body=(s.blockOnce && !s.blocked ? 'REVIEW: BLOCKED' : 'APPROVE')+'\\nReviewed-SHA: '+s.headRefOid+'\\n\\n'+(s.blockOnce && !s.blocked ? '1. fix defect\\nNon-blocking\\nNone' : 'Non-blocking\\nNone');
  s.blocked=true; save(); fs.writeFileSync(args[args.indexOf('--output-last-message')+1], body);
  } else if(!s.noProgress) {
- fs.writeFileSync('fix.txt',String(Date.now())); git('add','fix.txt'); git('commit','-qm','Repair'); git('push','-q','origin','HEAD:topic');
+ fs.writeFileSync('fix.txt',String(Date.now())); git('add','fix.txt'); git('commit','-qm','Repair'); if(!s.builderNoPush) git('push','-q','origin','HEAD:topic');
  s.statusCheckRollup=[{status:'COMPLETED',conclusion:'SUCCESS'}]; s.mergeable='MERGEABLE'; s.mergeStateStatus='CLEAN'; save();
  }
  });
@@ -127,7 +127,7 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
  const config=path.join(root,"config.json"), stateDir=path.join(root,"state")
  // CLI smoke controls use the trusted host observer; allow room for concurrent
  // host jobs. Capacity refusal itself uses injected snapshots in its own tests.
- const cfg={repos:{"fixture/new-repository":{checkout,originUrl:remote,worktreeRoot:path.join(root,"worktrees"),requiredChecks:[{name:"test"}]}},stateDir,codex:{model:"fixture-model",effort:"high"},resources:{capacity:32,browserConcurrency:1,agentUnits:1},limits:{runsPer24h:8,slots:2,timeoutMs:5000},pollMs:5,retryMs:0,commandTimeoutMs:5000,...configOverrides}
+ const cfg={repos:{"fixture/new-repository":{checkout,originUrl:remote,worktreeRoot:path.join(root,"worktrees"),requiredChecks:[{name:"test"}],checks:[[process.execPath,"-e",""]]}},stateDir,codex:{model:"fixture-model",effort:"high"},resources:{capacity:64,browserConcurrency:1,agentUnits:1},limits:{runsPer24h:8,slots:2,timeoutMs:5000},pollMs:5,retryMs:0,commandTimeoutMs:5000,...configOverrides}
  await fs.writeFile(config,JSON.stringify(cfg))
  const read=async()=>JSON.parse(await fs.readFile(env.FAKE_PR,"utf8"))
  const launch=(command,args,workerEnv=env)=>new Promise((resolve,reject)=>{
@@ -493,7 +493,7 @@ test("app refusal replay: nine launches across deployed recovery writers preserv
  assert.equal((await f.read()).calls.length,0)
  const events=(await fs.readFile(path.join(f.stateDir,"delivery.jsonl"),"utf8")).trim().split("\n").map(JSON.parse)
  assert.equal(events.filter(e=>e.status==="suspended").length,1)
- assert.equal(events.filter(e=>e.status==="started").length,0)
+ assert.equal(events.filter(e=>e.status==="running").length,0)
  const wait=JSON.parse(await fs.readFile(path.join(f.stateDir,"waits",encodeURIComponent(repo)+"-7.json")))
  assert.equal(wait.cause,"budget-exhausted");assert.ok(wait.resetAt>Date.now())
  await fs.writeFile(path.join(f.stateDir,"usage.json"),"[]")
@@ -1043,4 +1043,106 @@ test('review 10: timeout exceptions are the sole delivery timeout policy', async
  const source = await fs.readFile(new URL('../src/pr-delivery.mjs', import.meta.url), 'utf8')
  const afterCommand = source.slice(source.indexOf('  const git ='))
  assert.equal(/(?:result|response)\.timedOut/.test(afterCommand), false, 'delivery timeout result paths must be absent')
+})
+
+
+test('retro 7: runner waits for its check then pushes the tested commit',async t=>{
+ const f=await fixture(t,{builderNoPush:true},{resources:{capacity:64,browserConcurrency:1,agentUnits:1},queueTimeoutMs:15000})
+ const marker=path.join(f.root,'check-started'), finish=path.join(f.root,'check-finished')
+ f.cfg.repos[repo].checks=[[process.execPath,'-e',`require('fs').writeFileSync(${JSON.stringify(marker)},'started');setTimeout(()=>{require('fs').writeFileSync(${JSON.stringify(finish)},'finished')},400)`]]
+ await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ const pending=f.run('fix-pr',repo,'7','-')
+ for(let i=0;i<3000;i++){if(await fs.access(marker).then(()=>true,()=>false))break;await pause(10)}
+ await fs.access(marker)
+ assert.equal(git(f.checkout,'--git-dir',f.remote,'rev-parse','refs/heads/topic'),f.head)
+ const receiptFile=path.join(f.stateDir,'repairs',`${keyFor(repo,7)}.json`)
+ assert.equal(JSON.parse(await fs.readFile(receiptFile,'utf8')).status,'checking')
+ ok(await pending);await fs.access(finish)
+ const receipt=JSON.parse(await fs.readFile(receiptFile,'utf8'))
+ assert.equal(receipt.status,'delivered');assert.notEqual(receipt.head,f.head)
+ assert.equal(receipt.remoteHead,receipt.head);assert.equal(receipt.testedHead,receipt.head)
+ assert.ok(receipt.checks.every(c=>c.code===0))
+})
+
+test('retro 7: failed runner check leaves committed source unpushed',async t=>{
+ const f=await fixture(t,{builderNoPush:true},{resources:{capacity:64,browserConcurrency:1,agentUnits:1},queueTimeoutMs:15000})
+ f.cfg.repos[repo].checks=[[process.execPath,'-e','process.exit(17)']]
+ await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ const result=await f.run('fix-pr',repo,'7','-')
+ assert.equal(result.code,17,JSON.stringify(result))
+ assert.equal(git(f.checkout,'--git-dir',f.remote,'rev-parse','refs/heads/topic'),f.head)
+ const receipt=JSON.parse(await fs.readFile(path.join(f.stateDir,'repairs',`${keyFor(repo,7)}.json`),'utf8'))
+ assert.equal(receipt.status,'check_failed');assert.equal(receipt.testedHead,undefined)
+})
+
+
+test('retro 7: failed push stays pending and recovery reads remote without rebuilding or retesting',async t=>{
+ const f=await fixture(t,{builderNoPush:true},{resources:{capacity:64,browserConcurrency:1,agentUnits:1},queueTimeoutMs:15000})
+ const hook=path.join(f.remote,'hooks','pre-receive')
+ await fs.writeFile(hook,'#!/bin/sh\nexit 1\n',{mode:0o755})
+ const first=await f.run('fix-pr',repo,'7','-');assert.notEqual(first.code,0)
+ const file=path.join(f.stateDir,'repairs',`${keyFor(repo,7)}.json`)
+ const pending=JSON.parse(await fs.readFile(file,'utf8'));assert.equal(pending.status,'push_pending');assert.equal(pending.testedHead,pending.head)
+ await fs.writeFile(hook,'#!/bin/sh\nexit 0\n',{mode:0o755})
+ ok(await f.run('fix-pr',repo,'7','-'))
+ const delivered=JSON.parse(await fs.readFile(file,'utf8'));assert.equal(delivered.status,'delivered')
+ assert.deepEqual(delivered.checks,pending.checks);assert.equal((await f.read()).calls.length,1)
+})
+
+test('retro 7: recovery refuses a still-running check and resumes only after observing terminal failure',async t=>{
+ const f=await fixture(t,{builderNoPush:true},{resources:{capacity:64,browserConcurrency:1,agentUnits:1},queueTimeoutMs:15000})
+ f.cfg.repos[repo].checks=[[process.execPath,'-e','process.exit(17)']]
+ await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ assert.equal((await f.run('fix-pr',repo,'7','-')).code,17)
+ const file=path.join(f.stateDir,'repairs',`${keyFor(repo,7)}.json`),record=JSON.parse(await fs.readFile(file,'utf8'))
+ const terminal=JSON.parse(await fs.readFile(record.checkJob.receipt,'utf8'))
+ await fs.writeFile(record.checkJob.receipt,JSON.stringify({...terminal,status:'running',pid:process.pid,groupPid:null}))
+ assert.equal((await f.run('fix-pr',repo,'7','-')).code,75)
+ assert.equal((await f.read()).calls.length,1)
+ await fs.writeFile(record.checkJob.receipt,JSON.stringify(terminal))
+ f.cfg.repos[repo].checks=[[process.execPath,'-e','']]
+ await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ ok(await f.run('fix-pr',repo,'7','-'));assert.equal((await f.read()).calls.length,1)
+})
+
+test('retro 3: installed review/fix/queue wrappers exercise the bound PR adapter',async t=>{
+ const f=await fixture(t,{builderNoPush:true},{resources:{capacity:64,browserConcurrency:1,agentUnits:1},queueTimeoutMs:15000})
+ const source=path.join(f.root,'factory-source'),installed=path.join(f.root,'installed')
+ git(f.checkout,'clone','--quiet','--no-hardlinks',fileURLToPath(new URL('../',import.meta.url)),source)
+ const names=['src/orch-installation.mjs','bin/orch-install.mjs','src/pr-delivery.mjs','src/pr-delivery-prompts.mjs',
+   'src/process-runner.mjs','src/process-launcher.mjs','src/process-supervisor.mjs','bin/pr-delivery.mjs',
+   'deploy/orch/factory-entry.sh','deploy/orch/test-browser.sh','deploy/orch/branch-wt.sh','deploy/orch/merge-enqueue.sh']
+ for(const name of names){await fs.copyFile(fileURLToPath(new URL('../'+name,import.meta.url)),path.join(source,name))}
+ git(source,'add',...names);git(source,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','Delivered candidate fixture')
+ await fs.symlink(fileURLToPath(new URL('../node_modules',import.meta.url)),path.join(source,'node_modules'),'dir')
+ execFileSync(process.execPath,[fileURLToPath(new URL('../bin/orch-install.mjs',import.meta.url)),'install',source,installed,f.config],{encoding:'utf8'})
+ const wrapper=(name,...args)=>new Promise((resolve,reject)=>{
+   const child=spawn('sh',[path.join(installed,name+'.sh'),...args],{env:f.env,stdio:['ignore','pipe','pipe']})
+   let stdout='',stderr='';child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b)
+   child.on('error',reject);child.on('close',code=>resolve({code,stdout,stderr}))
+ })
+ ok(await wrapper('review-pr',repo,'7'))
+ ok(await wrapper('fix-pr',repo,'7','-'))
+ ok(await wrapper('ci-fix',repo,'7','-','--no-loop'))
+ ok(await wrapper('review-pr',repo,'7'))
+ ok(await wrapper('pr-loop',repo,'7','-','1'))
+ ok(await wrapper('auto-enqueue','--once'))
+ assert.equal((await f.read()).calls.length,4)
+ const queue=JSON.parse(await fs.readFile(path.join(f.stateDir,'queue.json'),'utf8'));assert.equal(queue.length,1)
+ await fs.appendFile(path.join(installed,'ci-fix.sh'),'\n# drift\n')
+ const before=(await f.read()).calls.length
+ assert.equal((await wrapper('ci-fix',repo,'7','-','--no-loop')).code,9)
+ assert.equal((await f.read()).calls.length,before)
+})
+
+
+test('retro 7: terminal receipt pointer uses the existing orch inbox command',async t=>{
+ const f=await fixture(t,{builderNoPush:true},{resources:{capacity:64,browserConcurrency:1,agentUnits:1},queueTimeoutMs:15000})
+ const command=path.join(f.root,'orch'),pointer=path.join(f.root,'pointer.json'),store=path.join(f.root,'store')
+ await fs.writeFile(command,`#!/usr/bin/env node\nrequire('fs').writeFileSync(${JSON.stringify(pointer)},JSON.stringify(process.argv.slice(2)));`,{mode:0o755})
+ f.cfg.orchInbox={command,store};await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ ok(await f.run('fix-pr',repo,'7','-'))
+ const file=path.join(f.stateDir,'repairs',`${keyFor(repo,7)}.json`)
+ assert.deepEqual(JSON.parse(await fs.readFile(pointer,'utf8')),['--store',store,'inbox','push','PlatformEngineer',`${repo}#7`,'delivered','--report',file])
+ assert.equal(JSON.parse(await fs.readFile(file,'utf8')).status,'delivered')
 })

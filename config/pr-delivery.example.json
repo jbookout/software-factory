@@ -9,7 +9,18 @@
           "appId": 15368
         }
       ],
-      "dependencyRevision": "owned-actionable-input-revision"
+      "dependencyRevision": "owned-actionable-input-revision",
+      "checks": [
+        [
+          "npm",
+          "test"
+        ],
+        [
+          "python3",
+          "capabilities/jev-browser-select/test_select.py"
+        ]
+      ],
+      "checkTimeoutMs": 3600000
     }
   },
   "stateDir": "/absolute/path/to/private/factory-delivery-state",
