@@ -11,7 +11,7 @@ export type UnknownSnapshot = Observation & Readonly<{
   ci: Readonly<{ state: "provider-unknown"; nextAction: "retry-provider-observation" }>;
 }>
 export type KnownSnapshot = Observation & Readonly<{
-  state: "known"; prState: "OPEN" | "CLOSED" | "MERGED"; number: number; title: string; body: string;
+  state: "known"; prState: "OPEN" | "CLOSED" | "MERGED"; number: number; title: string; body: string; author: string | null; labels: readonly string[];
   head: SourceBinding; base: SourceBinding; headRefOid: string; baseRefOid: string; recordedBaseOid: string;
   headRefName: string; baseRefName: string; isCrossRepository: boolean; isDraft: boolean;
   mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN"; mergeStateStatus: string;

@@ -45,6 +45,8 @@ export async function loadDeliveryConfig(file) {
       if (!REPO.test(repo)) throw new DeliveryError("invalid repository in config", 9)
       if (!Array.isArray(local.trustedReviewers) || !local.trustedReviewers.length || local.trustedReviewers.some(login => typeof login !== "string" || !/^[A-Za-z0-9-]+(?:\[bot\])?$/.test(login)))
         throw new DeliveryError("config repo trustedReviewers must name trusted GitHub identities", 9)
+      if (local.dependencyBotLogin !== undefined && (typeof local.dependencyBotLogin !== "string" || !/^[A-Za-z0-9-]+(?:\[bot\])?$/.test(local.dependencyBotLogin)))
+        throw new DeliveryError("config dependencyBotLogin must name one expected GitHub automation identity", 9)
       if (!validRequiredChecks(local.requiredChecks)) throw new DeliveryError("config repo requiredChecks must name the expected checks", 9)
       if (local.checks !== undefined && (!Array.isArray(local.checks) || !local.checks.length))
         throw new DeliveryError("config repo checks must be nonempty argv commands", 9)
@@ -702,7 +704,8 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       const current = await view(repo, pr)
       requireOpen(current)
       if (current.headRefOid !== head || current.review?.verdict !== "APPROVE" || current.review.sha !== head ||
-          current.ci.state !== "success" || current.mergeable !== "MERGEABLE" || current.isDraft)
+          current.ci.state !== "success" || current.mergeable !== "MERGEABLE" || current.isDraft ||
+          (mode !== "manual" && dependencyPr(current) && !dependencyEligible(current)))
         throw new DeliveryError("enqueue preconditions not satisfied", 4)
     }
     return queueState(async queue => {
@@ -1068,11 +1071,47 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     })
   }
   const enqueueOwner = fn => withLease(locks, "enqueue-owner", fn, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget: budget() })
+  const dependencyLabel = "dependency-queue"
+  const dependencyAuthor = (repo, author, branch) => {
+    const expected = getRepo(repo).dependencyBotLogin ?? "renovate[bot]"
+    return typeof author === "string" && author.toLowerCase() === expected.toLowerCase() &&
+      (expected.toLowerCase() === "renovate[bot]" || branch?.startsWith("renovate/"))
+  }
+  const dependencyPr = current => dependencyAuthor(current.repo, current.author, current.headRefName) &&
+    current.labels.some(l => ["dependency-patch", "dependency-security", "dependency-minor", "dependency-major"].includes(l))
+  const dependencyEligible = current => dependencyPr(current) &&
+    current.state === "OPEN" && current.baseRefName === "main" && !current.isDraft &&
+    current.mergeable === "MERGEABLE" && current.ci.state === "success" &&
+    !config.holds.some(h => h.repo === current.repo && h.regex.test(current.title)) &&
+    !current.labels.includes("dependency-major") &&
+    (current.labels.includes("dependency-security") || !current.labels.includes("dependency-minor")) &&
+    current.labels.some(l => ["dependency-patch", "dependency-security"].includes(l))
+  async function syncDependencyCandidate(repo, current) {
+    if (!dependencyPr(current) && !current.labels.includes(dependencyLabel)) return current
+    return prWriter(repo, current.number, async writer => {
+      // Reobserve under the PR writer lease: labels never consume an old head's CI.
+      const live = await view(repo, current.number)
+      const eligible = live.headRefOid === current.headRefOid && dependencyEligible(live)
+      const present = live.labels.includes(dependencyLabel)
+      if (eligible !== present) {
+        const route = `issues/${live.number}/labels${eligible ? "" : `/${dependencyLabel}`}`
+        const result = await provider.mutate(repo, eligible ? "POST" : "DELETE", route,
+          eligible ? {labels:[dependencyLabel]} : {}, [writer])
+        if (!result.ok || !Array.isArray(result.value) ||
+            result.value.some(l => typeof l?.name !== "string") ||
+            result.value.some(l => l.name === dependencyLabel) !== eligible)
+          throw new DeliveryError("dependency candidate label acknowledgement missing", 1)
+      }
+      return {...live, dependencyCandidate: eligible}
+    })
+  }
   async function enqueueObserved(repo, current, eventHead, mode = "automatic") {
+    current = await syncDependencyCandidate(repo, current)
     if (eventHead && eventHead !== current.headRefOid) return { enqueued: false }
+    if (dependencyPr(current) && !current.dependencyCandidate) return { enqueued: false }
     if (config.holds.some(h => h.repo === repo && h.regex.test(current.title))) return { enqueued: false }
     const approval = current.review
-    if (current.state !== "OPEN" || approval?.verdict !== "APPROVE" || approval.sha !== current.headRefOid || current.mergeable !== "MERGEABLE") return { enqueued: false }
+    if (current.state !== "OPEN" || current.isDraft || approval?.verdict !== "APPROVE" || approval.sha !== current.headRefOid || current.mergeable !== "MERGEABLE") return { enqueued: false }
     const ci = current.ci
     requireKnownCi(ci)
     if (ci.state !== "success") return { enqueued: false }
@@ -1088,15 +1127,15 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     for (const repo of Object.keys(config.repos)) {
       const prs = await provider.pages(repo, "pulls?state=open")
       for (const raw of prs) {
-        if (raw.base?.ref !== "main" || raw.comments === 0) continue
-        if (config.holds.some(h => h.repo === repo && h.regex.test(raw.title))) continue
-        const snapshot = await observe(repo, raw.number, { requireApproval: true })
+        if (raw.base?.ref !== "main") continue
+        const dependency = raw.labels?.some(l => l.name === dependencyLabel || (dependencyAuthor(repo, raw.user?.login, raw.head?.ref) && l.name.startsWith("dependency-")))
+        if (raw.comments === 0 && !dependency) continue
+        if (!dependency && config.holds.some(h => h.repo === repo && h.regex.test(raw.title))) continue
+        const snapshot = await observe(repo, raw.number, { requireApproval: !dependency })
         if (snapshot.state === "refused") continue
         if (snapshot.state !== "known") throw observationError(snapshot)
         const current = { ...snapshot, state: snapshot.prState }
-        if (current.state !== "OPEN" || current.mergeable !== "MERGEABLE" || current.isDraft ||
-            current.review?.verdict !== "APPROVE" || current.review.sha !== current.headRefOid || current.ci.state !== "success") continue
-        if ((await enqueue(repo, current.number, current.headRefOid, "auto-enqueued: approved head + green", "automatic")).enqueued) count++
+        if ((await enqueueObserved(repo, current)).enqueued) count++
       }
     }
     return { message: `AUTO-ENQUEUED ${count}` }
@@ -1213,7 +1252,10 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
             case "enqueue": data = await enqueue(repo, pr, head, note); break
             case "enqueue-event": data = await enqueueOwner(async () => {
               const current = await view(repo, pr, {observeChecks:false})
-              if (head && head !== current.headRefOid) return {enqueued:false}
+              if (head && head !== current.headRefOid) {
+                await syncDependencyCandidate(repo, await view(repo, pr))
+                return {enqueued:false}
+              }
               return enqueueObserved(repo, await view(repo, pr), head, "event")
             }); break
             case "auto-enqueue": data = await enqueueOwner(autoEnqueue); break

@@ -74,7 +74,11 @@ if(tool === 'codex') {
  if(['empty','partial'].includes(fault)) {console.log('HTTP/2.0 200 OK\\n\\n'+(fault==='partial'?'{\"id\":':''));process.exit(0);}
  if(typeof fault==='number') reply(fault,{message:s.writeErrorMessage??'synthetic'});
  const topicHasMain=()=>{try{git('--git-dir',s.remote,'merge-base','--is-ancestor','refs/heads/main','refs/heads/topic');return true}catch{return false}};
- if(name==='comments') {
+ if(name==='labels' || route.includes('/labels/')) {
+ if(args.includes('DELETE')) s.labels=s.labels.filter(l=>l!==decodeURIComponent(route.split('/').at(-1)));
+ else s.labels=[...new Set([...(s.labels??[]),...body.labels])];
+ save();reply(200,s.labels.map(name=>({name})));
+ } else if(name==='comments') {
  s.comments.push({body:body.body,pr:Number(route.split('/')[4]),author:{login:body.body.startsWith('DELIVERY VERIFIED')?(s.deliveryPublisher??'reviewer'):'reviewer'}});
  if(s.blockBeforeMerge&&body.body.startsWith('DELIVERY VERIFIED')) s.comments.push({body:'REVIEW: BLOCKED\\nReviewed-SHA: '+s.headRefOid,author:{login:'reviewer'}});
  if(s.advanceMainOnComment&&body.body.startsWith('DELIVERY VERIFIED')) {git('-C',s.checkout,'checkout','-q','main');fs.writeFileSync(s.checkout+'/late-main.txt','late');git('-C',s.checkout,'add','late-main.txt');git('-C',s.checkout,'commit','-qm','Late main');git('-C',s.checkout,'push','-q','origin','main');s.advanceMainOnComment=false;}
@@ -106,7 +110,7 @@ if(tool === 'codex') {
  if(s.apiFailure) { console.log('HTTP/2.0 403 Forbidden\\nx-ratelimit-remaining: 0\\n\\n{}');console.error('provider unavailable');process.exit(1); }
  if(s.restFault) { if(s.restFault==='exception') process.exit(2); if(s.restFault==='refusal') {console.log('HTTP/2.0 401 Unauthorized\\n\\n{}');process.exit(1);}
  console.log('HTTP/2.0 200 OK\\n\\n'+s.restFault);process.exit(0); }
- const pr=(number=s.number)=>({id:number,number,title:s.title,body:s.description??'',state:s.state==='OPEN'?'open':'closed',merged:s.state==='MERGED',draft:s.isDraft,
+ const pr=(number=s.number)=>({id:number,number,title:s.title,body:s.description??'',user:s.author,labels:(s.labels??[]).map(name=>({name})),state:s.state==='OPEN'?'open':'closed',merged:s.state==='MERGED',draft:s.isDraft,
  head:{sha:s.headRefOid,ref:s.headRefName,repo:{full_name:s.isCrossRepository?'fixture/fork':(s.repo??'fixture/new-repository')}},
  base:{ref:s.baseRefName,sha:s.recordedBase??git('--git-dir',s.remote,'rev-parse','refs/heads/main'),repo:{full_name:s.repo??'fixture/new-repository'}},comments:s.comments.filter(c=>(c.pr??7)===number).length,mergeable:s.mergeable==='UNKNOWN'?null:s.mergeable!=='CONFLICTING',mergeable_state:s.mergeStateStatus.toLowerCase(),merge_commit_sha:s.mergeCommit?.oid});
  if(/pulls\\/[0-9]+$/.test(route)) {
@@ -2132,4 +2136,84 @@ for (const mode of ["full", "confirm"]) test(`PR52 finding 2: ${mode} review cap
  assert.match(diff, /-base\n\+changed source/)
  assert.equal(manifest.binding.head, head)
  assert.equal(state.comments.length, mode === "confirm" ? 2 : 1)
+})
+
+for(const command of ['auto-enqueue','enqueue-event']) test(`dependency candidates: ${command} labels green Renovate patch without approving or enqueuing`,async t=>{
+ const f=await fixture(t,{author:{login:'renovate[bot]'},labels:['dependency-patch']})
+ ok(await f.run(command,...(command==='auto-enqueue'?['--once']:[repo,'7',f.head])))
+ const state=await f.read()
+ assert.deepEqual(state.labels,['dependency-patch','dependency-queue'])
+ assert.equal(state.calls.length,0);assert.equal(state.comments.length,0)
+ assert.equal(state.ghCalls.some(merges),false)
+ await assert.rejects(fs.readFile(path.join(f.stateDir,'queue.json')),{code:'ENOENT'})
+})
+
+for(const [name,overrides] of [
+ ['security',{labels:['dependency-security']}],
+ ['major security',{labels:['dependency-security','dependency-major','dependency-queue']}],
+ ['mixed minor security',{labels:['dependency-security','dependency-minor','dependency-queue']}],
+ ['minor',{labels:['dependency-minor','dependency-queue']}],
+ ['non-bot',{author:{login:'builder'},labels:['dependency-patch','dependency-queue']}],
+ ['failed',{labels:['dependency-patch','dependency-queue'],statusCheckRollup:[{status:'COMPLETED',conclusion:'FAILURE'}]}],
+ ['pending',{labels:['dependency-patch','dependency-queue'],statusCheckRollup:[{status:'IN_PROGRESS',conclusion:null}]}],
+ ['draft',{labels:['dependency-patch','dependency-queue'],isDraft:true}],
+ ['missing check',{labels:['dependency-patch','dependency-queue'],statusCheckRollup:[]}],
+]) test(`dependency candidates: ${name} synchronizes classification without bypassing review`,async t=>{
+ const f=await fixture(t,{author:{login:'renovate[bot]'},labels:['dependency-patch'],...overrides})
+ ok(await f.run('enqueue-event',repo,'7',f.head))
+ const state=await f.read()
+ assert.equal(state.labels.includes('dependency-queue'),['security','mixed minor security'].includes(name))
+ assert.equal(state.calls.length,0);assert.equal(state.comments.length,0)
+ assert.equal(state.ghCalls.some(merges),false)
+ await assert.rejects(fs.readFile(path.join(f.stateDir,'queue.json')),{code:'ENOENT'})
+})
+
+test('dependency candidates: approved patch joins existing queue, approved major security stays out',async t=>{
+ const f=await fixture(t,{author:{login:'renovate[bot]'},labels:['dependency-security','dependency-major']})
+ await f.approve();ok(await f.run('enqueue-event',repo,'7',f.head))
+ await assert.rejects(fs.readFile(path.join(f.stateDir,'queue.json')),{code:'ENOENT'})
+ const state=await f.read();state.labels=['dependency-patch'];await fs.writeFile(f.env.FAKE_PR,JSON.stringify(state))
+ ok(await f.run('enqueue-event',repo,'7',f.head))
+ const queue=JSON.parse(await fs.readFile(path.join(f.stateDir,'queue.json')))
+ assert.equal(queue.length,1);assert.equal(queue[0].head,f.head)
+ assert.equal((await f.read()).ghCalls.some(merges),false)
+})
+
+test('dependency candidates: a new head cannot retain queue eligibility from old successful checks',async t=>{
+ const f=await fixture(t,{author:{login:'renovate[bot]'},labels:['dependency-patch','dependency-queue']})
+ const state=await f.read();state.checkRuns=[{id:1,name:'test',head_sha:f.head,status:'completed',conclusion:'success',app:{id:15368}}]
+ await fs.writeFile(f.env.FAKE_PR,JSON.stringify(state))
+ f.g('checkout','topic');await fs.writeFile(path.join(f.checkout,'dependency.txt'),'new dependency');f.g('add','dependency.txt');f.g('commit','-qm','New dependency head');f.g('push','-q','origin','topic')
+ ok(await f.run('enqueue-event',repo,'7',f.head))
+ assert.equal((await f.read()).labels.includes('dependency-queue'),false)
+ await assert.rejects(fs.readFile(path.join(f.stateDir,'queue.json')),{code:'ENOENT'})
+})
+
+test('dependency candidates: a rejected label write fails without queue admission',async t=>{
+ const f=await fixture(t,{author:{login:'renovate[bot]'},labels:['dependency-patch'],writeFaults:{labels:[403]}})
+ const result=await f.run('enqueue-event',repo,'7',f.head)
+ assert.notEqual(result.code,0)
+ assert.equal((await f.read()).labels.includes('dependency-queue'),false)
+ await assert.rejects(fs.readFile(path.join(f.stateDir,'queue.json')),{code:'ENOENT'})
+})
+
+test('dependency candidates: polling removes labels on held candidates without needing review comments',async t=>{
+ const f=await fixture(t,{author:{login:'renovate[bot]'},labels:['dependency-patch','dependency-queue']},
+  {holds:[{repo,titlePattern:'Fixture',reason:'synthetic hold'}]})
+ ok(await f.run('auto-enqueue','--once'))
+ assert.equal((await f.read()).labels.includes('dependency-queue'),false)
+ await assert.rejects(fs.readFile(path.join(f.stateDir,'queue.json')),{code:'ENOENT'})
+})
+
+for(const branch of ['renovate/weekly-patches','topic']) test(`dependency candidates: configured automation principal is scoped to ${branch}`,async t=>{
+ const f=await fixture(t,{author:{login:'factory-renovate[bot]'},headRefName:branch,labels:['dependency-patch']})
+ f.cfg.repos[repo].dependencyBotLogin='factory-renovate[bot]';await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ ok(await f.run('auto-enqueue','--once'))
+ assert.equal((await f.read()).labels.includes('dependency-queue'),branch.startsWith('renovate/'))
+ await assert.rejects(fs.readFile(path.join(f.stateDir,'queue.json')),{code:'ENOENT'})
+})
+
+for(const login of ['', ['renovate[bot]'], '*']) test(`dependency candidates: configuration rejects unbounded identity ${JSON.stringify(login)}`,async t=>{
+ const f=await fixture(t);f.cfg.repos[repo].dependencyBotLogin=login;await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ await assert.rejects(loadDeliveryConfig(f.config),/must name one expected GitHub automation identity/)
 })
