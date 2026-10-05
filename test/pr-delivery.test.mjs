@@ -28,6 +28,14 @@ if(tool === 'codex') {
  if(s.reviewerCommit) { fs.writeFileSync('feature.txt','prohibited');git('add','feature.txt');git('commit','-qm','Prohibited reviewer edit'); }
  const body=(s.blockOnce && !s.blocked ? 'REVIEW: BLOCKED' : 'APPROVE')+'\\nReviewed-SHA: '+s.headRefOid+'\\n\\n'+(s.blockOnce && !s.blocked ? '1. fix defect\\nNon-blocking\\nNone' : 'Non-blocking\\nNone');
  s.blocked=true; save(); fs.writeFileSync(args[args.indexOf('--output-last-message')+1], body);
+ } else if(prompt.includes('FINALIZE SHARED')) {
+ git('fetch','-q','origin');git('merge','--no-edit','-X','theirs','origin/main');
+ const base=git('rev-parse','origin/main');let frontier={version:0,migration:0};
+ try {frontier=JSON.parse(git('show','origin/main:lineage.json'))}catch{}
+ const next={version:frontier.version+1,migration:frontier.migration+1};
+ fs.writeFileSync('lineage.json',JSON.stringify(next));git('add','lineage.json');if(git('status','--porcelain'))git('commit','-qm','Finalize fixture lineage');
+ s.allocations??=[];s.allocations.push({base,...next,head:git('rev-parse','HEAD')});
+ s.statusCheckRollup=[{status:'COMPLETED',conclusion:'SUCCESS'}];s.mergeable='MERGEABLE';s.mergeStateStatus='CLEAN';save();
  } else if(!s.noProgress) {
  fs.writeFileSync('fix.txt',String(Date.now())); git('add','fix.txt'); git('commit','-qm','Repair'); if(!s.builderNoPush) git('push','-q','origin','HEAD:topic');
  if(s.correctiveRepair && s.calls.filter(c=>!c.prompt.includes('REVIEW MODE:')).length>1) {fs.writeFileSync('correction.txt','fixed');git('add','correction.txt');git('commit','-qm','Correct failed check');}
@@ -1533,4 +1541,133 @@ test('blocking 5: worktree-specific push destination is checked after repository
  const result=await f.run('fix-pr',repo,'7','-')
  assert.equal(result.code,9,JSON.stringify(result));assert.match(result.stdout+result.stderr,/push destination/)
  assert.equal(remoteTopic(f),f.head);assert.equal(git(f.root,'--git-dir',other,'rev-parse','refs/heads/topic'),f.head)
+})
+
+async function sharedFinalizationFixture(t) {
+ const first=await fixture(t)
+ first.g('checkout','topic')
+ await fs.writeFile(path.join(first.checkout,'lineage.json'),JSON.stringify({version:1,migration:1}))
+ first.g('add','lineage.json');first.g('commit','-qm','Provisional successor');first.g('push','-q','origin','topic')
+ first.head=first.g('rev-parse','HEAD');first.g('checkout','main')
+ first.g('checkout','-b','second')
+ await fs.writeFile(path.join(first.checkout,'feature-two.txt'),'independent product change')
+ await fs.writeFile(path.join(first.checkout,'lineage.json'),JSON.stringify({version:1,migration:1}))
+ first.g('add','feature-two.txt','lineage.json');first.g('commit','-qm','Same provisional successor');first.g('push','-q','origin','second')
+ const head=first.g('rev-parse','HEAD');first.g('checkout','main')
+ const checkout=path.join(first.root,'second-checkout'),tools=path.join(first.root,'second-tools')
+ execFileSync('git',['clone','-q',first.remote,checkout],{env:first.env,stdio:'ignore'})
+ git(checkout,'checkout','-q','main');git(checkout,'config','user.name','Fixture');git(checkout,'config','user.email','fixture@example.invalid')
+ await fs.mkdir(tools)
+ for(const name of ['gh','codex'])await fs.writeFile(path.join(tools,name),fake.replaceAll('topic','second'),{mode:0o755})
+ const env={...first.env,PATH:tools+path.delimiter+first.env.PATH,FAKE_PR:path.join(first.root,'second-pr.json')}
+ await fs.writeFile(env.FAKE_PR,JSON.stringify({...await first.read(),checkout,number:8,headRefName:'second',headRefOid:head,calls:[],ghCalls:[],comments:[]}))
+ const cfg=structuredClone(first.cfg),config=path.join(first.root,'second-config.json')
+ cfg.repos[repo].checkout=checkout;cfg.repos[repo].worktreeRoot=path.join(first.root,'second-worktrees')
+ await fs.writeFile(config,JSON.stringify(cfg))
+ const run=(...args)=>new Promise((resolve,reject)=>{
+  const child=spawn(process.execPath,[cli,config,...args],{env,stdio:['ignore','pipe','pipe']});let stdout='',stderr=''
+  child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b);child.on('error',reject);child.on('close',code=>resolve({code,stdout,stderr}))
+ })
+ const second={checkout,head,env,cfg,config,run,read:async()=>JSON.parse(await fs.readFile(env.FAKE_PR,'utf8'))}
+ const queue=async()=>JSON.parse(await fs.readFile(path.join(first.stateDir,'queue.json'),'utf8'))
+ const enqueue=async()=>{ok(await first.run('merge-enqueue',repo,'7',first.head,'shared lineage','--finalize'));ok(await second.run('merge-enqueue',repo,'8',head,'shared lineage','--finalize'))}
+ return {first,second,queue,enqueue}
+}
+
+async function waitForFixtureFile(file) {
+ for(let i=0;i<2000;i++){if(await fs.access(file).then(()=>true,()=>false))return;await pause(10)}
+ assert.fail(`fixture did not reach ${path.basename(file)}`)
+}
+
+test('retro s2: one finalization owner carries allocation, CI, review and observed merge', {timeout:180000}, async t=>{
+ const {first,second,queue,enqueue}=await sharedFinalizationFixture(t)
+ const marker=path.join(first.root,'finalization-ci')
+ first.cfg.repos[repo].checks=[[process.execPath,'-e',`require('fs').writeFileSync(${JSON.stringify(marker)},'started');setTimeout(()=>{},800)`]]
+ await fs.writeFile(first.config,JSON.stringify(first.cfg));await enqueue()
+ const pending=first.run('merge-queue',repo,'--once');await waitForFixtureFile(marker)
+ const repair=await currentRepair(first)
+ const claims=await fs.readdir(path.join(first.stateDir,'locks',`merge-${encodeURIComponent(repo)}.claims`))
+ const owner=JSON.parse(await fs.readFile(path.join(first.stateDir,'locks',`merge-${encodeURIComponent(repo)}.claims`,claims[0]),'utf8'))
+ const checkJob=JSON.parse(await fs.readFile(repair.checkJob.receipt,'utf8'))
+ assert.equal(owner.job.pid,checkJob.pid,'integration owner must supervise final CI')
+ assert.equal((await second.run('merge-queue',repo,'--once')).code,75)
+ assert.equal((await second.read()).calls.length,0,'waiting branch cannot allocate')
+ ok(await pending)
+ const merged=await first.read();assert.equal(merged.state,'MERGED')
+ ok(await second.run('merge-queue',repo,'--once'))
+ const next=await second.read();assert.equal(next.state,'MERGED')
+ assert.deepEqual(merged.allocations.map(a=>[a.version,a.migration]),[[1,1]])
+ assert.deepEqual(next.allocations.map(a=>[a.version,a.migration]),[[2,2]])
+ assert.equal(next.allocations[0].base,merged.mergeCommit.oid,'successor observes the first merge before allocation')
+ for(const entry of await queue()){
+  assert.equal(entry.outcome.status,'pass');assert.equal(entry.finalization.phase,'merged')
+  assert.equal(entry.finalization.reviewHead,entry.head);assert.equal(entry.finalization.checkedHead,entry.head)
+  const reviews=await fs.readdir(path.join(first.stateDir,'reviews'))
+  const receipts=await Promise.all(reviews.filter(n=>n.endsWith('.json')).map(n=>fs.readFile(path.join(first.stateDir,'reviews',n),'utf8').then(JSON.parse)))
+  const receipt=receipts.find(r=>r.pr===entry.pr&&r.head===entry.head)
+  assert.deepEqual(receipt.base,entry.finalization.base)
+ }
+ assert.equal(git(second.checkout,'--git-dir',first.remote,'show','main:feature.txt'),'feature')
+ assert.equal(git(second.checkout,'--git-dir',first.remote,'show','main:feature-two.txt'),'independent product change')
+})
+
+test('retro s2: external base advancement invalidates and reconciles once before fresh review', {timeout:120000}, async t=>{
+ const {first,queue}=await sharedFinalizationFixture(t),marker=path.join(first.root,'base-advanced')
+ const code=`const fs=require('fs'),cp=require('child_process');if(!fs.existsSync(${JSON.stringify(marker)})){const g=(...a)=>cp.execFileSync('git',['-C',${JSON.stringify(first.checkout)},...a],{stdio:'ignore'});fs.writeFileSync(${JSON.stringify(path.join(first.checkout,'lineage.json'))},JSON.stringify({version:5,migration:5}));g('add','lineage.json');g('commit','-qm','External frontier');g('push','-q','origin','main');fs.writeFileSync(${JSON.stringify(marker)},'moved')}`
+ first.cfg.repos[repo].checks=[[process.execPath,'-e',code]]
+ await fs.writeFile(first.config,JSON.stringify(first.cfg))
+ ok(await first.run('merge-enqueue',repo,'7',first.head,'shared lineage','--finalize'))
+ ok(await first.run('merge-queue',repo,'--once'))
+ const state=await first.read(),[entry]=await queue()
+ assert.equal(state.state,'MERGED');assert.deepEqual(state.allocations.map(a=>a.version),[1,6])
+ assert.equal(entry.finalization.invalidations.length,1)
+ assert.equal(entry.finalization.invalidations[0].base.sha,state.allocations[0].base)
+ assert.equal(entry.finalization.base.sha,state.allocations[1].base)
+ const reviews=state.calls.filter(c=>c.prompt.includes('REVIEW MODE:'))
+ assert.equal(reviews.length,1);assert.match(reviews[0].prompt,/REVIEW MODE: full/)
+ assert.equal(entry.finalization.reviewHead,state.allocations[1].head)
+})
+
+test('retro s2: interrupted final CI keeps the queue owner and observes its receipt before retry', {timeout:120000}, async t=>{
+ const {first,second,queue,enqueue}=await sharedFinalizationFixture(t)
+ const marker=path.join(first.root,'check-running')
+ first.cfg.repos[repo].checkTimeoutMs=30000
+ first.cfg.repos[repo].checks=[[process.execPath,'-e',`require('fs').writeFileSync(${JSON.stringify(marker)},'running');setInterval(()=>{},1000)`]]
+ await fs.writeFile(first.config,JSON.stringify(first.cfg));await enqueue()
+ const owner=spawn(process.execPath,[cli,first.config,'merge-queue',repo,'--once'],{env:first.env,stdio:'ignore'})
+ let terminal
+ t.after(()=>{owner.kill('SIGKILL');if(terminal?.groupPid)try{process.kill(-terminal.groupPid,'SIGKILL')}catch{}})
+ await waitForFixtureFile(marker)
+ const record=await currentRepair(first)
+ owner.kill('SIGKILL')
+ for(let i=0;i<300;i++){
+  terminal=JSON.parse(await fs.readFile(record.checkJob.receipt,'utf8'))
+  if(terminal.status==='interrupted')break;await pause(10)
+ }
+ const [entry]=await queue();assert.equal(entry.outcome,undefined);assert.equal(entry.finalization.phase,'finalizing')
+ assert.equal(terminal.status,'interrupted')
+ await fs.writeFile(record.checkJob.receipt,JSON.stringify({...terminal,status:'running',pid:process.pid,groupPid:null}))
+ assert.equal((await first.run('merge-queue',repo,'--once')).code,75)
+ assert.equal((await second.read()).calls.length,0)
+ assert.equal((await first.read()).calls.filter(c=>c.prompt.includes('FINALIZE SHARED')).length,1)
+ await fs.writeFile(record.checkJob.receipt,JSON.stringify(terminal))
+ first.cfg.repos[repo].checks=[[process.execPath,'-e','']]
+ await fs.writeFile(first.config,JSON.stringify(first.cfg))
+ ok(await first.run('merge-queue',repo,'--once'))
+ assert.equal((await first.read()).state,'MERGED')
+ assert.equal((await first.read()).calls.filter(c=>c.prompt.includes('FINALIZE SHARED')).length,1,'committed source is resumed, not regenerated')
+ assert.equal((await second.read()).calls.length,0,'second owner still waits for observed first merge')
+})
+
+test('retro s2: ordinary independent repair does not hold the integration lease', async t=>{
+ const f=await fixture(t),release=await acquireLease(path.join(f.stateDir,'locks'),`merge-${encodeURIComponent(repo)}`)
+ try{ok(await f.run('fix-pr',repo,'7','-'));assert.equal((await f.read()).allocations,undefined)}finally{await release()}
+})
+
+test('retro s2: generic child admission cannot allocate outside its finalization owner', async t=>{
+ const f=await fixture(t)
+ const result=await f.run('codex-guard',repo,'7','finalize','/usr/bin/true')
+ assert.equal(result.code,9,JSON.stringify(result))
+ assert.match(result.stderr,/finalization owner/)
+ assert.equal((await f.read()).calls.length,0)
 })

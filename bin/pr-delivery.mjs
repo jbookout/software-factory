@@ -61,7 +61,8 @@ try {
   else if (action === "codex-guard") report(await adapter.exclusive(repo, pr, () => adapter.execute(action, { ...request, kind: extra, argv: args.slice(3) })))
   else if (["readiness","repair-status","snapshot"].includes(action)) report(await adapter.execute(action, { ...request, head: extra }))
   else if (["merge-enqueue", "merge-one-core"].includes(action))
-    report(await adapter.execute(action === "merge-enqueue" ? "enqueue" : action, { ...request, head: extra, note: fourth }))
+    report(await adapter.execute(action === "merge-enqueue" ? "enqueue" : action, { ...request, head: extra,
+      note: fourth === "--finalize" ? undefined : fourth, finalize: args.includes("--finalize") }))
   else throw new Error(`unknown delivery action: ${action}`)
 } catch (error) {
   process.stderr.write(`${error.message}\n`)

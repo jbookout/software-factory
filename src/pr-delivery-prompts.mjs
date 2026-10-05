@@ -12,7 +12,7 @@ const checklist = `(a) correctness and edge cases of every changed function;
 (j) regressions to existing behaviour;
 (k) design and debt: ${skills} A shallow module, hypothetical seam, dead compatibility path or duplicated rule introduced by this PR is blocking. Deprecated APIs, accessibility gaps or performance pitfalls in changed Swift lines are blocking.`
 
-export function deliveryPrompt(kind, { repo, pr, head, branch, prior }) {
+export function deliveryPrompt(kind, { repo, pr, head, branch, prior, base }) {
   const task = `${repo} PR ${pr} at head ${head}.`
   if (kind === "review") {
     const scope = prior
@@ -20,6 +20,7 @@ export function deliveryPrompt(kind, { repo, pr, head, branch, prior }) {
       : `REVIEW MODE: full. This is the ONE complete review; find EVERY blocking defect up front. Read the PR description and full diff (gh pr diff ${pr} -R ${repo}), run the repository's tests and checks. State a verdict for every checklist item:\n${checklist}`
     return `${rules}\nReview only: never edit source, push, merge or approve your own work. You are an independent reviewer in a fresh process, not the builder.\nTASK: ${task}\n${scope}\nReturn ONE review comment as your final message; the factory posts it. First line exactly APPROVE or REVIEW: BLOCKED, second line Reviewed-SHA: ${head}. Then ALL blocking findings numbered with file:line and reproduction, per-finding status for confirmation, then Non-blocking or Follow-ups (non-blocking). Do not post the comment yourself.`
   }
+  if (kind === "finalize") return `${rules}\nFINALIZE SHARED: ${task} Integration base: ${base}.\nOrdinary product implementation is already complete. Finalize only this candidate's shared migration and SCAC successor. Fetch origin and integrate the exact base ${base} into ${branch}; if origin/main differs, stop and report the moved base. Use the repository's existing allocation/compiler authority (CARR: tools/integration_candidate.py --base ${base}), allocate after the observed predecessor, and regenerate only unapplied candidate artifacts. Preserve applied artifacts and independent product changes. Never invent seal rules or reuse review of an earlier head.\nReturn a committed source artifact; the runner owns strict repository checks, push, hosted checks, exact-head review and merge observation. Never push, merge, or deploy yourself. Commit by named paths. ${skills}`
   const scope = kind === "ci-fix"
     ? `CI-FIX: This approved PR has red CI and/or conflicts with main. Merge origin/main into ${branch} and resolve conflicts preserving both sides' intent. Never rebase. Read gh pr checks ${pr} -R ${repo} and gh run view --log-failed. Fix every root cause, including unrelated test flakes properly.`
     : `Read the latest REVIEW: BLOCKED or CHANGES REQUESTED comment (gh pr view ${pr} -R ${repo} --comments), resolve every numbered blocking finding, and update from origin/main if behind.`
