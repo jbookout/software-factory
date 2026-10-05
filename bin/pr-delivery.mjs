@@ -11,7 +11,7 @@ try {
   const [repo, number, extra, fourth] = args
   const once = args.includes("--once"), pr = Number(number)
   const daemons = ["merge-queue", "auto-enqueue", "recover"]
-  if (!daemons.includes(action) && !["branch-wt", "import-legacy", "github-read", "github-logs"].includes(action) && (!Number.isSafeInteger(pr) || pr <= 0)) throw new Error("PR number must be a positive integer")
+  if (!daemons.includes(action) && !["branch-wt", "import-legacy", "queue-status", "github-read", "github-logs"].includes(action) && (!Number.isSafeInteger(pr) || pr <= 0)) throw new Error("PR number must be a positive integer")
   const request = { repo, pr }
   const report = result => {
     const data = result.data ?? result
@@ -59,7 +59,9 @@ try {
       if (action === "ci-fix" && result.status === "pass" && !args.includes("--no-loop"))
         report(await runPrDelivery({ ...request }, adapter))
     })
-  } else if (action === "import-legacy") report(await adapter.execute(action, { root: repo }))
+  } else if (action === "queue-cancel") report(await adapter.execute(action, { ...request, head: extra }))
+  else if (action === "queue-status") report(await adapter.execute(action))
+  else if (action === "import-legacy") report(await adapter.execute(action, { root: repo }))
   else if (action === "branch-wt") report(await adapter.execute(action, { repo, branch: number, fallback: extra }))
   else if (action === "codex-guard") report(await adapter.exclusive(repo, pr, () => adapter.execute(action, { ...request, kind: extra, argv: args.slice(3) })))
   else if (action === "github-logs") {
