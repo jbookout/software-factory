@@ -369,6 +369,8 @@ export async function runPrDelivery(job, adapter) {
     if (inspect.status !== "pass") return stopped(inspect)
     if (inspect.data.merged) return complete(inspect.data.message)
     if (inspect.data.ready) return complete("APPROVED")
+    if (inspect.data.approved && !inspect.data.repairable)
+      return { code: 75, message: "WAIT: no observed failed required check; resolve mergeability before delivery", events }
     if (inspect.data.approved || inspect.data.blocked) {
       const repair = await execute(inspect.data.approved ? "ci-fix" : "fix")
       if (repair.status !== "pass") return stopped(repair)

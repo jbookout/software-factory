@@ -91,7 +91,7 @@ Stops are observable in CLI output; process and adapter outcomes also enter
 private `delivery.jsonl`. An unchanged
 repair head exits 2 (`NO-PROGRESS`), exhausted usage/slots exits 75, timeout exits
 142, unknown repo exits 9. Failed merge outcomes remain in `queue.json`;
-transient API errors retry three times after the initial attempt.
+provider failures persist a shared hold; later queue attempts wait until its retry time.
 Automatic scanning can enqueue a recovered failed head again, preserving prior
 outcomes and linking attempts. `queueRunsPer24h` bounds automatic queue entries
 for a head in a rolling day; active and successful entries stay deduplicated.
@@ -124,11 +124,21 @@ scripts are unchanged by this PR.
 
 The maintained adapters are in `deploy/orch/`. They execute the same CLI used by
 the replay tests; they contain no budget, review or CI policy of their own.
-After draining active workers, copy **all** of that directory's `.sh` files to
-the private orchestration script directory. Set `FACTORY_ROOT` to the merged,
-pinned factory checkout and `FACTORY_PR_CONFIG` to the shared private config
-in every worker and scheduler environment. Keep the prior scripts for rollback.
-The factory does not edit or install into the running script directory itself.
+After draining active workers, use the source-bound installer:
+`node "$FACTORY/bin/orch-install.mjs" install "$FACTORY" "$OLD" "$CONFIG"`.
+It retains the previous receipt and wrappers in a revision-named rollback
+directory, preserves their source revision in a sibling snapshot, and writes
+`.factory-orch.json` beside the installed wrappers. The receipt binds the clean
+source revision, runtime hashes, executable hashes, entrypoint, config and private
+state location. `node "$FACTORY/bin/orch-install.mjs" check "$OLD"` compares
+those artifacts without changing them. A mismatch names the file and requires
+reinstalling delivered source. Installed wrappers read their own receipt and
+use the installed, builtin-only verifier to check source bytes before evaluating
+the PR adapter. Installed entrypoints require a receipt even in a `deploy/orch`
+directory; caller environment cannot select a
+different factory implementation. Source-directory wrappers retain the existing
+`FACTORY_ROOT`/`FACTORY_PR_CONFIG` replay route. Keep config and state outside both
+source and installed executables. The installer does not start jobs or a scheduler.
 
 `unstick.sh` and `stall-watch.sh` are **PR recovery entry points**: both reconcile
 the same private wait records through `recover`, with `--once` for supervision.
@@ -159,18 +169,35 @@ Successful delivery-loop completion retires recovery eligibility while keeping
 the prior wait record. Closing a PR refuses work; reopening without changed
 eligibility retains its stop. Queue outcomes and original CI evidence survive.
 
-`readiness R N [H]` exposes the canonical observation: `success`, `pending`,
-`failure`, `provider-unknown` or `superseded`. Required contexts must succeed on
+`readiness R N [H]` exposes the canonical observation: `green`, `red`, `pending`,
+`quota_hold`, `auth_error`, `unknown` or `superseded`. Required contexts must succeed on
 the exact current head; skipped/neutral required jobs, cancellation and absent
 contexts never authorize enqueue or merge. Optional skipped/neutral jobs remain
 accepted. Obsolete heads request observation of the current head and start no
-fixer. Current cancellation requests a check rerun; authenticated assertion
-failure remains repairable. All new provider reads use paginated REST checks,
+fixer. Current cancellation requests a check rerun; observed assertion
+failure in a configured required check remains repairable. All new provider reads use paginated REST checks,
 commit statuses, PRs and comments. Malformed/permission responses stop.
 CheckRun status and conclusion are validated separately: an unfinished run
 must have no conclusion, and only completed success can satisfy a required run.
-Transport timeout, quota-evidenced 403, 429 and temporary 5xx reads retry at most
-twice, respecting bounded provider delay. They never become CI-red.
+All factory GitHub reads and writes reserve from one persistent `github.json`
+request budget under the shared `stateDir`. Configure `github.requestsPerHour`
+and `github.cacheMs`; all consumers must share that directory. REST commit/head
+observations share a cache; PR heads and approvals are reobserved before acting.
+Writes invalidate cached check evidence. REST and GraphQL evidence keep separate
+pool identities, while either pool's quota hold stops requests in both pools.
+Quota refusals persist the later of Retry-After, reset time, and pstack's backoff.
+Unknown query failures back off for 60, 120, 240, then 300 seconds and terminate
+after five query errors. Authentication refusal terminates immediately. Holds
+survive process restart. Terminal holds require operator diagnosis and explicit
+retirement of the hold after the underlying fault is repaired. Keep request
+history when retiring a hold. No provider refusal becomes CI-red.
+
+Use `enqueue-event R N H` for a head-bound event hint. The adapter reobserves
+approval and checks; repeated hints for a head are deduplicated even after a
+failed queue attempt. Event processing and automatic reconciliation take the
+same enqueue-owner lease. Its reconciliation deadline is persisted before each scan, so restart and repeated `--once` invocations cannot scan more often than five minutes.
+A CI fixer, including direct `ci-fix`, requires an observed failed required check;
+a conflict or optional failure cannot start it.
 
 `usage.json` counts reservations, `delivery.jsonl` records dispatched child
 starts separately, and wait events name their cause/reset. Neither count proves
@@ -286,6 +313,69 @@ Before choosing production concurrency or shortening healthy job caps, run
 matched same-source/cache/load browser suites at 1 and 2, retaining test union,
 timeouts, duration, and host load. The committed fixed-load four-file replay
 checks both modes and child peaks; it does not qualify the product's full browser
-suite or establish the audit's weekly savings. Factory CI has a 15-minute outer
-job deadline and a five-minute install deadline; the factory's Node test command
-also limits file concurrency to two. Keep required CI coverage intact.
+suite or establish the audit's weekly savings. [Factory CI](../.github/workflows/ci.yml)
+declares separate install, full-suite and outer job deadlines; the factory's Node
+test command also limits file concurrency to two. Keep required CI coverage intact.
+
+
+## Process and repair receipts
+
+Every guarded job has explicit `caller` ownership. The foreground CLI owns it;
+ending that owner interrupts its process group. This release provides no detached
+service mode. The supervisor binds a unique job ID, assigned worktree, configured
+model and effort, private log, supervisor PID, group PID and deadline. It writes
+`running` only after that command acknowledges startup and its log exists.
+The supervisor writes the terminal receipt even after the caller disconnects.
+Job receipts and logs live under `stateDir/jobs`. Sensitive-output commands keep
+raw stdout/stderr out of logs as well as delivery records; their output digest
+remains available. Process scans cannot establish
+startup for another job.
+
+Repairs require repository-owned `checks`, a nonempty list of literal argv
+arrays, and optionally `checkTimeoutMs`. Configure CARR with
+`[["ops/ci.sh", "--strict"]]`. Configure DoctorCRE with its privacy, check, test,
+build and artifact-verification commands. Factory configuration includes `npm test`,
+the browser-select Python test and orchestration evidence replay steps from its CI.
+Install required dependencies before admission. Commands execute in the assigned
+worktree, under the existing process supervisor and compute reservations.
+
+The builder performs focused tests and returns a local commit. The runner owns
+full checks, ordinary push and both remote/PR head readback. A remote change
+before checks finish produces `early_publication` and refuses delivery. Failed
+checks report the observed remote head; they cannot infer unpublished source
+from a check's exit code. The runner binds the worktree's effective push URL,
+refuses extra destinations, and pushes to that observed URL. It rechecks the
+open PR and its branch, repository and base binding immediately before push,
+and requires those bindings again in the final readback.
+
+The current repair at `stateDir/repairs/<repo-pr>.json` binds the builder job and
+source before dispatch. It transitions through `building`, `checking`,
+`check_failed` or `check_interrupted`, `push_pending`, then `delivered`.
+`node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" repair-status "$R" "$N"`
+reads that record and current job owner. The installed `unstick` and `stall-watch`
+entrypoints discover both waits and incomplete repairs. Recovery observes the
+job before retrying. It refuses live jobs and reconciles a committed interrupted
+builder to `candidate_unconfirmed`, without repeating the builder or publishing.
+An explicit fix request can confirm and finish that retained candidate.
+A terminal failed repository check permits a bounded corrective builder on the
+retained source under the PR lease and existing admission budget. A changed
+check policy can recheck that source without rebuilding. Each new attempt keeps
+a new repair ID and names its predecessor. Failed and delivered receipts remain
+immutable under `stateDir/repair-receipts/<repair-id>.json`; inbox reports use
+those paths, while the current record exists for recovery. Pending pushes read
+remote state before another push. Delivery binds the tested commit/tree, check
+results and observed remote head; builder prose cannot supply that evidence.
+
+An optional private `orchInbox` configuration names the installed pstack
+`orch.ts` executable as `command` and its initialized private `store` directory.
+The runner uses its existing `inbox push` command to publish a terminal receipt
+pointer for `<repo>#<pr>`. Pstack's verification ledger retains its independent
+reviewer verdicts; process completion never overwrites one. This is a pointer
+into the existing store, with no copied store implementation or second job DB.
+
+The workflow audit now runs on actual repository workflows in hosted CI as a
+non-blocking pilot. Missing action provenance or unclassified shell execution
+remains an audit finding; the YAML audit does not certify installed shell behavior.
+Installed-wrapper replays provide that separate evidence. To remove the pilot,
+remove its optional CI step. To roll back orchestration, drain jobs, reconcile
+private queue/usage records and restore retained wrappers as described above.

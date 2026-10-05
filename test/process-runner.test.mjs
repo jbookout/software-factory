@@ -188,12 +188,132 @@ test('a permission error on a live group remains a refusal',async t=>{
 
 test('macOS retired-group readback uses the system observer rather than a PATH shim',async t=>{
  if(process.platform!=='darwin') return t.skip('macOS retired-group EPERM behavior')
+ const {execFileSync}=await import('node:child_process')
+ const groups=new Set(execFileSync('/bin/ps',['-axo','pgid='],{encoding:'utf8'}).trim().split(/\s+/).map(Number))
+ let group=32766
+ while(groups.has(group)) group--
  const {killOwnedGroup,ownedGroupAlive}=await import('../src/process-group.mjs')
+ const {spawn}=await import('node:child_process')
+ const retired=spawn(process.execPath,['-e',''],{detached:true,stdio:'ignore'})
+ await new Promise((resolve,reject)=>{retired.on('close',resolve);retired.on('error',reject)})
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-group-observer-')),prior=process.env.PATH
  t.after(async()=>{process.env.PATH=prior;await fs.rm(root,{recursive:true,force:true})})
- await fs.writeFile(path.join(root,'ps'),'#!/bin/sh\necho "2147483646 2147483646 R"\n',{mode:0o755})
+ await fs.writeFile(path.join(root,'ps'),`#!/bin/sh\necho "${group} ${group} R"\n`,{mode:0o755})
  process.env.PATH=root+path.delimiter+prior
  t.mock.method(process,'kill',()=>{const error=Error('synthetic retired-group EPERM');error.code='EPERM';throw error})
- assert.equal(ownedGroupAlive(2147483646),false)
- assert.doesNotThrow(()=>killOwnedGroup(2147483646,'SIGKILL'))
+ assert.equal(ownedGroupAlive(group),false)
+ assert.doesNotThrow(()=>killOwnedGroup(group,'SIGKILL'))
+})
+
+test('macOS retired-group cleanup does not require a global process-table scan',async t=>{
+ if(process.platform!=='darwin') return t.skip('macOS retired-group EPERM behavior')
+ const cp=await import('node:child_process'),{syncBuiltinESMExports}=await import('node:module')
+ const {killOwnedGroup,ownedGroupAlive}=await import('../src/process-group.mjs')
+ let readback={status:0,stdout:'31234 31234 Z\n',stderr:''}
+ const observer=t.mock.method(cp.default,'spawnSync',(file,args)=>{
+  assert.equal(file,'/bin/ps')
+  if(args.includes('-axo')) return {error:Object.assign(Error('global scan stalled'),{code:'ETIMEDOUT'}),status:null}
+  assert.deepEqual(args,['-g','31234','-o','pid=,pgid=,stat='])
+  return readback
+ })
+ syncBuiltinESMExports()
+ t.mock.method(process,'kill',()=>{throw Object.assign(Error('retired group'),{code:'EPERM'})})
+ try {
+  assert.equal(ownedGroupAlive(31234),false)
+  assert.doesNotThrow(()=>killOwnedGroup(31234,'SIGKILL'))
+  readback={status:1,stdout:'',stderr:''}
+  assert.equal(ownedGroupAlive(31234),false)
+  assert.doesNotThrow(()=>killOwnedGroup(31234,'SIGKILL'))
+  for(const result of [
+   {error:Error('observer stalled'),status:null},
+   {status:1,stdout:'',stderr:'observer failed'},
+   {status:0,stdout:'unreadable',stderr:''},
+   {status:0,stdout:'31235 31235 Z\n',stderr:''},
+   {status:0,stdout:'31235 31234 R\n',stderr:''}
+  ]) {
+   readback=result
+   assert.equal(ownedGroupAlive(31234),true)
+   assert.throws(()=>killOwnedGroup(31234,'SIGKILL'),{code:'EPERM'})
+  }
+ } finally {observer.mock.restore();syncBuiltinESMExports()}
+})
+
+test('retro 4: running requires this job startup log and acknowledgment', async t => {
+ const root = await fs.mkdtemp(path.join(os.tmpdir(), 'factory-startup-'))
+ t.after(() => fs.rm(root, {recursive:true, force:true}))
+ const job = {id:'startup-fixture', ownership:'caller', worktree:root, model:'fixture', effort:'high',
+   log:path.join(root,'job.log'), receipt:path.join(root,'job.json')}
+ const release=path.join(root,'acknowledged')
+ let acknowledged
+ const result = await runProcess([process.execPath,'-e',`console.log("started");const timer=setInterval(()=>{if(require('fs').existsSync(${JSON.stringify(release)})){clearInterval(timer)}},10)`], {
+   cwd:root, job, onStarted: async receipt => {
+     acknowledged = JSON.parse(await fs.readFile(job.receipt, 'utf8'))
+     assert.equal(receipt.id, job.id)
+     await fs.access(receipt.log)
+     await fs.writeFile(release,receipt.id)
+   }
+ })
+ assert.equal(acknowledged?.status,'running')
+ assert.equal(acknowledged?.ownership,'caller')
+ assert.ok(acknowledged?.groupPid)
+ assert.equal(result.code,0)
+ const terminal=JSON.parse(await fs.readFile(job.receipt,'utf8'))
+ assert.equal(terminal.status,'complete'); assert.equal(terminal.id,job.id)
+ assert.equal(await fs.readFile(job.log,'utf8'),'started\n')
+})
+
+test('retro 4: unrelated process cannot acknowledge a missing executable',async t=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-missing-start-'))
+ t.after(()=>fs.rm(root,{recursive:true,force:true}))
+ let running=false
+ const job={id:'missing',ownership:'caller',worktree:root,model:'fixture',effort:'high',log:path.join(root,'log'),receipt:path.join(root,'receipt')}
+ const result=await runProcess(['/fixture/missing'],{cwd:root,job,onStarted(){running=true}})
+ assert.equal(running,false);assert.equal(result.started,false)
+ assert.equal(JSON.parse(await fs.readFile(job.receipt,'utf8')).status,'failed')
+})
+
+test('retro 4: two caller-owned jobs stop with interruption receipts when their shell ends',async t=>{
+ if(process.platform==='win32')return t.skip('POSIX ownership contract')
+ const {spawn}=await import('node:child_process')
+ const {waitGone}=await import('./helpers/deadline-and-process.mjs')
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-owner-'))
+ t.after(()=>fs.rm(root,{recursive:true,force:true}))
+ const runner=new URL('../src/process-runner.mjs',import.meta.url).href
+ const code=`import {runProcess} from ${JSON.stringify(runner)};
+ await Promise.all(['one','two'].map(id=>runProcess([process.execPath,'-e','setInterval(()=>{},1000)'],{cwd:${JSON.stringify(root)},timeoutMs:5000,
+ job:{id,ownership:'caller',worktree:${JSON.stringify(root)},model:'fixture',effort:'high',log:${JSON.stringify(root)}+'/'+id+'.log',receipt:${JSON.stringify(root)}+'/'+id+'.json'}})))`
+ const owner=spawn('sh',['-c','exec "$1" --input-type=module -e "$2"','fixture',process.execPath,code],{stdio:['ignore','pipe','pipe']})
+ t.after(()=>{try{owner.kill('SIGKILL')}catch{}})
+ const read=id=>fs.readFile(path.join(root,id+'.json'),'utf8').then(JSON.parse).catch(()=>null)
+ const until=Date.now()+3000
+ while(Date.now()<until && !((await read('one'))?.status==='running'&&(await read('two'))?.status==='running'))await new Promise(r=>setTimeout(r,10))
+ assert.equal((await read('one'))?.status,'running');assert.equal((await read('two'))?.status,'running')
+ owner.kill('SIGKILL')
+ for(const id of ['one','two']){
+   const until=Date.now()+3000
+   while(Date.now()<until&&(await read(id))?.status==='running')await new Promise(r=>setTimeout(r,10))
+   const terminal=await read(id);assert.equal(terminal.status,'interrupted');assert.equal(terminal.code,130)
+   assert.ok(await waitGone(terminal.groupPid))
+ }
+})
+
+
+test('retro 4: a startup whose log disappears cannot report running',async t=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-no-log-'))
+ t.after(()=>fs.rm(root,{recursive:true,force:true}))
+ const job={id:'no-log',ownership:'caller',worktree:root,model:'fixture',effort:'high',log:path.join(root,'log'),receipt:path.join(root,'receipt')}
+ let running=false
+ const result=await runProcess([process.execPath,'-e','setInterval(()=>{},1000)'],{cwd:root,job,timeoutMs:1000,
+   onSpawn:async()=>{await fs.unlink(job.log);return []},onStarted(){running=true}})
+ assert.equal(running,false);assert.notEqual(result.code,0)
+ assert.notEqual(JSON.parse(await fs.readFile(job.receipt,'utf8')).status,'running')
+})
+
+test('retro 4: startup acknowledgment cannot extend the owned deadline',async t=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-start-bound-'))
+ t.after(()=>fs.rm(root,{recursive:true,force:true}))
+ const job={id:'ack-bound',ownership:'caller',worktree:root,model:'fixture',effort:'high',log:path.join(root,'log'),receipt:path.join(root,'receipt')}
+ const start=Date.now()
+ const result=await runProcess([process.execPath,'-e',''],{cwd:root,job,timeoutMs:400,onStarted:()=>new Promise(()=>{})})
+ assert.equal(result.code,142);assert.ok(Date.now()-start<1000)
 })

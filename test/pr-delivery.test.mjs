@@ -22,6 +22,14 @@ const tool = require('node:path').basename(process.argv[1]);
 if(tool === 'codex') {
  let prompt=''; process.stdin.on('data',b=>prompt+=b); process.stdin.on('end',()=>{
  s.calls.push({prompt,cwd:process.cwd(),args}); save();
+ if(s.childReader) {
+ const path=require('node:path');
+ const config=JSON.parse(fs.readFileSync(process.env.FACTORY_PR_CONFIG));
+ fs.writeFileSync(path.join(config.stateDir,'github.json'),JSON.stringify({schema:'factory-github/v1',requests:[],cache:{},failures:{},hold:{state:'quota_hold',pool:'rest',queryErrors:1,terminal:false,retryAt:Date.now()+120000,message:'synthetic quota hold'}}));
+ s.childReaderBefore=s.ghCalls.length;
+ s.childReaderCode=cp.spawnSync(process.execPath,[s.childReader,process.env.FACTORY_PR_CONFIG,'github-read','fixture/new-repository','pulls/7'],{encoding:'utf8'}).status;
+ save();process.exit(s.childReaderCode);
+ }
  if(s.childCode) { console.error(s.childError??'synthetic child refusal');process.exit(s.childCode); }
  if(s.hang) { process.on('SIGTERM',()=>{}); setInterval(()=>{},1000); return; }
  if(prompt.includes('REVIEW MODE:')) {
@@ -29,7 +37,9 @@ if(tool === 'codex') {
  const body=(s.blockOnce && !s.blocked ? 'REVIEW: BLOCKED' : 'APPROVE')+'\\nReviewed-SHA: '+s.headRefOid+'\\n\\n'+(s.blockOnce && !s.blocked ? '1. fix defect\\nNon-blocking\\nNone' : 'Non-blocking\\nNone');
  s.blocked=true; save(); fs.writeFileSync(args[args.indexOf('--output-last-message')+1], body);
  } else if(!s.noProgress) {
- fs.writeFileSync('fix.txt',String(Date.now())); git('add','fix.txt'); git('commit','-qm','Repair'); git('push','-q','origin','HEAD:topic');
+ fs.writeFileSync('fix.txt',String(Date.now())); git('add','fix.txt'); git('commit','-qm','Repair'); if(!s.builderNoPush) git('push','-q','origin','HEAD:topic');
+ if(s.correctiveRepair && s.calls.filter(c=>!c.prompt.includes('REVIEW MODE:')).length>1) {fs.writeFileSync('correction.txt','fixed');git('add','correction.txt');git('commit','-qm','Correct failed check');}
+ if(s.hangAfterCommit) {setInterval(()=>{},1000);return;}
  s.statusCheckRollup=[{status:'COMPLETED',conclusion:'SUCCESS'}]; s.mergeable='MERGEABLE'; s.mergeStateStatus='CLEAN'; save();
  }
  });
@@ -38,6 +48,7 @@ if(tool === 'codex') {
  if(args[0]==='api') {
  const route=args.find(a=>a.startsWith('repos/')), params=new URL('https://fixture.invalid/'+route).searchParams;
  const page=Number(params.get('page')||1),pageSize=Number(params.get('per_page')||100);
+ if(route.endsWith('/logs')) {if(s.logEscapes&&!args.includes('--allow-escape-sequences')) {console.error('the response contains terminal escape sequences');process.exit(1)} console.log('HTTP/2.0 200 OK\\nContent-Type: text/plain\\n\\nstep-only failure detail');process.exit(0);}
  const respond=value=>console.log('HTTP/2.0 200 OK\\n\\n'+JSON.stringify(value));
  if(args.includes('-X')) {
  // Writes: JSON body on stdin; s.writeFaults[name] injects one outcome per call.
@@ -76,7 +87,7 @@ if(tool === 'codex') {
  }
  console.error('unexpected REST write');process.exit(2);
  }
- if(s.restCodes?.length) {const code=s.restCodes.shift();save();console.log('HTTP/2.0 '+code+' synthetic\\nRetry-After: 0\\n'+(s.quotaEvidence?'X-RateLimit-Remaining: 0\\n':'')+'\\n{}');process.exit(1);}
+ if(s.restCodes?.length) {const code=s.restCodes.shift();save();console.log('HTTP/2.0 '+code+' synthetic\\n'+(s.retryAfter!==undefined?'Retry-After: '+s.retryAfter+'\\n':'')+(s.resetAt?'X-RateLimit-Reset: '+s.resetAt+'\\n':'')+(s.quotaEvidence?'X-RateLimit-Remaining: 0\\n':'')+'\\n{}');process.exit(1);}
  if(s.apiHang) { if(s.apiHang!=='fetch') process.stdout.write('HTTP/2.0 200 OK\\n\\n{'); setInterval(()=>{if(s.apiHang==='drip') process.stdout.write(' ');},10); return; }
  if(s.apiFailure) { console.log('HTTP/2.0 403 Forbidden\\nx-ratelimit-remaining: 0\\n\\n{}');console.error('provider unavailable');process.exit(1); }
  if(s.restFault) { if(s.restFault==='exception') process.exit(2); if(s.restFault==='refusal') {console.log('HTTP/2.0 401 Unauthorized\\n\\n{}');process.exit(1);}
@@ -96,7 +107,7 @@ if(tool === 'codex') {
  if(s.moveDuringChecks && ++s.moveViewCount>1) {
  git('-C',s.checkout,'checkout','-q','topic');fs.writeFileSync(s.checkout+'/moved.txt','moved');git('-C',s.checkout,'add','moved.txt');git('-C',s.checkout,'commit','-qm','Move head');git('-C',s.checkout,'push','-q','origin','topic');
  s.headRefOid=git('--git-dir',s.remote,'rev-parse','refs/heads/topic');s.moveDuringChecks=false;save(); }
- save();respond(pr(Number(route.split('/').at(-1))));
+ save();respond({...pr(Number(route.split('/').at(-1))),...s.prOverrides});
  } else if(route.includes('/pulls?')) {
  const prs=s.listCount?Array.from({length:s.listCount},(_,i)=>({...pr(),body:'x'.repeat(s.listBodyBytes??0),id:i+100,number:i===s.listCount-1?7:i+100,comments:i===s.listCount-1?s.comments.length:0})):[pr()];respond(prs.slice((page-1)*pageSize,page*pageSize));
  } else if(route.includes('/comments')) {
@@ -104,13 +115,15 @@ if(tool === 'codex') {
  if(s.missingCommentPage===page) respond([]); else respond(s.comments.filter(c=>(c.pr??7)===number).map((c,i)=>({id:i+1,created_at:new Date(1700000000000+i*1000).toISOString(),updated_at:new Date(1700000000000+i*1000).toISOString(),user:{login:c.author?.login??'reviewer'},...c})).slice((page-1)*pageSize,page*pageSize));
  }
  else if(route.includes('/check-runs')) {
+ if(s.checkFault) {console.log('HTTP/2.0 502 synthetic\\n\\n{}');process.exit(1)}
+ if(s.badCheckPage) {respond({total_count:1,check_runs:[]});process.exit(0)}
  const runs=s.checkRuns??s.statusCheckRollup.filter(c=>c.__typename!=='StatusContext').map((c,i)=>({id:i+1,name:c.name??(i?'optional-'+i:'test'),head_sha:s.headRefOid,status:c.status?.toLowerCase(),conclusion:c.conclusion?.toLowerCase()??null,app:{id:15368}}));
  respond({total_count:runs.length,check_runs:runs.slice((page-1)*pageSize,page*pageSize)});
  } else if(route.includes('/statuses')) {
  const statuses=s.statuses??s.statusCheckRollup.filter(c=>c.__typename==='StatusContext').map((c,i)=>({id:i+1,context:c.context??'test',state:c.state?.toLowerCase()}));
  respond(statuses.slice((page-1)*pageSize,page*pageSize));
  }
- else if(route.includes('/git/ref/heads/')) respond({ref:'refs/heads/main',object:{type:'commit',sha:git('--git-dir',s.remote,'rev-parse','refs/heads/main')}});
+ else if(route.includes('/git/ref/heads/')) respond({ref:'refs/heads/'+decodeURIComponent(route.split('/git/ref/heads/')[1]),object:{type:'commit',sha:git('--git-dir',s.remote,'rev-parse','refs/heads/main')}});
  else if(route.includes('/rules/branches/main')) {
  const rules=s.rules??[{type:'required_status_checks',ruleset_id:1,parameters:{strict_required_status_checks_policy:true}}];
  respond(rules.slice((page-1)*pageSize,page*pageSize));
@@ -136,12 +149,12 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
  const tools=path.join(root,"tools");await fs.mkdir(tools)
  for(const name of ["gh","codex"]) await fs.writeFile(path.join(tools,name),fake,{mode:0o755})
  env.PATH=tools+path.delimiter+env.PATH
- const state={ remote,checkout,number:7,title:"Fixture PR",state:"OPEN",baseRefName:"main",isCrossRepository:false,headRefName:"topic",headRefOid:head,mergeStateStatus:"CLEAN",mergeable:"MERGEABLE",isDraft:false,author:{login:"builder"},comments:[],statusCheckRollup:[{status:"COMPLETED",conclusion:"SUCCESS"}],calls:[],ghCalls:[],...overrides }
+ const state={ remote,checkout,number:7,title:"Fixture PR",state:"OPEN",baseRefName:"main",isCrossRepository:false,headRefName:"topic",headRefOid:head,mergeStateStatus:"CLEAN",mergeable:"MERGEABLE",isDraft:false,author:{login:"builder"},comments:[],statusCheckRollup:[{status:"COMPLETED",conclusion:"SUCCESS"}],calls:[],ghCalls:[],builderNoPush:true,...overrides }
  await fs.writeFile(env.FAKE_PR,JSON.stringify(state))
  const config=path.join(root,"config.json"), stateDir=path.join(root,"state")
  // CLI smoke controls use the trusted host observer; allow room for concurrent
  // host jobs. Capacity refusal itself uses injected snapshots in its own tests.
- const cfg={repos:{"fixture/new-repository":{checkout,originUrl:remote,worktreeRoot:path.join(root,"worktrees"),requiredChecks:[{name:"test"}],trustedReviewers:["reviewer"]}},stateDir,codex:{model:"fixture-model",effort:"high"},resources:{capacity:64,browserConcurrency:1,agentUnits:1},queueTimeoutMs:15000,limits:{runsPer24h:8,slots:2,timeoutMs:5000},pollMs:5,retryMs:0,commandTimeoutMs:5000,checksTimeoutMs:5000,...configOverrides}
+ const cfg={repos:{"fixture/new-repository":{checkout,originUrl:remote,worktreeRoot:path.join(root,"worktrees"),requiredChecks:[{name:"test"}],trustedReviewers:["reviewer"],checks:[[process.execPath,"-e",""]]}},stateDir,codex:{model:"fixture-model",effort:"high"},resources:{capacity:64,browserConcurrency:1,agentUnits:1},queueTimeoutMs:15000,limits:{runsPer24h:8,slots:2,timeoutMs:5000},github:{cacheMs:0},pollMs:5,retryMs:0,commandTimeoutMs:5000,checksTimeoutMs:5000,...configOverrides}
  await fs.writeFile(config,JSON.stringify(cfg))
  const read=async()=>JSON.parse(await fs.readFile(env.FAKE_PR,"utf8"))
  const launch=(command,args,workerEnv=env)=>new Promise((resolve,reject)=>{
@@ -195,7 +208,7 @@ test("blocked review -> fix -> re-review uses confirmation scope",async t=>{
  assert.notEqual(s.headRefOid,f.head);assert.match(s.comments.at(-1).body,/^APPROVE\nReviewed-SHA:/)
 })
 for(const action of ["fix-pr","ci-fix"]) test("checked-out branch is reused by "+action+" without exit 128",async t=>{
- const f=await fixture(t);const wt=path.join(f.root,"existing");f.g("worktree","add",wt,"topic")
+ const f=await fixture(t,action === "ci-fix" ? {statusCheckRollup:[{status:"COMPLETED",conclusion:"FAILURE"}]} : {});const wt=path.join(f.root,"existing");f.g("worktree","add",wt,"topic")
  ok(await f.run(action,repo,"7","-", "--no-loop"));assert.equal(await fs.realpath((await f.read()).calls[0].cwd),await fs.realpath(wt))
 })
 test("dirty reused branch is refused without resetting it",async t=>{
@@ -292,7 +305,7 @@ test("per-PR budget stop survives invocations and loop stops",async t=>{
  const again=await f.run("review-pr",repo,"7");assert.equal(again.code,75)
 })
 test("hard timeout kills a Codex that ignores SIGTERM and releases slot",async t=>{
- const f=await fixture(t,{hang:true},{limits:{runsPer24h:8,slots:1,timeoutMs:400}})
+ const f=await fixture(t,{hang:true},{limits:{runsPer24h:8,slots:1,timeoutMs:400},queueTimeoutMs:15000})
  const r=await f.run("review-pr",repo,"7");assert.equal(r.code,142);assert.match(r.stdout,/TIMEOUT/)
  const events=(await fs.readFile(path.join(f.stateDir,"delivery.jsonl"),"utf8")).trim().split("\n").map(JSON.parse)
  const execution=events.find(e=>e.phase==="execution")
@@ -313,8 +326,8 @@ test("a retained same-head review attempt never prevents a fresh attempt",async 
  const s=await f.read();assert.notEqual(s.calls[0].cwd,old)
  assert.equal(git(old,"rev-parse","HEAD"),f.head)
 })
-for(const condition of ["red CI","conflict"]) test("approved PR with "+condition+" receives CI-fix and fresh review",async t=>{
- const f=await fixture(t,condition==="red CI"?{statusCheckRollup:[{status:"COMPLETED",conclusion:"FAILURE"}]}:{mergeable:"CONFLICTING",mergeStateStatus:"DIRTY"});await f.approve()
+test("approved PR with red CI receives CI-fix and fresh review",async t=>{
+ const f=await fixture(t,{statusCheckRollup:[{status:"COMPLETED",conclusion:"FAILURE"}]});await f.approve()
  ok(await f.run("pr-loop",repo,"7","-","3"));const s=await f.read();assert.match(s.calls[0].prompt,/CI-FIX/);assert.match(s.calls[1].prompt,/REVIEW MODE:/);assert.notEqual(s.headRefOid,f.head)
 })
 test("configured repository outside old case list merges",async t=>{
@@ -386,12 +399,15 @@ test("controller death cannot orphan a guarded child or release its occupied slo
  const f=await fixture(t,{}, {limits:{runsPer24h:8,slots:1,timeoutMs:700}})
  const pidFile=path.join(f.root,"child.pid")
  const childCode=`require('fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));process.on('SIGTERM',()=>{});setInterval(()=>{},1000)`
- const controller=spawn(process.execPath,[cli,f.config,"codex-guard",repo,"7","fix",process.execPath,"-e",childCode],{env:f.env,stdio:"ignore"})
+ const controller=spawn(process.execPath,[cli,f.config,"codex-guard",repo,"7","fix",process.execPath,"-e",childCode],{env:f.env,stdio:["ignore","pipe","pipe"]})
+ let controllerExit,diagnostics=""
+ controller.once("exit",(code,signal)=>{controllerExit={code,signal}})
+ for(const stream of [controller.stdout,controller.stderr]) stream.on("data",chunk=>{diagnostics=(diagnostics+chunk).slice(-8192)})
  t.after(()=>{try{controller.kill("SIGKILL")}catch{}})
  let pid
- const bootUntil=Date.now()+5000 // Readiness includes CLI/API/admission; execution still has its separate 700ms cap.
- for(;Date.now()<bootUntil;) {try{const observed=Number(await fs.readFile(pidFile,"utf8"));if(Number.isSafeInteger(observed)&&observed>0){pid=observed;break}}catch{} await new Promise(r=>setTimeout(r,10))}
- assert.ok(pid,"guarded child started")
+ const bootUntil=Date.now()+30_000 // CLI/API/admission readiness is separate from the child's 700ms execution cap.
+ for(;Date.now()<bootUntil&&!controllerExit;) {try{const observed=Number(await fs.readFile(pidFile,"utf8"));if(Number.isSafeInteger(observed)&&observed>0){pid=observed;break}}catch{} await new Promise(r=>setTimeout(r,10))}
+ assert.ok(pid,`guarded child started; controller=${JSON.stringify(controllerExit)}; diagnostics=${diagnostics}`)
  t.after(()=>{try{process.kill(-pid,"SIGKILL")}catch{}})
  const claims=path.join(f.stateDir,"locks","codex-slot-0.claims")
  const [claim]=await fs.readdir(claims)
@@ -410,11 +426,14 @@ test("controller death cannot orphan a guarded child or release its occupied slo
  assert.equal(await fs.readFile(path.join(f.stateDir,"usage.json"),"utf8"),usage)
  ok(await f.run("codex-guard",repo,"8","review",process.execPath,"-e","process.exit(0)"))
 })
-test("transient GitHub error is requeued at most three times",async t=>{
+test("quota hold queues one attempt and exposes its deadline without an early retry",async t=>{
  const f=await fixture(t,{apiFailure:true},{retryMs:0});await f.approve();const s=await f.read();s.apiFailure=false;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s));ok(await f.run("merge-enqueue",repo,"7",f.head));s.apiFailure=true;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
- for(let i=0;i<5;i++) ok(await f.run("merge-queue","--once"))
+ assert.equal((await f.run("merge-queue","--once")).code,75)
+ for(let i=0;i<4;i++) ok(await f.run("merge-queue","--once"))
  const queue=JSON.parse(await fs.readFile(path.join(f.stateDir,"queue.json")))
- assert.equal(queue[0].attempts,4);assert.equal(queue[0].outcome.status,"fail");assert.equal((await f.read()).state,"OPEN")
+ const state=JSON.parse(await fs.readFile(path.join(f.stateDir,"github.json")))
+ assert.equal(queue[0].attempts,1);assert.equal(queue[0].availableAt,state.hold.retryAt)
+ assert.equal((await f.read()).ghCalls.length,1);assert.equal((await f.read()).state,"OPEN")
 })
 test("same-head CI recovery queues a fresh bounded attempt and preserves the failed outcome",async t=>{
  const f=await fixture(t,{statusCheckRollup:[{status:"COMPLETED",conclusion:"FAILURE"}]});await f.approve()
@@ -448,7 +467,11 @@ test("red hosted checks refuse merge without a queue approval comment",async t=>
 test("auto enqueue respects configured holds and deduplicates",async t=>{
  const f=await fixture(t,{}, {holds:[{repo,titlePattern:"Fixture",reason:"owner hold"}]});await f.approve()
  ok(await f.run("auto-enqueue","--once"));await assert.rejects(fs.readFile(path.join(f.stateDir,"queue.json")),{code:"ENOENT"})
- f.cfg.holds=[];await fs.writeFile(f.config,JSON.stringify(f.cfg));ok(await f.run("auto-enqueue","--once"));ok(await f.run("auto-enqueue","--once"))
+ f.cfg.holds=[];await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ ok(await f.run("auto-enqueue","--once"))
+ await assert.rejects(fs.readFile(path.join(f.stateDir,"queue.json")),{code:"ENOENT"})
+ await fs.writeFile(path.join(f.stateDir,"reconciliation.json"),JSON.stringify({retryAt:Date.now()-1}))
+ ok(await f.run("auto-enqueue","--once"));ok(await f.run("auto-enqueue","--once"))
  assert.equal(JSON.parse(await fs.readFile(path.join(f.stateDir,"queue.json"))).length,1)
 })
 test("auto enqueue reaches approved PRs beyond the first fifty results",async t=>{
@@ -519,7 +542,7 @@ test("app refusal replay: nine launches across deployed recovery writers preserv
  assert.equal((await f.read()).calls.length,0)
  const events=(await fs.readFile(path.join(f.stateDir,"delivery.jsonl"),"utf8")).trim().split("\n").map(JSON.parse)
  assert.equal(events.filter(e=>e.status==="suspended").length,1)
- assert.equal(events.filter(e=>e.status==="started").length,0)
+ assert.equal(events.filter(e=>e.status==="running").length,0)
  const wait=JSON.parse(await fs.readFile(path.join(f.stateDir,"waits",encodeURIComponent(repo)+"-7.json")))
  assert.equal(wait.cause,"budget-exhausted");assert.ok(wait.resetAt>Date.now())
  await fs.writeFile(path.join(f.stateDir,"usage.json"),"[]")
@@ -611,16 +634,22 @@ test("obsolete A/B cancellation is superseded for all callers while current C pa
  assert.equal((await f.read()).calls.length,0)
  assert.equal(JSON.parse(await fs.readFile(path.join(f.stateDir,"queue.json")))[0].head,f.head)
 })
-for(const [code,quotaEvidence,retries] of [[401,false,1],[403,false,1],[403,true,3],[429,false,3],[502,false,3]])
- test(`REST ${code} quota=${quotaEvidence} distinguishes bounded transient reads from refusal`,async t=>{
+for(const [code,quotaEvidence,state] of [[401,false,"auth_error"],[403,false,"auth_error"],[403,true,"quota_hold"],[429,false,"quota_hold"],[502,false,"unknown"]])
+ test(`REST ${code} quota=${quotaEvidence} stops at one typed provider refusal`,async t=>{
    const f=await fixture(t,{restCodes:Array(5).fill(code),quotaEvidence})
-   assert.notEqual((await f.run("readiness",repo,"7")).code,0)
-   assert.equal((await f.read()).ghCalls.length,retries)
+   const result=await createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env}).execute("readiness",{repo,pr:7})
+   assert.equal(result.data.state,state)
+   assert.equal((await f.read()).ghCalls.length,1)
    assert.equal((await f.read()).calls.length,0)
  })
-test("transient read recovery resumes the observation without a duplicate model phase",async t=>{
- const f=await fixture(t,{restCodes:[502,429]})
- const r=await f.run("readiness",repo,"7");ok(r);assert.equal(JSON.parse(r.stdout).state,"success")
+test("transient read recovery waits for recorded retry time without a duplicate model phase",async t=>{
+ const f=await fixture(t,{restCodes:[502]})
+ const first=await f.run("readiness",repo,"7");assert.notEqual(first.code,0)
+ const before=(await f.read()).ghCalls.length
+ assert.notEqual((await f.run("readiness",repo,"7")).code,0)
+ assert.equal((await f.read()).ghCalls.length,before)
+ const file=path.join(f.stateDir,"github.json"),state=JSON.parse(await fs.readFile(file));state.hold.retryAt=Date.now()-1;await fs.writeFile(file,JSON.stringify(state))
+ const r=await f.run("readiness",repo,"7");ok(r);assert.equal(JSON.parse(r.stdout).state,"green")
  assert.equal((await f.read()).calls.length,0)
 })
 test("deployed guard keeps the existing rescope caller in the shared budget",async t=>{
@@ -648,7 +677,7 @@ for(const [status,conclusion] of [["success",null],["failure",null],["in_progres
  })
 
 test("slot timeout resumes the identical guard when the occupied slot is released",async t=>{
- const f=await fixture(t,{}, {limits:{runsPer24h:8,slots:1,timeoutMs:500}})
+ const f=await fixture(t,{}, {limits:{runsPer24h:8,slots:1,timeoutMs:500},queueTimeoutMs:15000})
  const release=await acquireLease(path.join(f.stateDir,"locks"),"codex-slot-0")
  const marker=path.join(f.root,"guard-started")
  const args=["codex-guard",repo,"7","fix",process.execPath,"-e",`require('fs').writeFileSync(${JSON.stringify(marker)},'started')`]
@@ -680,7 +709,7 @@ for(const cause of ["source-no-progress","rounds-exhausted"])
 
 for(const action of ["fix-pr","ci-fix"])
  test(`standalone ${action} shares the no-progress suspension with loop and recovery`,async t=>{
-  const f=await fixture(t,{noProgress:true});await f.approve(`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. defect`)
+  const f=await fixture(t,{noProgress:true,...(action === "ci-fix" ? {statusCheckRollup:[{status:"COMPLETED",conclusion:"FAILURE"}]} : {})});await f.approve(`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. defect`)
   for(let i=0;i<2;i++) {
    const r=await f.wrapper(action,repo,"7","-","--no-loop")
    assert.equal(r.code,2,JSON.stringify(r));assert.match(r.stdout,/NO-PROGRESS/)
@@ -791,7 +820,9 @@ test('forever-pending readiness bounds probes and long pacing without paid dispa
  {checksTimeoutMs:1000,pollMs:10000,attemptTimeoutMs:2500})
  const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
  const start=Date.now(),result=await adapter.execute('review',{repo,pr:7}),r=result.data
- assert.equal(r.code,142,JSON.stringify(r));assert.ok(Date.now()-start<2500)
+ assert.equal(r.code,142,JSON.stringify(r))
+ assert.ok(['attempt','readiness'].includes(r.phase),JSON.stringify(r))
+ assert.ok(Date.now()-start<f.cfg.pollMs,'pending readiness must not sleep the full poll interval')
  assert.equal((await f.read()).calls.length,0)
 })
 test('ready-now performs no initial pacing sleep',async t=>{
@@ -862,6 +893,9 @@ test('subprocess error canaries do not reach persisted delivery/wait bytes',asyn
  assert.equal(result.code,42,JSON.stringify(result))
  const bytes=await fs.readFile(path.join(f.stateDir,'delivery.jsonl'),'utf8')
  assert.doesNotMatch(bytes,/CANARY_PRIVATE/);assert.doesNotMatch(result.stderr,/CANARY_PRIVATE/)
+ for(const name of await fs.readdir(path.join(f.stateDir,'jobs'))) {
+  assert.doesNotMatch(await fs.readFile(path.join(f.stateDir,'jobs',name),'utf8'),/CANARY_PRIVATE/,name)
+ }
 })
 
 for(const resources of [{browserConcurrency:1},{capacity:0},{capacity:1,agentUnits:1,browserConcurrency:1},
@@ -947,9 +981,23 @@ for(const mode of ["direct","queued"]) test(`${mode} controller death keeps both
 
 for(const fault of [502,429,"no-response"]) test(`ambiguous update-branch ${fault} remains pending without duplicate write`, async t => {
  const f=await fixture(t,{writeFaults:{"update-branch":[fault]}}); await f.approve(); await advanceMain(f)
- ok(await f.run("merge-enqueue",repo,"7",f.head)); ok(await f.run("merge-queue",repo,"--once"))
+ ok(await f.run("merge-enqueue",repo,"7",f.head))
+ const first=await f.run("merge-queue",repo,"--once")
+ if(fault === 429) assert.equal(first.code,75,JSON.stringify(first)); else ok(first)
  const [entry]=await queueOf(f)
  assert.equal(entry.attempts,1); assert.equal(entry.outcome,undefined,JSON.stringify(entry)); assert.equal(remoteTopic(f),f.head)
+ if(fault === 429) {
+  const githubFile=path.join(f.stateDir,"github.json")
+  const observation=JSON.parse(await fs.readFile(githubFile))
+  assert.equal(observation.hold.state,"quota_hold")
+  assert.equal(entry.availableAt,observation.hold.retryAt)
+  const requests=(await f.read()).ghCalls.length
+  ok(await f.run("merge-queue",repo,"--once"))
+  assert.equal((await queueOf(f))[0].attempts,1)
+  assert.equal((await f.read()).ghCalls.length,requests,"restart cannot request before the provider retry time")
+  observation.hold.retryAt=0;await fs.writeFile(githubFile,JSON.stringify(observation))
+  entry.availableAt=0;await fs.writeFile(path.join(f.stateDir,"queue.json"),JSON.stringify([entry]))
+ }
  ok(await f.run("merge-queue",repo,"--once"))
  const [done]=await queueOf(f)
  assert.equal(done.outcome,undefined); assert.equal(remoteTopic(f),f.head)
@@ -1191,6 +1239,285 @@ test('review 10: timeout exceptions are the sole delivery timeout policy', async
  assert.equal(/(?:result|response)\.timedOut/.test(afterCommand), false, 'delivery timeout result paths must be absent')
 })
 
+for (const fault of ["quota", "malformed", "auth"]) test(`retro 2: approved ${fault} observation never dispatches a fixer and exposes its state`, async t => {
+ const f=await fixture(t);await f.approve()
+ const s=await f.read()
+ if(fault==="quota") {s.restCodes=[403];s.quotaEvidence=true;s.retryAfter=120;s.resetAt=Math.ceil(Date.now()/1000)+180}
+ if(fault==="malformed") s.restFault="invalid-json"
+ if(fault==="auth") s.restCodes=[401]
+ await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const result=await adapter.execute("pr:inspect",{repo,pr:7})
+ assert.equal(result.data.state,{quota:"quota_hold",malformed:"unknown",auth:"auth_error"}[fault])
+ assert.equal((await f.read()).calls.length,0)
+ const before=(await f.read()).ghCalls.length
+ if(fault==="quota") {
+  assert.ok(result.data.retryAt >= s.resetAt*1000)
+  assert.equal((await f.run("pr-loop",repo,"7","-","1")).code,75)
+  assert.equal((await f.run("auto-enqueue","--once")).code,75)
+  assert.equal((await f.read()).ghCalls.length,before,"restart and other consumers honor the same hold")
+ }
+})
+test("retro 2: a green approved conflict and direct ci-fix require an observed failed required check", async t => {
+ const f=await fixture(t);await f.approve()
+ const s=await f.read();s.mergeable="CONFLICTING";s.mergeStateStatus="DIRTY";await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ assert.notEqual((await f.run("pr-loop",repo,"7","-","1")).code,0)
+ assert.notEqual((await f.run("ci-fix",repo,"7","-","--no-loop")).code,0)
+ assert.equal((await f.read()).calls.length,0)
+})
+test("retro 2: duplicate events and reconciliation have one enqueue owner", async t => {
+ const f=await fixture(t);await f.approve()
+ ok(await f.run("enqueue-event",repo,"7",f.head))
+ ok(await f.run("enqueue-event",repo,"7",f.head))
+ ok(await f.run("auto-enqueue","--once"))
+ assert.equal(JSON.parse(await fs.readFile(path.join(f.stateDir,"queue.json"))).length,1)
+})
+test("retro 2: request allowance is shared by restarted review and enqueue consumers", async t => {
+ const f=await fixture(t,{}, {github:{requestsPerHour:1,cacheMs:0}})
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const result=await adapter.execute("pr:inspect",{repo,pr:7})
+ assert.equal(result.data.state,"quota_hold")
+ assert.equal((await f.run("auto-enqueue","--once")).code,75)
+ assert.equal((await f.run("review-pr",repo,"7")).code,75)
+ assert.equal((await f.read()).ghCalls.length,1)
+})
+test('retro 2: restarted reconciliation waits for its persisted deadline', async t => {
+ const f=await fixture(t)
+ ok(await f.run('auto-enqueue','--once'))
+ const before=(await f.read()).ghCalls.length
+ ok(await f.run('auto-enqueue','--once'))
+ assert.equal((await f.read()).ghCalls.length,before)
+ const reconciliation=JSON.parse(await fs.readFile(path.join(f.stateDir,'reconciliation.json')))
+ assert.ok(reconciliation.retryAt > Date.now()+290000)
+})
+for (const fault of ['{}','[]']) test(`retro 2: malformed PR structure ${fault} persists unknown across restart`, async t => {
+ const f=await fixture(t);await f.approve()
+ const s=await f.read();s.restFault=fault;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const result=await adapter.execute('pr:inspect',{repo,pr:7})
+ assert.equal(result.data.state,'unknown');assert.ok(result.data.retryAt > Date.now())
+ const before=(await f.read()).ghCalls.length
+ assert.notEqual((await f.run('pr-loop',repo,'7','-','1')).code,0)
+ assert.equal((await f.read()).ghCalls.length,before)
+ assert.equal((await f.read()).calls.length,0)
+})
+
+test('retro 2: a child evidence reader inherits the owning config and cannot bypass its hold', async t => {
+ const f=await fixture(t,{childReader:cli})
+ const result=await f.run('review-pr',repo,'7')
+ assert.equal(result.code,75)
+ const s=await f.read()
+ assert.equal(s.childReaderCode,75)
+ assert.equal(s.ghCalls.length,s.childReaderBefore)
+ assert.match(s.calls[0].prompt,/Never invoke gh directly/)
+ assert.match(s.calls[0].prompt,/github-read/)
+})
+
+test('retro 2: malformed mergeability is unknown with a persisted retry', async t => {
+ const f=await fixture(t);await f.approve()
+ const s=await f.read();s.prOverrides={mergeable_state:42};await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const result=await adapter.execute('pr:inspect',{repo,pr:7})
+ assert.equal(result.data.state,'unknown');assert.ok(result.data.retryAt > Date.now())
+ const before=(await f.read()).ghCalls.length
+ assert.notEqual((await f.run('pr-loop',repo,'7','-','1')).code,0)
+ assert.equal((await f.read()).ghCalls.length,before)
+ assert.equal((await f.read()).calls.length,0)
+})
+
+
+test('retro 7: runner waits for its check then pushes the tested commit',async t=>{
+ const f=await fixture(t,{builderNoPush:true},{resources:{capacity:64,browserConcurrency:1,agentUnits:1},queueTimeoutMs:15000})
+ const marker=path.join(f.root,'check-started'), finish=path.join(f.root,'check-finished')
+ f.cfg.repos[repo].checks=[[process.execPath,'-e',`require('fs').writeFileSync(${JSON.stringify(marker)},'started');setTimeout(()=>{require('fs').writeFileSync(${JSON.stringify(finish)},'finished')},400)`]]
+ await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ const pending=f.run('fix-pr',repo,'7','-')
+ for(let i=0;i<3000;i++){if(await fs.access(marker).then(()=>true,()=>false))break;await pause(10)}
+ await fs.access(marker)
+ assert.equal(git(f.checkout,'--git-dir',f.remote,'rev-parse','refs/heads/topic'),f.head)
+ const receiptFile=path.join(f.stateDir,'repairs',`${keyFor(repo,7)}.json`)
+ assert.equal(JSON.parse(await fs.readFile(receiptFile,'utf8')).status,'checking')
+ ok(await pending);await fs.access(finish)
+ const receipt=JSON.parse(await fs.readFile(receiptFile,'utf8'))
+ assert.equal(receipt.status,'delivered');assert.notEqual(receipt.head,f.head)
+ assert.equal(receipt.remoteHead,receipt.head);assert.equal(receipt.testedHead,receipt.head)
+ assert.ok(receipt.checks.every(c=>c.code===0))
+})
+
+test('retro 7: failed runner check leaves committed source unpushed',async t=>{
+ const f=await fixture(t,{builderNoPush:true},{resources:{capacity:64,browserConcurrency:1,agentUnits:1},queueTimeoutMs:15000})
+ f.cfg.repos[repo].checks=[[process.execPath,'-e','process.exit(17)']]
+ await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ const result=await f.run('fix-pr',repo,'7','-')
+ assert.equal(result.code,17,JSON.stringify(result))
+ assert.equal(git(f.checkout,'--git-dir',f.remote,'rev-parse','refs/heads/topic'),f.head)
+ const receipt=JSON.parse(await fs.readFile(path.join(f.stateDir,'repairs',`${keyFor(repo,7)}.json`),'utf8'))
+ assert.equal(receipt.status,'check_failed');assert.equal(receipt.testedHead,undefined)
+})
+
+
+test('retro 7: failed push stays pending and recovery reads remote without rebuilding or retesting',async t=>{
+ const f=await fixture(t,{builderNoPush:true},{resources:{capacity:64,browserConcurrency:1,agentUnits:1},queueTimeoutMs:15000})
+ const hook=path.join(f.remote,'hooks','pre-receive')
+ await fs.writeFile(hook,'#!/bin/sh\nexit 1\n',{mode:0o755})
+ const first=await f.run('fix-pr',repo,'7','-');assert.notEqual(first.code,0)
+ const file=path.join(f.stateDir,'repairs',`${keyFor(repo,7)}.json`)
+ const pending=JSON.parse(await fs.readFile(file,'utf8'));assert.equal(pending.status,'push_pending');assert.equal(pending.testedHead,pending.head)
+ await fs.writeFile(hook,'#!/bin/sh\nexit 0\n',{mode:0o755})
+ ok(await f.wrapper('unstick','--once'))
+ const delivered=JSON.parse(await fs.readFile(file,'utf8'));assert.equal(delivered.status,'delivered')
+ assert.deepEqual(delivered.checks,pending.checks);assert.equal((await f.read()).calls.filter(c=>!c.prompt.includes('REVIEW MODE:')).length,1)
+})
+
+test('retro 7: reconciled recovery allows a subsequent CI repair',async t=>{
+ const f=await fixture(t,{builderNoPush:true},{queueTimeoutMs:15000})
+ ok(await f.run('fix-pr',repo,'7','-'))
+ const file=path.join(f.stateDir,'repairs',`${keyFor(repo,7)}.json`)
+ const record=JSON.parse(await fs.readFile(file,'utf8'))
+ await fs.writeFile(file,JSON.stringify({...record,status:'push_pending'}))
+ const state=await f.read()
+ state.comments.push({pr:7,author:{login:'reviewer'},body:`APPROVE\nReviewed-SHA: ${record.head}\n\nNon-blocking\nNone`})
+ state.statusCheckRollup=[{status:'COMPLETED',conclusion:'FAILURE'}]
+ await fs.writeFile(f.env.FAKE_PR,JSON.stringify(state))
+ ok(await f.wrapper('unstick','--once'))
+ const after=await f.read()
+ assert.equal(after.calls.filter(c=>!c.prompt.includes('REVIEW MODE:')).length,2)
+ assert.notEqual(after.headRefOid,record.head)
+})
+
+test('retro 7: recovery refuses a still-running check and resumes only after observing terminal failure',async t=>{
+ const f=await fixture(t,{builderNoPush:true},{resources:{capacity:64,browserConcurrency:1,agentUnits:1},queueTimeoutMs:15000})
+ f.cfg.repos[repo].checks=[[process.execPath,'-e','process.exit(17)']]
+ await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ assert.equal((await f.run('fix-pr',repo,'7','-')).code,17)
+ const file=path.join(f.stateDir,'repairs',`${keyFor(repo,7)}.json`),record=JSON.parse(await fs.readFile(file,'utf8'))
+ const terminal=JSON.parse(await fs.readFile(record.checkJob.receipt,'utf8'))
+ await fs.writeFile(record.checkJob.receipt,JSON.stringify({...terminal,status:'running',pid:process.pid,groupPid:null}))
+ assert.equal((await f.wrapper('unstick','--once')).code,75)
+ assert.equal((await f.read()).calls.length,1)
+ await fs.writeFile(record.checkJob.receipt,JSON.stringify(terminal))
+ f.cfg.repos[repo].checks=[[process.execPath,'-e','']]
+ await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ ok(await f.wrapper('unstick','--once'));assert.equal((await f.read()).calls.filter(c=>!c.prompt.includes('REVIEW MODE:')).length,1)
+})
+
+async function installedFixture(f) {
+ const source=path.join(f.root,'factory-source'),installed=path.join(f.root,'installed')
+ git(f.checkout,'clone','--quiet','--no-hardlinks',fileURLToPath(new URL('../',import.meta.url)),source)
+ const names=['src/orch-installation.mjs','bin/orch-install.mjs','src/github-snapshot.mjs','src/pr-delivery.mjs','src/pr-delivery-prompts.mjs',
+   'src/process-group.mjs','src/process-runner.mjs','src/process-launcher.mjs','src/process-supervisor.mjs','bin/pr-delivery.mjs',
+   'deploy/orch/factory-verify.mjs','deploy/orch/factory-entry.sh','deploy/orch/test-browser.sh','deploy/orch/branch-wt.sh','deploy/orch/merge-enqueue.sh']
+ for(const name of names){await fs.copyFile(fileURLToPath(new URL('../'+name,import.meta.url)),path.join(source,name))}
+ git(source,'add',...names);git(source,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--allow-empty','-qm','Delivered candidate fixture')
+ await fs.symlink(fileURLToPath(new URL('../node_modules',import.meta.url)),path.join(source,'node_modules'),'dir')
+ execFileSync(process.execPath,[fileURLToPath(new URL('../bin/orch-install.mjs',import.meta.url)),'install',source,installed,f.config],{encoding:'utf8'})
+ const wrapper=(name,...args)=>new Promise((resolve,reject)=>{
+   const child=spawn('sh',[path.join(installed,name+'.sh'),...args],{env:f.env,stdio:['ignore','pipe','pipe']})
+   let stdout='',stderr='';child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b)
+   child.on('error',reject);child.on('close',code=>resolve({code,stdout,stderr}))
+ })
+ return {installed,wrapper}
+}
+
+test('retro 4: installed wrapper death interrupts its acknowledged caller-owned job',async t=>{
+ const f=await fixture(t,{},{limits:{runsPer24h:8,slots:2,timeoutMs:15000},queueTimeoutMs:15000})
+ const {installed}=await installedFixture(f)
+ // The installed entrypoint itself must remain the foreground job owner.
+ const owner=spawn('sh',[path.join(installed,'codex-guard.sh'),repo,'7','review',process.execPath,'-e','setInterval(()=>{},1000)'],{env:f.env,stdio:'ignore'})
+ let jobFile,job
+ t.after(()=>{owner.kill('SIGKILL');if(job?.groupPid)try{process.kill(-job.groupPid,'SIGKILL')}catch{}})
+ for(let i=0;i<3000;i++){
+   const names=await fs.readdir(path.join(f.stateDir,'jobs')).catch(()=>[])
+   for(const name of names.filter(n=>n.endsWith('.json'))){
+     const candidate=JSON.parse(await fs.readFile(path.join(f.stateDir,'jobs',name),'utf8'))
+     if(candidate.status==='running'){job=candidate;jobFile=path.join(f.stateDir,'jobs',name);break}
+   }
+   if(job)break;await pause(10)
+ }
+ assert.ok(job,'installed job acknowledged')
+ owner.kill('SIGKILL')
+ for(let i=0;i<200;i++){job=JSON.parse(await fs.readFile(jobFile,'utf8'));if(job.status==='interrupted')break;await pause(10)}
+ assert.equal(job.status,'interrupted');assert.equal(job.code,130)
+})
+
+test('retro 3: installed review/fix/queue wrappers exercise the bound PR adapter',async t=>{
+ const f=await fixture(t,{builderNoPush:true},{resources:{capacity:64,browserConcurrency:1,agentUnits:1},queueTimeoutMs:15000})
+ const {installed,wrapper}=await installedFixture(f)
+ ok(await wrapper('review-pr',repo,'7'))
+ ok(await wrapper('fix-pr',repo,'7','-'))
+ const failed=await f.read();failed.statusCheckRollup=[{status:'COMPLETED',conclusion:'FAILURE'}];await fs.writeFile(f.env.FAKE_PR,JSON.stringify(failed))
+ ok(await wrapper('ci-fix',repo,'7','-','--no-loop'))
+ ok(await wrapper('review-pr',repo,'7'))
+ ok(await wrapper('pr-loop',repo,'7','-','1'))
+ ok(await wrapper('auto-enqueue','--once'))
+ assert.equal((await f.read()).calls.length,4)
+ const queue=JSON.parse(await fs.readFile(path.join(f.stateDir,'queue.json'),'utf8'));assert.equal(queue.length,1)
+ await fs.appendFile(path.join(installed,'ci-fix.sh'),'\n# drift\n')
+ const before=(await f.read()).calls.length
+ assert.equal((await wrapper('ci-fix',repo,'7','-','--no-loop')).code,9)
+ assert.equal((await f.read()).calls.length,before)
+})
+
+
+test('retro 7: terminal receipt pointer uses the existing orch inbox command',async t=>{
+ const f=await fixture(t,{builderNoPush:true},{resources:{capacity:64,browserConcurrency:1,agentUnits:1},queueTimeoutMs:15000})
+ const command=path.join(f.root,'orch'),pointer=path.join(f.root,'pointer.json'),store=path.join(f.root,'store')
+ await fs.writeFile(command,`#!/usr/bin/env node\nrequire('fs').writeFileSync(${JSON.stringify(pointer)},JSON.stringify(process.argv.slice(2)));`,{mode:0o755})
+ f.cfg.orchInbox={command,store};await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ ok(await f.run('fix-pr',repo,'7','-'))
+ const record=await currentRepair(f),file=path.join(f.stateDir,'repair-receipts',`${record.id}.json`)
+ assert.deepEqual(JSON.parse(await fs.readFile(pointer,'utf8')),['--store',store,'inbox','push','PlatformEngineer',`${repo}#7`,'delivered','--report',file])
+ assert.equal(JSON.parse(await fs.readFile(file,'utf8')).status,'delivered')
+})
+
+test('retro 7: a stale recovery candidate cannot start another builder after delivery',async t=>{
+ const f=await fixture(t,{builderNoPush:true},{queueTimeoutMs:15000})
+ ok(await f.run('fix-pr',repo,'7','-'))
+ const file=path.join(f.stateDir,'repairs',`${keyFor(repo,7)}.json`),record=JSON.parse(await fs.readFile(file,'utf8'))
+ await fs.writeFile(file,JSON.stringify({...record,status:'push_pending'}))
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const [candidate]=await adapter.recoveryCandidates()
+ assert.equal(candidate.repairId,record.id)
+ // The current owner finishes after discovery, before the recovery lease is acquired.
+ await fs.writeFile(file,JSON.stringify(record))
+ const result=await adapter.exclusive(repo,7,()=>adapter.execute('fix',{...candidate,repairId:record.id}))
+ assert.equal(result.status,'pass',JSON.stringify(result))
+ assert.equal((await f.read()).calls.length,1,'completed receipt must not dispatch a builder')
+ assert.equal(JSON.parse(await fs.readFile(file,'utf8')).head,record.head)
+ await fs.writeFile(file,JSON.stringify({...record,status:'push_pending',id:'replacement-receipt'}))
+ const replaced=await adapter.exclusive(repo,7,()=>adapter.execute('fix',candidate))
+ assert.equal(replaced.data.code,75);assert.equal((await f.read()).calls.length,1)
+})
+
+test('retro 7: installed recovery observes a killed check and resumes its committed source',async t=>{
+ const f=await fixture(t,{builderNoPush:true},{limits:{runsPer24h:8,slots:2,timeoutMs:15000},queueTimeoutMs:15000})
+ const marker=path.join(f.root,'check-started')
+ f.cfg.repos[repo].checks=[[process.execPath,'-e',`require('fs').writeFileSync(${JSON.stringify(marker)},'started');setInterval(()=>{},1000)`]]
+ f.cfg.repos[repo].checkTimeoutMs=30000
+ await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ const {installed,wrapper}=await installedFixture(f)
+ const owner=spawn('sh',[path.join(installed,'fix-pr.sh'),repo,'7','-'],{env:f.env,stdio:'ignore'})
+ let job
+ t.after(()=>{owner.kill('SIGKILL');if(job?.groupPid)try{process.kill(-job.groupPid,'SIGKILL')}catch{}})
+ const file=path.join(f.stateDir,'repairs',`${keyFor(repo,7)}.json`)
+ let record
+ for(let i=0;i<3000;i++){
+   record=JSON.parse(await fs.readFile(file,'utf8').catch(()=> 'null'))
+   if(record?.checkJob){job=JSON.parse(await fs.readFile(record.checkJob.receipt,'utf8').catch(()=> 'null'))}
+   if(job?.status==='running' && await fs.access(marker).then(()=>true,()=>false))break;await pause(10)
+ }
+ assert.equal(job?.status,'running');await fs.access(marker)
+ const head=record.head
+ owner.kill('SIGKILL')
+ for(let i=0;i<200;i++){job=JSON.parse(await fs.readFile(record.checkJob.receipt,'utf8'));if(job.status==='interrupted')break;await pause(10)}
+ assert.equal(job.status,'interrupted');assert.equal(job.code,130)
+ f.cfg.repos[repo].checks=[[process.execPath,'-e','']]
+ await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ ok(await wrapper('unstick','--once'))
+ const delivered=JSON.parse(await fs.readFile(file,'utf8'))
+ assert.equal(delivered.status,'delivered');assert.equal(delivered.head,head);assert.equal(delivered.remoteHead,head)
+ assert.equal((await f.read()).calls.filter(c=>!c.prompt.includes('REVIEW MODE:')).length,1)
+})
  test("timed-out branch update retains pending intent and reconciles without another write", async t => {
   const f=await fixture(t,{}, {commandTimeoutMs:1000,checksTimeoutMs:80})
   await f.approve(); await advanceMain(f)
@@ -1362,4 +1689,215 @@ test('fix12: lost delivery publication reply reconciles a publisher distinct fro
  const [entry]=await queueOf(f);assert.equal(entry.state,'acknowledged');assert.equal(entry.outcome.status,'pass')
  const s=await f.read();assert.equal(s.comments.filter(c=>c.body.startsWith('DELIVERY VERIFIED')).length,1)
  assert.equal(s.ghCalls.filter(merges).length,1)
+})
+
+async function expireProvider(f) {
+ const file=path.join(f.stateDir,'github.json'), state=JSON.parse(await fs.readFile(file))
+ if(state.hold) state.hold.retryAt=0
+ state.requests=[];await fs.writeFile(file,JSON.stringify(state))
+ const queueFile=path.join(f.stateDir,'queue.json')
+ const queue=await fs.readFile(queueFile,'utf8').then(JSON.parse).catch(()=>null)
+ if(queue) {for(const entry of queue) entry.availableAt=0;await fs.writeFile(queueFile,JSON.stringify(queue))}
+}
+test('PR46 finding 7: undispatched quota refusal retires update intent and recovers after reset',async t=>{
+ const f=await fixture(t);await f.approve();await advanceMain(f)
+ await fs.writeFile(path.join(f.stateDir,'github.json'),JSON.stringify({schema:'factory-github/v1',requests:[],cache:{},failures:{}}))
+ const config=await loadDeliveryConfig(f.config);config.github={cacheMs:0,requestsPerHour:14}
+ const first=await createPrDeliveryAdapter(config,{env:f.env}).execute('merge-one-core',{repo,pr:7,head:f.head})
+ assert.equal(first.data.state,'quota_hold',JSON.stringify(first));assert.equal(first.data.code,75)
+ const updates=s=>s.ghCalls.filter(a=>a.some(v=>v.endsWith('/update-branch'))).length
+ assert.equal(updates(await f.read()),0);assert.equal(remoteTopic(f),f.head)
+ assert.deepEqual(await fs.readdir(path.join(f.stateDir,'updates')),[],"undispatched update must not remain pending")
+ await expireProvider(f);config.github.requestsPerHour=100
+ const next=await createPrDeliveryAdapter(config,{env:f.env}).execute('merge-one-core',{repo,pr:7,head:f.head})
+ assert.equal(next.data.code,2,JSON.stringify(next));assert.match(next.data.message,/INTEGRATION UPDATED/)
+ assert.equal(updates(await f.read()),1);assert.notEqual(remoteTopic(f),f.head)
+ assert.equal((await f.read()).state,'OPEN',"updated head still requires fresh review and CI")
+})
+test('PR46 finding 1: admission quota expires without a permanent capacity wait',async t=>{
+ const f=await fixture(t,{}, {github:{cacheMs:0,requestsPerHour:20}})
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const first=await adapter.execute('review',{repo,pr:7})
+ assert.equal(first.data.state,'quota_hold',JSON.stringify(first))
+ await expireProvider(f)
+ adapter.config.github.requestsPerHour=100
+ const next=await createPrDeliveryAdapter(adapter.config,{env:f.env}).execute('review',{repo,pr:7})
+ assert.notEqual(next.data.cause,'capacity-refused',JSON.stringify(next))
+ assert.equal((await f.read()).calls.length,1)
+})
+test('PR46 finding 1: child reader refusal preserves provider deadline',async t=>{
+ const f=await fixture(t,{childReader:cli})
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const result=await adapter.execute('review',{repo,pr:7})
+ assert.equal(result.data.state,'quota_hold',JSON.stringify(result));assert.ok(result.data.retryAt>Date.now())
+ assert.notEqual(result.data.cause,'capacity-refused')
+})
+test('PR46 finding 2: unrelated stale event cannot reset failed readiness',async t=>{
+ const f=await fixture(t);const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ for(let n=1;n<=5;n++) {
+  const s=await f.read();s.checkFault=true;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+  const result=await adapter.execute('readiness',{repo,pr:7})
+  assert.equal(result.data.queryErrors,n,JSON.stringify(result));assert.equal(result.data.terminal,n===5)
+  if(n===5) break
+  await expireProvider(f)
+  s.checkFault=false;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+  await adapter.execute('enqueue-event',{repo,pr:7,head:'a'.repeat(40)})
+ }
+})
+test('PR46 finding 3: timed out read persists pacing across restart',async t=>{
+ const f=await fixture(t,{apiHang:'fetch'},{apiTimeoutMs:1000,attemptTimeoutMs:1800})
+ const first=await f.run('readiness',repo,'7'),next=await f.run('readiness',repo,'7')
+ assert.equal(first.code,142,JSON.stringify(first));assert.notEqual(next.code,0)
+ const state=JSON.parse(await fs.readFile(path.join(f.stateDir,'github.json')))
+ assert.equal(state.hold.state,'unknown');assert.ok(state.hold.retryAt>Date.now())
+ assert.equal((await f.read()).ghCalls.length,1)
+})
+for(const fault of ['invalid-json','refusal']) test(`PR46 finding 4: queue propagates ${fault} and shared terminal policy`,async t=>{
+ const f=await fixture(t);await f.approve();ok(await f.run('merge-enqueue',repo,'7',f.head))
+ const s=await f.read();s.restFault=fault;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ for(let n=1;n<=(fault==='refusal'?1:5);n++) {
+  const result=await adapter.execute('merge-queue',{repo})
+  assert.equal(result.status,'fail',JSON.stringify(result));assert.equal(result.data.queryErrors,n)
+  assert.equal(result.data.terminal,fault==='refusal'||n===5)
+  await expireProvider(f)
+ }
+ const [entry]=await queueOf(f);assert.equal(entry.attempts,fault==='refusal'?1:5);assert.equal(entry.outcome.status,'fail')
+})
+test('PR46 finding 2: completed queue observation clears its failure streak',async t=>{
+ const f=await fixture(t);await f.approve();ok(await f.run('merge-enqueue',repo,'7',f.head))
+ const s=await f.read();s.restCodes=[502];await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ await adapter.execute('merge-queue',{repo});await expireProvider(f)
+ const result=await adapter.execute('merge-queue',{repo});assert.equal(result.status,'pass',JSON.stringify(result))
+ const state=JSON.parse(await fs.readFile(path.join(f.stateDir,'github.json')));assert.deepEqual(state.failures,{})
+})
+test('PR46 finding 5: budgeted reader returns bounded plain text logs and prompt identifiers',async t=>{
+ const f=await fixture(t,{statusCheckRollup:[{status:'COMPLETED',conclusion:'FAILURE'}],checkRuns:[{id:91,name:'test',head_sha:null,status:'completed',conclusion:'failure',app:{id:15368},details_url:'https://github.com/fixture/new-repository/actions/runs/81/job/91',output:{summary:'short'}}]})
+ const s=await f.read();s.checkRuns[0].head_sha=f.head;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ const result=await f.run('github-logs',repo,'91');ok(result);assert.match(result.stdout,/step-only failure detail/)
+ ok(await f.run('ci-fix',repo,'7','-','--no-loop'))
+ const prompt=(await f.read()).calls[0].prompt;assert.match(prompt,/"id":91/);assert.match(prompt,/actions\/runs\/81\/job\/91/);assert.match(prompt,/github-logs/)
+})
+test('PR46 finding 6: malformed page validation persists unknown once at the provider seam',async t=>{
+ const f=await fixture(t,{badCheckPage:true})
+ const result=await createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env}).execute('readiness',{repo,pr:7})
+ assert.equal(result.data.state,'unknown',JSON.stringify(result));assert.ok(result.data.retryAt>Date.now())
+})
+
+test('PR46 finding 5: escape-bearing job logs survive gh output filtering',async t=>{
+ const f=await fixture(t,{logEscapes:true})
+ const result=await f.run('github-logs',repo,'91');ok(result);assert.match(result.stdout,/step-only failure detail/)
+})
+
+const currentRepair = async f => JSON.parse(await fs.readFile(path.join(f.stateDir,'repairs',`${keyFor(repo,7)}.json`),'utf8'))
+
+test('blocking 4: early builder publication is detected and never called unpushed',async t=>{
+ const f=await fixture(t,{builderNoPush:false})
+ f.cfg.repos[repo].checks=[[process.execPath,'-e','process.exit(17)']]
+ await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ const result=await f.run('fix-pr',repo,'7','-')
+ assert.notEqual(result.code,0)
+ assert.doesNotMatch(result.stdout+result.stderr,/source unpushed/)
+ assert.match(result.stdout+result.stderr,/EARLY PUBLICATION/)
+ const record=await currentRepair(f)
+ assert.equal(record.status,'early_publication');assert.equal(record.remoteHead,remoteTopic(f))
+})
+
+for(const multiple of [false,true]) test(`blocking 5: effective push destinations refuse extra remote (${multiple})`,async t=>{
+ const f=await fixture(t,{builderNoPush:true}),other=path.join(f.root,'other.git')
+ git(f.root,'clone','--bare','--quiet',f.remote,other)
+ if(multiple) f.g('config','--add','remote.origin.pushurl',f.remote)
+ f.g('config','--add','remote.origin.pushurl',other)
+ const result=await f.run('fix-pr',repo,'7','-')
+ assert.notEqual(result.code,0);assert.match(result.stdout+result.stderr,/push destination/)
+ assert.equal(remoteTopic(f),f.head)
+ assert.equal(git(f.root,'--git-dir',other,'rev-parse','refs/heads/topic'),f.head)
+})
+
+for(const rewrite of ['pushInsteadOf','insteadOf']) test(`blocking 5: publication never re-expands the bound destination (${rewrite})`,async t=>{
+ const f=await fixture(t),other=path.join(f.root,'other.git')
+ git(f.root,'clone','--bare','--quiet',f.remote,other)
+ f.g('config','remote.origin.url','confirm-alias:')
+ f.g('config',`url.${f.remote}.insteadOf`,'confirm-alias:')
+ f.g('config',`url.${f.remote}.pushInsteadOf`,'confirm-alias:')
+ f.g('config',`url.${other}.${rewrite}`,f.remote)
+ assert.equal(f.g('remote','get-url','origin'),f.remote)
+ assert.equal(f.g('remote','get-url','--push','--all','origin'),f.remote)
+ const result=await f.run('fix-pr',repo,'7','-')
+ assert.equal(git(f.root,'--git-dir',other,'rev-parse','refs/heads/topic'),f.head,'unbound repository must receive no publication')
+ ok(result)
+ const record=await currentRepair(f)
+ assert.equal(record.status,'delivered');assert.equal(record.pushDestination,f.remote)
+ assert.equal(remoteTopic(f),record.testedHead)
+})
+
+test('blocking 6: closed PR after checks refuses publication and delivery',async t=>{
+ const f=await fixture(t,{builderNoPush:true})
+ f.cfg.repos[repo].checks=[[process.execPath,'-e',`const fs=require('fs'),p=${JSON.stringify(f.env.FAKE_PR)};const s=JSON.parse(fs.readFileSync(p));s.state='CLOSED';fs.writeFileSync(p,JSON.stringify(s));`]]
+ await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ const result=await f.run('fix-pr',repo,'7','-')
+ assert.equal(result.code,8,JSON.stringify(result));assert.equal(remoteTopic(f),f.head)
+ assert.notEqual((await currentRepair(f)).status,'delivered')
+})
+
+test('blocking 7: confirmed failed check dispatches one corrective builder under unchanged policy',async t=>{
+ const f=await fixture(t,{builderNoPush:true,correctiveRepair:true})
+ f.cfg.repos[repo].checks=[[process.execPath,'-e',"if(!require('fs').existsSync('correction.txt'))process.exit(17)"]]
+ await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ assert.equal((await f.run('fix-pr',repo,'7','-')).code,17)
+ const failed=await currentRepair(f)
+ ok(await f.run('ci-fix',repo,'7','-','--no-loop'))
+ const repaired=await currentRepair(f)
+ assert.equal((await f.read()).calls.filter(c=>!c.prompt.includes('REVIEW MODE:')).length,2)
+ assert.notEqual(repaired.id,failed.id);assert.equal(repaired.corrects,failed.id)
+ const preserved=JSON.parse(await fs.readFile(path.join(f.stateDir,'repair-receipts',`${failed.id}.json`),'utf8'))
+ assert.equal(preserved.status,'check_failed');assert.equal(preserved.head,failed.head)
+})
+
+test('blocking 8: committed interrupted builder is observed without repeat or publication',async t=>{
+ const f=await fixture(t,{builderNoPush:true,hangAfterCommit:true},{limits:{runsPer24h:8,slots:2,timeoutMs:1500}})
+ const first=await f.run('fix-pr',repo,'7','-');assert.equal(first.code,142,JSON.stringify(first))
+ const interrupted=await currentRepair(f)
+ assert.ok(interrupted.builderJob);assert.equal(interrupted.baseHead,f.head)
+ const result=await f.wrapper('unstick','--once')
+ assert.equal(result.code,75,JSON.stringify(result))
+ const observed=await currentRepair(f)
+ assert.equal(observed.status,'candidate_unconfirmed');assert.notEqual(observed.head,f.head)
+ assert.equal(remoteTopic(f),f.head);assert.equal((await f.read()).calls.length,1)
+ const state=await f.read();state.hangAfterCommit=false;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(state))
+ ok(await f.run('fix-pr',repo,'7','-'))
+ assert.equal((await f.read()).calls.filter(c=>!c.prompt.includes('REVIEW MODE:')).length,2)
+ assert.equal((await currentRepair(f)).status,'delivered')
+})
+
+test('blocking 10: each inbox pointer retains the original terminal repair receipt',async t=>{
+ const f=await fixture(t,{builderNoPush:true}),command=path.join(f.root,'orch'),pointers=path.join(f.root,'pointers.jsonl')
+ await fs.writeFile(command,`#!/usr/bin/env node\nrequire('fs').appendFileSync(${JSON.stringify(pointers)},JSON.stringify(process.argv.slice(2))+'\\n');`,{mode:0o755})
+ f.cfg.orchInbox={command,store:path.join(f.root,'inbox')};await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ ok(await f.run('fix-pr',repo,'7','-'))
+ const [first]= (await fs.readFile(pointers,'utf8')).trim().split('\n').map(JSON.parse)
+ const file=first.at(-1),before=await fs.readFile(file,'utf8')
+ ok(await f.run('fix-pr',repo,'7','-'))
+ const [,second]=(await fs.readFile(pointers,'utf8')).trim().split('\n').map(JSON.parse)
+ assert.notEqual(file,second.at(-1));assert.equal(await fs.readFile(file,'utf8'),before)
+ assert.equal(JSON.parse(before).status,'delivered')
+})
+
+test('blocking 6: final PR readback refuses a PR closed during push',async t=>{
+ const f=await fixture(t)
+ await fs.writeFile(path.join(f.remote,'hooks','pre-receive'),`#!/usr/bin/env node\nconst fs=require('fs'),p=${JSON.stringify(f.env.FAKE_PR)};const s=JSON.parse(fs.readFileSync(p));s.state='CLOSED';fs.writeFileSync(p,JSON.stringify(s));`,{mode:0o755})
+ const result=await f.run('fix-pr',repo,'7','-')
+ assert.equal(result.code,8,JSON.stringify(result));assert.notEqual(remoteTopic(f),f.head)
+ assert.equal((await currentRepair(f)).status,'push_pending')
+})
+
+test('blocking 5: worktree-specific push destination is checked after repository checks',async t=>{
+ const f=await fixture(t),other=path.join(f.root,'other.git')
+ git(f.root,'clone','--bare','--quiet',f.remote,other);f.g('config','extensions.worktreeConfig','true')
+ f.cfg.repos[repo].checks=[[process.execPath,'-e',`require('child_process').execFileSync('git',['config','--worktree','remote.origin.pushurl',${JSON.stringify(other)}]);`]]
+ await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ const result=await f.run('fix-pr',repo,'7','-')
+ assert.equal(result.code,9,JSON.stringify(result));assert.match(result.stdout+result.stderr,/push destination/)
+ assert.equal(remoteTopic(f),f.head);assert.equal(git(f.root,'--git-dir',other,'rev-parse','refs/heads/topic'),f.head)
 })

@@ -1,10 +1,12 @@
+import { createGitHubObservation } from "./github-observation.mjs"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { Deadline, DeadlineError, waitForCondition, validDuration } from "./deadline.mjs"
 import fs from "node:fs/promises"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 import { createHash, randomUUID } from "node:crypto"
 import { reserveCompute } from "./process-capacity.mjs"
-import { runProcess, validateProcessRequest } from "./process-runner.mjs"
+import { runProcess, validateProcessRequest, observeProcessJob } from "./process-runner.mjs"
 import { createCodexExecArgs } from "./codex-build.mjs"
 import { normalizeResult } from "./adapters.mjs"
 import { deliveryPrompt } from "./pr-delivery-prompts.mjs"
@@ -22,6 +24,7 @@ const fail = error => normalizeResult({ status: "fail",
   data: { code: Number.isInteger(error.code) ? error.code : 1, message: error.message, transient: error.transient ?? false,
     ...(error.observation ?? {}),
     ...(error.cancelled ? { cancelled: true, nextAction: "none" } : {}),
+    ...(error.state ? { state: error.state, pool: error.pool, retryAt: error.retryAt, queryErrors: error.queryErrors, terminal: error.terminal, nextAction: "wait-for-provider-observation" } : {}),
     ...(error.pendingUpdate ? { pendingUpdate: true } : {}),
     ...(error.phase ? { phase: error.phase, nextAction: error.nextAction } : {}),
     ...(error.uncertain ? { uncertain: true, nextAction: "readback-before-retry" } : {}),
@@ -36,12 +39,19 @@ export async function loadDeliveryConfig(file) {
     if (typeof p !== "string" || !p.trim()) throw new DeliveryError("config path is required", 9)
     return path.resolve(base, p)
   }
-  const config = { ...value, stateDir: absolute(value.stateDir),
+  const config = { ...value, configFile: path.resolve(file), stateDir: absolute(value.stateDir),
     repos: Object.fromEntries(Object.entries(value.repos).map(([repo, local]) => {
       if (!REPO.test(repo)) throw new DeliveryError("invalid repository in config", 9)
       if (!Array.isArray(local.trustedReviewers) || !local.trustedReviewers.length || local.trustedReviewers.some(login => typeof login !== "string" || !/^[A-Za-z0-9-]+(?:\[bot\])?$/.test(login)))
         throw new DeliveryError("config repo trustedReviewers must name trusted GitHub identities", 9)
       if (!validRequiredChecks(local.requiredChecks)) throw new DeliveryError("config repo requiredChecks must name the expected checks", 9)
+      if (local.checks !== undefined && (!Array.isArray(local.checks) || !local.checks.length))
+        throw new DeliveryError("config repo checks must be nonempty argv commands", 9)
+      if(local.checkTimeoutMs !== undefined && !validDuration(local.checkTimeoutMs)) throw new DeliveryError("invalid repository check timeout",9)
+      for (const argv of local.checks ?? []) {
+        try {validateProcessRequest(argv)}
+        catch {throw new DeliveryError("config repo checks must be valid argv commands",9)}
+      }
       if (local.dependencyRevision !== undefined && (typeof local.dependencyRevision !== "string" || !local.dependencyRevision.trim()))
         throw new DeliveryError("config dependencyRevision must be a nonempty owned input pin", 9)
       return [repo, { ...local, checkout: absolute(local.checkout), worktreeRoot: absolute(local.worktreeRoot) }]
@@ -50,6 +60,9 @@ export async function loadDeliveryConfig(file) {
     pollMs: value.pollMs ?? 30_000, commandTimeoutMs: value.commandTimeoutMs ?? 120_000,
     checksTimeoutMs: value.checksTimeoutMs ?? 3600_000, retryMs: value.retryMs ?? 120_000,
     autoPollMs: value.autoPollMs ?? 300_000, queueRunsPer24h: value.queueRunsPer24h ?? 4 }
+  config.github = { requestsPerHour: 1000, cacheMs: 60_000, ...value.github }
+  if (!Number.isSafeInteger(config.github.requestsPerHour) || config.github.requestsPerHour <= 0 ||
+      !validDuration(config.github.cacheMs, 0)) throw new DeliveryError("invalid GitHub request budget/cache configuration", 9)
   config.queueTimeoutMs = value.queueTimeoutMs ?? config.limits.timeoutMs
   config.apiTimeoutMs = value.apiTimeoutMs ?? config.commandTimeoutMs
   config.attemptTimeoutMs = value.attemptTimeoutMs ?? config.checksTimeoutMs + config.queueTimeoutMs + config.limits.timeoutMs + 600_000
@@ -66,6 +79,7 @@ export async function loadDeliveryConfig(file) {
     if (config.resources.agentUnits + config.resources.browserConcurrency > config.resources.capacity)
       throw new DeliveryError("agent and child reservation exceeds capacity", 9)
   }
+  if(value.orchInbox) config.orchInbox = {command:absolute(value.orchInbox.command),store:absolute(value.orchInbox.store)}
   createCodexExecArgs(config.codex)
   config.holds = (value.holds ?? []).map(h => {
     if (!config.repos[h.repo] || typeof h.titlePattern !== "string") throw new DeliveryError("invalid config hold", 9)
@@ -76,6 +90,7 @@ export async function loadDeliveryConfig(file) {
 
 export function createPrDeliveryAdapter(config, { env = process.env, onTransition = async () => {} } = {}) {
   const locks = path.join(config.stateDir, "locks"), queueFile = path.join(config.stateDir, "queue.json")
+  const github = createGitHubObservation(config)
   const prLeases = new Map()
   const cancelFile = path.join(config.stateDir, "cancellations.json")
   const deadlines = new AsyncLocalStorage()
@@ -98,7 +113,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     const boundedMs = Math.max(1, Math.floor(Math.min(timeoutMs, budget()?.remaining() ?? timeoutMs)))
     const mutation = streamOptions.mutation ?? (argv[0] === "gh" && argv[1] !== "api" ||
       argv[0] === "git" && !["rev-parse", "status", "show", "show-ref", "merge-base", "merge-tree", "check-ref-format", "symbolic-ref"].includes(argv[1]) && !(argv[1] === "worktree" && argv[2] === "list") && !(argv[1] === "remote" && argv[2] === "get-url"))
-    const result = await runProcess(argv, { cwd, env: { ...env, ...(config.resources ? {
+    const result = await runProcess(argv, { cwd, env: { ...env, FACTORY_PR_CONFIG: config.configFile, ...(config.resources ? {
       FACTORY_BROWSER_CONCURRENCY: String(config.resources.browserConcurrency) } : {}) }, timeoutMs: boundedMs, input, signal: budget()?.signal, ...streamOptions, mutation })
     if (result.timedOut || result.cancelled || result.uncertain) {
       const error = result.cancelled ? new DeliveryError("ATTEMPT-CANCELLED", 130)
@@ -115,10 +130,10 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     return result
   }
   const git = async (cwd, ...args) => (await command(["git", ...args], cwd)).stdout.trim()
-  const provider = createGithubProvider(config, { command, getRepo, authenticate: authenticateReview,
+  const provider = createGithubProvider(config, { command, getRepo, authenticate: authenticateReview, observer: github, budget,
     withRead: (repo, fn) => {
       const phase = budget().phaseBudget("api", config.apiTimeoutMs)
-      return measured("api", repo, undefined, () => deadlines.run(phase, () => fn(ms => phase.sleep(ms))))
+      return measured("api", repo, undefined, () => deadlines.run(phase, fn))
     } })
   async function observe(repo, pr, options) {
     const snapshot = await provider.snapshot(repo, pr, options)
@@ -131,6 +146,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     const issue = snapshot.errors[0]
     const error = new DeliveryError(issue.message, issue.code ?? 1, issue.transient)
     if (issue.phase) { error.phase = issue.phase; error.nextAction = issue.nextAction }
+    Object.assign(error, issue)
     error.observation = { state: "provider-unknown", errors: snapshot.errors, ...snapshot.metrics }
     return error
   }
@@ -156,7 +172,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       throw new DeliveryError("GitHub comment acknowledgement missing", 1)
   }
   function requireKnownCi(ci) {
-    if (ci.state === "provider-unknown") throw new DeliveryError("invalid hosted checks response", 1)
+    if (ci.state === "provider-unknown") throw Object.assign(new DeliveryError("invalid hosted checks response", 1), { state: "unknown" })
     if (ci.state === "superseded") throw new DeliveryError("SUPERSEDED: HEAD MOVED during checks; observe current head", 1)
   }
   function supportedBase(pr) {
@@ -213,12 +229,15 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       return current
     }, { budget: phase, boundedProbe: true, ready: value => value.ci.state !== "pending", pollMs: config.pollMs })))
   }
-  async function branchWorktree(repo, branch, fallback, observedHead) {
-    const local = getRepo(repo)
+  async function verifyOrigin(repo,local) {
     const origin = await git(local.checkout, "remote", "get-url", "origin")
     const identity = origin.replace(/^git@github\.com:/, "").replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "")
     if (local.originUrl ? origin !== local.originUrl : identity !== repo)
       throw new DeliveryError("repair repository binding does not match configured origin")
+  }
+  async function branchWorktree(repo, branch, fallback, observedHead) {
+    const local = getRepo(repo)
+    await verifyOrigin(repo,local)
     if (branch === "main" || branch.startsWith("-")) throw new DeliveryError("refusing to repair main or invalid branch")
     await git(local.checkout, "check-ref-format", "--branch", branch)
     await git(local.checkout, "fetch", "-q", "origin", branch)
@@ -249,7 +268,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     if (await git(worktree, "rev-parse", "HEAD") !== remoteHead) throw new DeliveryError("repair source binding mismatch; retained")
     return worktree
   }
-  async function guarded(repo, pr, kind, argv, cwd, input, head) {
+  async function guarded(repo, pr, kind, argv, cwd, input, head, afterExecution, beforeExecution) {
     if (!["review", "fix", "ci-fix", "rescope"].includes(kind)) throw new DeliveryError("invalid guarded delivery kind", 9)
     validateProcessRequest(argv, config.limits.timeoutMs)
     head ??= (await view(repo, pr)).headRefOid
@@ -272,6 +291,9 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       if (admitted.headRefOid !== head) throw new DeliveryError("SUPERSEDED: HEAD MOVED before child dispatch; observe current head", 1)
       await log({ repo, pr, head, step: kind, status: "started", attemptId: release.attemptId,
         effectId })
+      const jobId = randomUUID()
+      const job = {id:jobId, ownership:"caller", worktree:cwd, model:config.codex.model, effort:config.codex.effort,
+        log:path.join(config.stateDir,"jobs",`${jobId}.log`), receipt:path.join(config.stateDir,"jobs",`${jobId}.json`)}
       const digest = createHash("sha256")
       // Persist before launch: if the controller disappears there is no final
       // callback to write uncertainty. A completed child retires this marker.
@@ -281,8 +303,10 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
           message: "MUTATION UNCERTAIN: readback required before retry", resetAt: null }, budget())
         mutationPending = true
       }
+      await beforeExecution?.(job)
       const runBudget = budget().phaseBudget("execution", config.limits.timeoutMs)
       const result = await measured("execution", repo, pr, () => deadlines.run(runBudget, () => command(argv, cwd, { input, timeoutMs: config.limits.timeoutMs, allowFailure: true,
+        job, onStarted: receipt => log({repo,pr,step:kind,status:"running",jobId:receipt.id,receipt:job.receipt}),
         mutation: kind !== "review", captureOutput: false, onOutput: chunk => digest.update(chunk), onSpawn: async (job, signal) => {
           await requireNotCancelled(repo, pr, head)
           const bindings = [await release.bindJob(job, signal), ...await compute.bindJob(job, signal)]
@@ -290,12 +314,18 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
           if (prLease) bindings.push(await prLease.bindJob(job, signal))
           return bindings
         } })))
-      if (mutationPending) { await completeDeliveryWait(config, repo, pr, budget()); mutationPending = false }
+      if (mutationPending && (!afterExecution || result.code)) { await completeDeliveryWait(config, repo, pr, budget()); mutationPending = false }
       const outputDigest = digest.digest("hex")
       await log({ repo, pr, step: kind, status: result.code ? "failed" : "complete", code: result.code,
         outputDigest })
+      if (result.code) {
+        const hold = await github.activeHold()
+        if (hold) throw hold
+      }
       if (result.code) throw new DeliveryError(`${kind} exited ${result.code}`, result.code)
-      return { ...result, outputDigest }
+      const completed = afterExecution ? await afterExecution(compute) : { ...result, outputDigest }
+      if (mutationPending) { await completeDeliveryWait(config, repo, pr, budget()); mutationPending = false }
+      return completed
     } catch (error) {
       if (mutationPending && error.uncertain === false)
         await completeDeliveryWait(config, repo, pr, budget())
@@ -303,7 +333,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
         error.wait = await suspend(repo, pr, head, { cause: "slot-wait", code: 142, message: error.message, resetAt: null })
       if (budget().remaining() && error.uncertain)
         error.wait = await suspend(repo, pr, head, { cause: "mutation-uncertain", code: error.code, message: "MUTATION UNCERTAIN: readback required before retry", resetAt: null })
-      if (budget().remaining() && error.code === 75 && !error.message.startsWith("BUSY:"))
+      if (budget().remaining() && error.code === 75 && !error.state && !error.message.startsWith("BUSY:"))
         error.wait = await suspend(repo, pr, head, { cause: error.cause ?? "capacity-refused", code: 75, message: error.message, resetAt: error.resetAt ?? null })
       throw error
     } finally {
@@ -322,7 +352,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     requireKnownCi(current.ci)
     if (current.ci.state === "pending") throw new DeliveryError("CI changed before review; wait for checks", 75)
     const local = getRepo(repo), head = current.headRefOid
-    await git(local.checkout, "fetch", "-q", "origin", head)
+    await git(local.checkout, "fetch", "-q", "origin", "main", head)
     const attempt = randomUUID()
     const dir = path.join(local.worktreeRoot, `review-${pr}-${head}-${attempt}`)
     await fs.mkdir(local.worktreeRoot, { recursive: true })
@@ -334,7 +364,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     const output = path.join(config.stateDir, `review-${keyFor(repo, pr)}-${attempt}.txt`)
     try {
       const prior = current.review?.verdict !== "APPROVE" ? current.review : null
-      const prompt = deliveryPrompt("review", { repo, pr, head, prior })
+      const prompt = deliveryPrompt("review", { repo, pr, head, prior, description: current.body, ci: current.ci, reader: { root: fileURLToPath(new URL("../", import.meta.url)) } })
       await fs.rm(output, { force: true })
       const argv = [config.codex.command ?? "codex", ...createCodexExecArgs(config.codex),
         "--sandbox", "danger-full-access", "--output-last-message", output, "-"]
@@ -364,25 +394,217 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
         await git(local.checkout, "worktree", "remove", "--force", dir)
     }
   }
-  async function fix(repo, pr, kind, worktree) {
-    const current = await view(repo, pr)
+  const repairFile = (repo, pr) => path.join(config.stateDir,"repairs",`${keyFor(repo,pr)}.json`)
+  const repairReceipt = record => path.join(config.stateDir,"repair-receipts",`${record.id}.json`)
+  async function retainRepair(record) {
+    const file=repairReceipt(record), bytes=JSON.stringify(record)
+    await fs.mkdir(path.dirname(file),{recursive:true,mode:0o700})
+    const temp=`${file}.${randomUUID()}.tmp`
+    await writeJson(temp,record)
+    try {await fs.link(temp,file)}
+    catch(error) {
+      if(error.code!=="EEXIST")throw error
+      if(await fs.readFile(file,"utf8")!==bytes)throw new DeliveryError("terminal repair receipt changed",9)
+    } finally {await fs.unlink(temp)}
+    return file
+  }
+  const checkPolicyFor = local => digestOf(JSON.stringify({checks:local.checks,timeoutMs:local.checkTimeoutMs ?? config.checksTimeoutMs}))
+  async function verifyRepairSource(repo,pr,record) {
+    const local=getRepo(repo),cwd=record.worktree
+    if(record.schema!=="factory-repair-delivery/v1" || record.repo!==repo || record.pr!==pr ||
+       await git(cwd,"rev-parse","--path-format=absolute","--git-common-dir")!==
+       await git(local.checkout,"rev-parse","--path-format=absolute","--git-common-dir"))
+      throw new DeliveryError("repair receipt repository binding mismatch",9)
+    await verifyOrigin(repo,local)
+    if(await git(cwd,"symbolic-ref","--short","HEAD")!==record.branch ||
+       await git(cwd,"rev-parse","HEAD")!==record.head || await git(cwd,"rev-parse","HEAD^{tree}")!==record.tree ||
+       await git(cwd,"status","--porcelain"))throw new DeliveryError("repair source changed; retain worktree and reconcile",9)
+  }
+  async function repairRemote(repo,record) {
+    const local=getRepo(repo),cwd=record.worktree
+    await verifyOrigin(repo,{...local,checkout:cwd})
+    const fetchUrl=await git(cwd,"remote","get-url","origin")
+    const destinations=(await git(cwd,"remote","get-url","--push","--all","origin")).split("\n")
+    if(destinations.length!==1 || destinations[0]!==fetchUrl)
+      throw new DeliveryError("repair push destination differs from bound origin",9)
+    record.pushDestination=destinations[0]
+    const transport=repairTransport(record.pushDestination)
+    return (await git(cwd,...transport.options,"ls-remote","--heads",transport.remote,`refs/heads/${record.branch}`)).split(/\s+/)[0]
+  }
+  function repairTransport(destination) {
+    const remote=`factory-repair-${randomUUID()}`,alias=`${remote}:`
+    // Git expands this exact alias once. Explicit pushurl skips pushInsteadOf;
+    // neither observation nor push feeds the expanded URL back through rewrites.
+    return {remote,options:["-c",`url.${destination}.insteadOf=${alias}`,
+      "-c",`remote.${remote}.url=${alias}`,"-c",`remote.${remote}.pushurl=${alias}`]}
+  }
+  async function repairObservation(repo,pr,record,heads) {
+    const current=await view(repo,pr)
     requireOpen(current)
-    if (current.isCrossRepository !== false) throw new DeliveryError("fork repair is unsupported; origin is not the PR source")
-    const fallback = worktree && worktree !== "-" ? path.resolve(worktree) : path.join(getRepo(repo).worktreeRoot, `fix-${pr}`)
-    const cwd = await branchWorktree(repo, current.headRefName, fallback, current.headRefOid)
-    await git(cwd, "fetch", "-q", "origin")
-    await fresh(repo, pr, current)
-    if (await git(cwd, "rev-parse", "HEAD") !== current.headRefOid)
-      throw new DeliveryError("HEAD MOVED before repair; source retained")
-    await guarded(repo, pr, kind, [config.codex.command ?? "codex", ...createCodexExecArgs(config.codex), "--sandbox", "danger-full-access", "-"], cwd,
-      deliveryPrompt(kind, { repo, pr, head: current.headRefOid, branch: current.headRefName }), current.headRefOid)
-    const head = (await view(repo, pr)).headRefOid
-    if (head === current.headRefOid) {
-      const error = new DeliveryError("NO-PROGRESS: fix pushed nothing", 2)
-      error.wait = await suspend(repo, pr, head, { cause: "source-no-progress", code: 2, message: error.message, resetAt: null })
-      throw error
+    if(current.isCrossRepository!==false || current.head.repo!==repo || current.headRefName!==record.branch ||
+       current.base.repo!==record.base.repo || current.base.ref!==record.base.ref || current.base.sha!==record.base.sha ||
+       !heads.includes(current.headRefOid))throw new DeliveryError("repair PR source/base binding moved; reconcile retained source",9)
+    return current
+  }
+  async function terminalJob(job,label) {
+    const observed=await observeProcessJob(job.receipt)
+    if(["starting","running","startup_unconfirmed"].includes(observed.status))
+      throw new DeliveryError(`${label} INCOMPLETE: observe job receipt before retry`,75)
+    if(observed.id!==job.id || observed.worktree!==job.worktree || observed.ownership!=="caller")
+      throw new DeliveryError(`${label} job binding mismatch`,9)
+    return observed
+  }
+  async function finishRepair(repo, pr, record, ownedCompute) {
+    const local=getRepo(repo),cwd=record.worktree,file=repairFile(repo,pr)
+    const persist=async status=>{record={...record,status};await writeJson(file,record)}
+    await verifyRepairSource(repo,pr,record)
+    let remoteHead=await repairRemote(repo,record)
+    // A checked push may have succeeded before its controller died. Any earlier
+    // publication is an observed contract violation, never an unpushed claim.
+    if(remoteHead!==record.baseHead && !(record.testedHead===record.head && remoteHead===record.head)) {
+      record.remoteHead=remoteHead;await persist("early_publication");await retainRepair(record)
+      throw new DeliveryError("EARLY PUBLICATION: remote changed before runner-owned checks; reconcile published source",9)
     }
-    return { head }
+    await repairObservation(repo,pr,record,[record.baseHead,...(record.testedHead===record.head?[record.head]:[])])
+    const checkPolicy=checkPolicyFor(local)
+    if(record.checkPolicy!==checkPolicy)delete record.testedHead
+    if(record.checkJob)await terminalJob(record.checkJob,"CHECK")
+    if(record.testedHead!==record.head) {
+      let compute
+      try {
+        compute=ownedCompute ?? await reserveCompute(config,config.resources.browserConcurrency,budget().phaseBudget("queue",config.queueTimeoutMs))
+        record.checks=[]
+        for(const argv of local.checks) {
+          const id=randomUUID()
+          record.checkJob={id,ownership:"caller",worktree:cwd,model:"repository-check",effort:"deterministic",
+            log:path.join(config.stateDir,"jobs",`${id}.log`),receipt:path.join(config.stateDir,"jobs",`${id}.json`)}
+          record.checkPolicy=checkPolicy
+          await persist("checking")
+          let result
+          try {
+            result=await command(argv,cwd,{allowFailure:true,timeoutMs:local.checkTimeoutMs ?? config.checksTimeoutMs,
+              job:record.checkJob,captureOutput:false,onSpawn:async(job,signal)=>{
+                const bindings=[...await compute.bindJob(job,signal)]
+                const owner=prLeases.get(keyFor(repo,pr));if(owner)bindings.push(await owner.bindJob(job,signal))
+                return bindings
+              }})
+          } catch(error){await persist("check_interrupted");throw error}
+          record.checks.push({argv,code:result.code,receipt:record.checkJob.receipt})
+          remoteHead=await repairRemote(repo,record)
+          if(remoteHead!==record.baseHead) {
+            record.remoteHead=remoteHead;await persist("early_publication");await retainRepair(record)
+            throw new DeliveryError("EARLY PUBLICATION: remote changed during runner checks",9)
+          }
+          if(result.code) {
+            record.remoteHead=remoteHead;await persist("check_failed");await retainRepair(record)
+            throw new DeliveryError(`repository check failed (${result.code}); source unpushed at observed remote ${remoteHead}`,result.code)
+          }
+          delete record.checkJob
+          await verifyRepairSource(repo,pr,record)
+        }
+        record.testedHead=record.head;record.checkPolicy=checkPolicy
+      } finally {if(compute && !ownedCompute)await compute()}
+    }
+    await verifyRepairSource(repo,pr,record)
+    remoteHead=await repairRemote(repo,record)
+    if(![record.baseHead,record.head].includes(remoteHead))throw new DeliveryError("repair remote moved before publication",9)
+    await repairObservation(repo,pr,record,[remoteHead])
+    await persist("push_pending")
+    if(remoteHead!==record.head) {
+      const transport=repairTransport(record.pushDestination)
+      await command(["git",...transport.options,"push",transport.remote,`${record.head}:refs/heads/${record.branch}`],cwd,
+        {onSpawn:async(job,signal)=>{const owner=prLeases.get(keyFor(repo,pr));return owner?[await owner.bindJob(job,signal)]:[]}})
+    }
+    record.remoteHead=await repairRemote(repo,record)
+    if(record.remoteHead!==record.head)throw new DeliveryError("PUSH PENDING: remote head differs from tested source",1)
+    await repairObservation(repo,pr,record,[record.head])
+    const terminal={...record,status:"delivered"},receipt=await retainRepair(terminal)
+    if(config.orchInbox) {
+      await persist("inbox_pending")
+      await command([config.orchInbox.command,"--store",config.orchInbox.store,"inbox","push","PlatformEngineer",`${repo}#${pr}`,"delivered","--report",receipt],cwd,{captureOutput:false})
+    }
+    record=terminal;await writeJson(file,record)
+    await log({repo,pr,step:"repair-delivery",status:"delivered",head:record.head,testedHead:record.testedHead,remoteHead:record.remoteHead,receipt})
+    return {head:record.head,receipt}
+  }
+  async function reconcileBuilder(repo,pr,record) {
+    const job=await terminalJob(record.builderJob,"BUILDER"),cwd=record.worktree
+    const head=await git(cwd,"rev-parse","HEAD"),tree=await git(cwd,"rev-parse","HEAD^{tree}")
+    record={...record,head,tree,builderOutcome:{status:job.status,code:job.code},status:"candidate_unconfirmed"}
+    await verifyRepairSource(repo,pr,record)
+    await repairRemote(repo,record)
+    await repairObservation(repo,pr,record,[record.baseHead])
+    await writeJson(repairFile(repo,pr),record)
+    // Even a clean commit from an interrupted builder has no completion claim.
+    // Recovery observes it; an explicit fix request may dispatch a corrective builder.
+    return record
+  }
+  async function fix(repo, pr, kind, worktree, repairId) {
+    const local=getRepo(repo)
+    if(!local.checks?.length)throw new DeliveryError("repository-owned checks required before repair",9)
+    let prior=await readJson(repairFile(repo,pr),null)
+    if(repairId && (!prior || prior.status==="delivered"))return {message:"REPAIR ALREADY RECONCILED"}
+    if(repairId && prior.id!==repairId)throw new DeliveryError("repair recovery receipt changed; observe before retry",75)
+    const current=await view(repo,pr)
+    requireOpen(current)
+    if(prior?.status==="no_progress") {await eligible(repo,pr,current.headRefOid);prior=null}
+    if(current.isCrossRepository!==false)throw new DeliveryError("fork repair is unsupported; origin is not the PR source")
+    let corrective=false
+    if(prior && prior.status!=="delivered") {
+      if(prior.status==="building")prior=await reconcileBuilder(repo,pr,prior)
+      if(prior.status==="candidate_unconfirmed") {
+        await terminalJob(prior.builderJob,"BUILDER")
+        if(repairId)throw new DeliveryError("CANDIDATE UNCONFIRMED: observed interrupted builder; explicit corrective fix required",75)
+        corrective=true
+      } else if(prior.status==="check_failed" && prior.checkPolicy===checkPolicyFor(local)) {
+        const job=await terminalJob(prior.checkJob,"CHECK")
+        if(job.status!=="failed" || !job.code || job.code!==prior.checks.at(-1)?.code)
+          throw new DeliveryError("failed check receipt unconfirmed; observe before correction",75)
+        corrective=true
+      } else {
+        if(prior.status==="early_publication")throw new DeliveryError("EARLY PUBLICATION: reconcile published source before repair",9)
+        if(prior.status==="check_failed") {
+          // A changed repository-owned policy can recheck the same source, but
+          // the failed attempt remains immutable and keeps its original ID.
+          prior={...prior,id:randomUUID(),corrects:prior.id,status:"built"}
+          await writeJson(repairFile(repo,pr),prior)
+        }
+        return finishRepair(repo,pr,prior)
+      }
+      await verifyRepairSource(repo,pr,prior)
+      if(await repairRemote(repo,prior)!==prior.baseHead)throw new DeliveryError("corrective repair remote moved",9)
+      await repairObservation(repo,pr,prior,[prior.baseHead])
+      await retainRepair(prior)
+      await completeDeliveryWait(config,repo,pr,budget())
+    }
+    if (kind === "ci-fix" && !corrective) {
+      requireKnownCi(current.ci)
+      if (!current.ci.repairable) throw new DeliveryError("CI FIX REFUSED: no observed failed required check", 3)
+    }
+    const fallback=worktree && worktree!=="-"?path.resolve(worktree):path.join(local.worktreeRoot,`fix-${pr}`)
+    const cwd=corrective?prior.worktree:await branchWorktree(repo,current.headRefName,fallback,current.headRefOid)
+    await git(cwd,"fetch","-q","origin")
+    await fresh(repo,pr,current)
+    const inputHead=corrective?prior.head:current.headRefOid
+    if(await git(cwd,"rev-parse","HEAD")!==inputHead)throw new DeliveryError("HEAD MOVED before repair; source retained")
+    let record={schema:"factory-repair-delivery/v1",id:randomUUID(),repo,pr,branch:current.headRefName,
+      baseHead:current.headRefOid,base:current.base,inputHead,head:inputHead,tree:await git(cwd,"rev-parse","HEAD^{tree}"),
+      worktree:cwd,status:"building",checks:[],...(corrective?{corrects:prior.id}:{})}
+    const prompt=deliveryPrompt(kind,{repo,pr,head:inputHead,branch:current.headRefName,prior:current.review,ci:current.ci,reader:{root:fileURLToPath(new URL("../",import.meta.url))}})+
+      (corrective?`\nCorrective repair of ${prior.id} on retained local candidate ${inputHead}. Prior status: ${prior.status}. Check outcomes: ${JSON.stringify(prior.checks)}. Builder receipt: ${prior.builderJob?.receipt ?? "none"}. Confirm and finish this candidate; never repeat an uncertain external action.`:"")
+    return guarded(repo,pr,kind,[config.codex.command ?? "codex",...createCodexExecArgs(config.codex),"--sandbox","danger-full-access","-"],cwd,
+      prompt,current.headRefOid,async compute=>{
+        const head=await git(cwd,"rev-parse","HEAD")
+        if(head===inputHead) {
+          record={...record,status:"no_progress"};await writeJson(repairFile(repo,pr),record);await retainRepair(record)
+          const error=new DeliveryError("NO-PROGRESS: fix produced no commit",2)
+          error.wait=await suspend(repo,pr,current.headRefOid,{cause:"source-no-progress",code:2,message:error.message,resetAt:null})
+          throw error
+        }
+        record={...record,head,tree:await git(cwd,"rev-parse","HEAD^{tree}"),status:"built"}
+        await writeJson(repairFile(repo,pr),record)
+        return finishRepair(repo,pr,record,compute)
+      },async job=>{record.builderJob=job;await writeJson(repairFile(repo,pr),record)})
   }
   async function queueState(fn) {
     return withLease(locks, "queue-state", async () => {
@@ -654,6 +876,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       // reconcile this intent, including after a controller restart.
       await writeJson(updateRecord(repo, pr, old), pending)
       const update = await provider.mutate(repo, "PUT", `pulls/${pr}/update-branch`, { expected_head_sha: current.headRefOid }, owners).catch(async error => {
+        if (error.uncertain === false) await fs.unlink(updateRecord(repo, pr, old))
         if (!error.uncertain) throw error
         await log({ step: "update", repo, pr, status: "uncertain", code: error.code ?? 1, message: error.message })
         throw branchUpdatePending()
@@ -771,7 +994,23 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
           : orphanLeases ? "wait-for-supervised-child-or-recover-lease" : owned ? "reconcile-provider" : "consume-pending" }
     })
   }
+  const enqueueOwner = fn => withLease(locks, "enqueue-owner", fn, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget: budget() })
+  async function enqueueObserved(repo, current, eventHead, mode = "automatic") {
+    if (eventHead && eventHead !== current.headRefOid) return { enqueued: false }
+    if (config.holds.some(h => h.repo === repo && h.regex.test(current.title))) return { enqueued: false }
+    const approval = current.review
+    if (current.state !== "OPEN" || approval?.verdict !== "APPROVE" || approval.sha !== current.headRefOid || current.mergeable !== "MERGEABLE") return { enqueued: false }
+    const ci = current.ci
+    requireKnownCi(ci)
+    if (ci.state !== "success") return { enqueued: false }
+    return enqueue(repo, current.number, current.headRefOid, "auto-enqueued: approved head + green", mode)
+  }
   async function autoEnqueue() {
+    const file = path.join(config.stateDir, "reconciliation.json")
+    const previous = await readJson(file, null)
+    if (previous?.retryAt > Date.now()) return { message: "RECONCILIATION WAIT", retryAt: previous.retryAt }
+    // Persist before scanning: a restart cannot spend another scan immediately.
+    await writeJson(file, { retryAt: Date.now() + Math.max(300_000, config.autoPollMs) })
     let count = 0
     for (const repo of Object.keys(config.repos)) {
       const prs = await provider.pages(repo, "pulls?state=open")
@@ -832,17 +1071,21 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
   return {
     config,
     async recoveryCandidates() {
-      const dir = path.join(config.stateDir, "waits")
-      const names = await fs.readdir(dir).catch(e => { if (e.code === "ENOENT") return []; throw e })
-      const candidates = []
-      for (const name of names) {
-        if (!name.endsWith(".json")) continue
-        const record = await readJson(path.join(dir, name))
-        if (record.schema !== "factory-delivery-wait/v1" || !config.repos[record.repo] || !Number.isSafeInteger(record.pr) || record.pr <= 0)
-          throw new DeliveryError("invalid delivery recovery record", 9)
-        if (["suspended", "resumable"].includes(record.status)) candidates.push({ repo: record.repo, pr: record.pr })
+      const candidates = new Map()
+      for (const [directory, schema] of [["waits","factory-delivery-wait/v1"],["repairs","factory-repair-delivery/v1"]]) {
+        const dir = path.join(config.stateDir,directory)
+        const names = await fs.readdir(dir).catch(e => { if (e.code === "ENOENT") return []; throw e })
+        for (const name of names) {
+          if (!name.endsWith(".json")) continue
+          const record = await readJson(path.join(dir,name))
+          if (record.schema !== schema || !config.repos[record.repo] || !Number.isSafeInteger(record.pr) || record.pr <= 0 ||
+              directory === "repairs" && (typeof record.id !== "string" || !record.id))
+            throw new DeliveryError("invalid delivery recovery record",9)
+          if (directory === "repairs" ? !["delivered","no_progress"].includes(record.status) : ["suspended","resumable"].includes(record.status))
+            candidates.set(keyFor(record.repo,record.pr),{repo:record.repo,pr:record.pr,...(directory === "repairs" ? {repairId:record.id} : {})})
+        }
       }
-      return candidates
+      return [...candidates.values()]
     },
     async exclusive(repo, pr, fn) {
       getRepo(repo)
@@ -871,27 +1114,36 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
               const ci = current.ci
               if (ci.state === "success" && current.mergeable === "UNKNOWN") throw new DeliveryError("MERGEABILITY UNKNOWN: wait for provider observation", 75)
               const ready = approved && current.mergeable === "MERGEABLE" && ci.state === "success"
-              data = { head: current.headRefOid, approved, ready, blocked: review?.sha === current.headRefOid && ["BLOCK", "REVIEW: BLOCKED", "CHANGES REQUESTED"].includes(review?.verdict) }
+              data = { head: current.headRefOid, approved, ready, state: ci.state === "success" ? "green" : ci.state === "failure" ? "red" : ci.state, repairable: ci.repairable === true, mergeable: current.mergeable, blocked: review?.sha === current.headRefOid && ["BLOCK", "REVIEW: BLOCKED", "CHANGES REQUESTED"].includes(review?.verdict) }
 
               break
             }
             case "review": data = await review(repo, pr); break
+            case "github-logs": data = {body: (await provider.request(repo, `actions/jobs/${request.job}/logs`, {format:"text"})).value}; break
+            case "github-read": data = { body: (await provider.request(repo, request.route)).value }; break
+            case "repair-status": data = await readJson(repairFile(repo,pr),{status:"absent"});
+              if(data.checkJob) data = {...data,job:await observeProcessJob(data.checkJob.receipt)}; break
             case "readiness": {
               const current = await view(repo, pr, { head })
               requireOpen(current)
               const ci = current.ci
-              data = { head: current.headRefOid, state: ci.state, missing: ci.missing ?? [], nextAction: ci.nextAction }
+              data = { head: current.headRefOid, state: ({success:"green",failure:"red"})[ci.state] ?? ci.state, missing: ci.missing ?? [], nextAction: ci.nextAction }
               break
             }
             case "pr:suspend": data = await suspend(repo, pr, head, request.stop); break
             case "pr:complete": await completeDeliveryWait(config, repo, pr, budget()); data = {}; break
-            case "fix": case "ci-fix": data = await fix(repo, pr, step, worktree); break
+            case "fix": case "ci-fix": data = await fix(repo, pr, step, worktree, request.repairId); break
             case "branch-wt": data = { worktree: await branchWorktree(repo, request.branch, request.fallback) }; break
             case "codex-guard": data = await guarded(repo, pr, request.kind, request.argv, getRepo(repo).checkout, ""); break
             case "queue-cancel": data = await cancelQueued(repo, pr, head); break
             case "queue-status": data = await queueSummary(); break
             case "enqueue": data = await enqueue(repo, pr, head, note); break
-            case "auto-enqueue": data = await autoEnqueue(); break
+            case "enqueue-event": data = await enqueueOwner(async () => {
+              const current = await view(repo, pr, {observeChecks:false})
+              if (head && head !== current.headRefOid) return {enqueued:false}
+              return enqueueObserved(repo, await view(repo, pr), head, "event")
+            }); break
+            case "auto-enqueue": data = await enqueueOwner(autoEnqueue); break
             case "import-legacy": data = await importLegacy(request.root); break
             case "merge-one-core":
               data = await integrationLane(repo, lane => prWriter(repo, pr, writer => mergeOne(repo, pr, head, note ?? "", [lane, writer]))); break
@@ -907,6 +1159,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
             }
             default: throw new DeliveryError(`unknown delivery step: ${step}`)
           }
+          if (data.status) return data
           return pass(data)
         } catch (error) {
           if (!error.wait) await log({ step, repo, pr, status: "failed", code: error.code ?? 1, message: error.message })

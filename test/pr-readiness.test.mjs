@@ -48,3 +48,9 @@ for (const [status, conclusion] of [["success", null], ["failure", null], ["comp
     assert.equal(result.state, "provider-unknown")
     assert.equal(result.repairable, undefined)
   })
+
+test("retro 2: an optional failed check cannot authorize a CI fixer",()=>{
+ const result=classifyChecks(input({checkRuns:[run(),run(C,"failure",{id:2,name:"optional"})]}))
+ assert.equal(result.state,"failure");assert.equal(result.repairable,false)
+ assert.equal(classifyChecks(input({checkRuns:[run(C,"failure")]})).repairable,true)
+})

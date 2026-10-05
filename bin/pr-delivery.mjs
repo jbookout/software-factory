@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { loadDeliveryConfig, createPrDeliveryAdapter } from "../src/pr-delivery.mjs"
 import { runPrDelivery } from "../src/operating-loop.mjs"
+import { queryBackoffMs } from "../src/github-observation.mjs"
 import { pause } from "../src/pr-delivery-state.mjs"
 
 const [configPath, action, ...args] = process.argv.slice(2)
@@ -10,7 +11,7 @@ try {
   const [repo, number, extra, fourth] = args
   const once = args.includes("--once"), pr = Number(number)
   const daemons = ["merge-queue", "auto-enqueue", "recover"]
-  if (!daemons.includes(action) && !["branch-wt", "import-legacy", "queue-status"].includes(action) && (!Number.isSafeInteger(pr) || pr <= 0)) throw new Error("PR number must be a positive integer")
+  if (!daemons.includes(action) && !["branch-wt", "import-legacy", "queue-status", "github-read", "github-logs"].includes(action) && (!Number.isSafeInteger(pr) || pr <= 0)) throw new Error("PR number must be a positive integer")
   const request = { repo, pr }
   const report = result => {
     const data = result.data ?? result
@@ -24,7 +25,13 @@ try {
   else if (action === "recover") {
     do {
       for (const candidate of await adapter.recoveryCandidates()) {
-        try { report(await adapter.exclusive(candidate.repo, candidate.pr, () => runPrDelivery(candidate, adapter))) }
+        try { report(await adapter.exclusive(candidate.repo, candidate.pr, async () => {
+          if (candidate.repairId) {
+            const result = await adapter.execute("fix",candidate)
+            if (result.status !== "pass") return result
+          }
+          return runPrDelivery({repo:candidate.repo,pr:candidate.pr},adapter)
+        })) }
         catch (e) {
           if (e.code !== 75) throw e
           report({ status: "fail", data: { code: e.code, message: e.message } })
@@ -41,7 +48,9 @@ try {
       report(result)
       if (once || (result.status === "fail" && !result.data.transient)) break
       process.exitCode = 0
-      await pause(action === "auto-enqueue" ? adapter.config.autoPollMs : adapter.config.pollMs)
+      const interval = action === "auto-enqueue" ? Math.max(300_000, adapter.config.autoPollMs) : adapter.config.pollMs
+      await pause(Math.max(interval, result.data.retryAt ? result.data.retryAt - Date.now() :
+        result.status === "fail" && result.data.state ? queryBackoffMs(result.data.queryErrors ?? 1) : 0))
     } while (true)
   } else if (["review-pr", "fix-pr", "ci-fix"].includes(action)) {
     await adapter.exclusive(repo, pr, async () => {
@@ -55,7 +64,16 @@ try {
   else if (action === "import-legacy") report(await adapter.execute(action, { root: repo }))
   else if (action === "branch-wt") report(await adapter.execute(action, { repo, branch: number, fallback: extra }))
   else if (action === "codex-guard") report(await adapter.exclusive(repo, pr, () => adapter.execute(action, { ...request, kind: extra, argv: args.slice(3) })))
-  else if (["readiness", "snapshot"].includes(action)) report(await adapter.execute(action, { ...request, head: extra }))
+  else if (action === "github-logs") {
+    if (!/^[1-9][0-9]*$/.test(number)) throw new Error("GitHub logs needs a job id")
+    report(await adapter.execute(action, {repo,job:number}))
+  }
+  else if (action === "github-read") {
+    if (!number || !/^[A-Za-z0-9_./?=&%-]+$/.test(number) || number.startsWith("/") || number.includes("..")) throw new Error("GitHub read needs a repository-relative REST route")
+    report(await adapter.execute(action, { repo, route: number }))
+  }
+  else if (action === "enqueue-event") report(await adapter.execute(action, { ...request, head: extra }))
+  else if (["readiness", "repair-status", "snapshot"].includes(action)) report(await adapter.execute(action, { ...request, head: extra }))
   else if (["merge-enqueue", "merge-one-core"].includes(action))
     report(await adapter.execute(action === "merge-enqueue" ? "enqueue" : action, { ...request, head: extra, note: fourth }))
   else throw new Error(`unknown delivery action: ${action}`)

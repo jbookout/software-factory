@@ -6,13 +6,16 @@ import { spawnSync } from 'node:child_process'
 function liveMembers(pid) {
   // The macOS fallback must read the system utility, including when a caller
   // injects a PATH shim for another process observation contract.
-  const observation = spawnSync('/bin/ps', ['-axo', 'pid=,pgid=,stat='], {
+  const observation = spawnSync('/bin/ps', ['-g', String(pid), '-o', 'pid=,pgid=,stat='], {
     encoding: 'utf8', timeout: 100, maxBuffer: 1_000_000
   })
-  if (observation.error || observation.status !== 0) return null
+  if (observation.error || observation.stderr?.trim()) return null
+  // ps exits 1 with empty output when the selected group has no members.
+  if (observation.status === 1 && !observation.stdout.trim()) return false
+  if (observation.status !== 0) return null
   const rows = observation.stdout.trim().split('\n').filter(Boolean).map(line => /^\s*(\d+)\s+(\d+)\s+(\S+)\s*$/.exec(line))
-  if (!rows.length || !rows.every(Boolean)) return null
-  return rows.some(row => Number(row[2]) === pid && !row[3].startsWith('Z'))
+  if (!rows.length || !rows.every(row => row && Number(row[2]) === pid)) return null
+  return rows.some(row => !row[3].startsWith('Z'))
 }
 export function ownedGroupAlive(pid) {
   try { process.kill(process.platform === 'win32' ? pid : -pid, 0); return true }
