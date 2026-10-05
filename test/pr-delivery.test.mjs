@@ -675,7 +675,7 @@ for(const cause of ["source-no-progress","rounds-exhausted"])
 
 for(const action of ["fix-pr","ci-fix"])
  test(`standalone ${action} shares the no-progress suspension with loop and recovery`,async t=>{
-  const f=await fixture(t,{noProgress:true});await f.approve(`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. defect`)
+  const f=await fixture(t,{noProgress:true,...(action === "ci-fix" ? {statusCheckRollup:[{status:"COMPLETED",conclusion:"FAILURE"}]} : {})});await f.approve(`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. defect`)
   for(let i=0;i<2;i++) {
    const r=await f.wrapper(action,repo,"7","-","--no-loop")
    assert.equal(r.code,2);assert.match(r.stdout,/NO-PROGRESS/)
