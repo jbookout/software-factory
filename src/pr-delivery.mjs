@@ -462,26 +462,33 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     error.pendingUpdate = true
     return error
   }
+  // Any expiry during readback, pacing included, leaves the recorded intent
+  // pending; the next attempt observes again instead of writing again.
   async function reconcileUpdate(repo, pr, pending) {
     const local = getRepo(repo), until = Date.now() + config.checksTimeoutMs
-    while (true) {
-      let current
-      try { current = await view(repo, pr, { observeChecks: false }) }
-      catch (error) {
-        if (error.code === 142 || error.uncertain) throw branchUpdatePending()
-        if (!error.transient) throw error
-        if (Date.now() < until) { await budget().sleep(config.pollMs); continue }
+    try {
+      while (true) {
+        let current
+        try { current = await view(repo, pr, { observeChecks: false }) }
+        catch (error) {
+          if (error.uncertain) throw branchUpdatePending()
+          if (!error.transient) throw error
+          if (Date.now() < until) { await budget().sleep(config.pollMs); continue }
+        }
+        if (current) requireOpen(current)
+        if (current && current.headRefOid !== pending.head) {
+          await git(local.checkout, "fetch", "-q", "origin", current.headRefOid, pending.head, pending.base)
+          await verifyApprovedHead(local, current.headRefOid, pending.head, pending.base)
+          if ((await command(["git", "merge-base", "--is-ancestor", pending.base, current.headRefOid], local.checkout, { allowFailure: true })).code)
+            throw new DeliveryError("UPDATED HEAD DOES NOT INCLUDE REQUESTED MAIN; needs fresh review", 2)
+          throw new DeliveryError("INTEGRATION UPDATED; needs fresh review and CI of the integrated tree", 2)
+        }
+        if (Date.now() >= until) throw branchUpdatePending()
+        await budget().sleep(config.pollMs)
       }
-      if (current) requireOpen(current)
-      if (current && current.headRefOid !== pending.head) {
-        await git(local.checkout, "fetch", "-q", "origin", current.headRefOid, pending.head, pending.base)
-        await verifyApprovedHead(local, current.headRefOid, pending.head, pending.base)
-        if ((await command(["git", "merge-base", "--is-ancestor", pending.base, current.headRefOid], local.checkout, { allowFailure: true })).code)
-          throw new DeliveryError("UPDATED HEAD DOES NOT INCLUDE REQUESTED MAIN; needs fresh review", 2)
-        throw new DeliveryError("INTEGRATION UPDATED; needs fresh review and CI of the integrated tree", 2)
-      }
-      if (Date.now() >= until) throw branchUpdatePending()
-      await budget().sleep(config.pollMs)
+    } catch (error) {
+      if (error.code === 142) throw branchUpdatePending()
+      throw error
     }
   }
   async function mergeOne(repo, pr, old, note, owners, retry = false) {
@@ -580,7 +587,9 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     let outcome
     try { outcome = pass(await prWriter(entry.repo, entry.pr, writer => mergeOne(entry.repo, entry.pr, entry.head, entry.note, [lane, writer]))) }
     catch (e) { if (e.code === 75) throw e; outcome = fail(e) }
-    await queueState(queue => {
+    // The outcome is already decided; an expired attempt budget must not
+    // discard it, so bookkeeping runs under its own bound.
+    await deadlines.run(new Deadline(config.commandTimeoutMs), () => queueState(queue => {
       const index = queue.findIndex(e => e.id === entry.id), stored = queue[index]
       stored.attempts++
       if (outcome.data.pendingUpdate || outcome.data.transient && stored.attempts < 4) {
@@ -588,7 +597,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
         queue.splice(index, 1)
         queue.push(stored)
       } else stored.outcome = outcome
-    })
+    }))
     await log({ step: "merge", repo: entry.repo, pr: entry.pr, head: entry.head, ...outcome.data })
     return { message: outcome.data.message, processed: true, outcome, code: 0 }
   }

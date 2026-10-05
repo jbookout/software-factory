@@ -14,7 +14,8 @@ const fake = `#!/usr/bin/env node
 const fs = require('node:fs'), cp = require('node:child_process');
 const args = process.argv.slice(2), file = process.env.FAKE_PR;
 const s = JSON.parse(fs.readFileSync(file));
-const save = () => fs.writeFileSync(file, JSON.stringify(s));
+// Concurrent fake calls and the test read this file; replace it atomically.
+const save = () => { const temp = file + '.' + process.pid + '.tmp'; fs.writeFileSync(temp, JSON.stringify(s)); fs.renameSync(temp, file); };
 const git = (...a) => cp.execFileSync('git', a, {encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
 s.headRefOid = git('--git-dir',s.remote,'rev-parse','refs/heads/topic');
 const tool = require('node:path').basename(process.argv[1]);
@@ -1189,4 +1190,25 @@ test('review 10: timeout exceptions are the sole delivery timeout policy', async
   const s=await f.read(); assert.equal(s.state,"OPEN"); assert.equal(s.ghCalls.filter(merges).length,0)
   assert.equal(s.ghCalls.filter(a=>a.some(v=>v.endsWith("/update-branch"))).length,1)
   assert.equal((await queueOf(f))[0].outcome,undefined)
+ })
+
+ test("attempt expiry while a branch update is pending keeps the continuous queue alive without another write", {timeout:120000}, async t => {
+  const f=await fixture(t,{pendingUpdate:"accepted"}); await f.approve(); await advanceMain(f)
+  ok(await f.run("merge-enqueue",repo,"7",f.head))
+  // Pacing outlasts the attempt: the readback sleep reaches attempt expiry.
+  await fs.writeFile(f.config,JSON.stringify({...f.cfg,attemptTimeoutMs:15000,checksTimeoutMs:15000,pollMs:60000}))
+  const child=spawn(process.execPath,[cli,f.config,"merge-queue",repo],{env:f.env,stdio:["ignore","pipe","pipe"]})
+  let stdout="",stderr="",closed=false,code
+  child.stdout.on("data",b=>stdout+=b); child.stderr.on("data",b=>stderr+=b)
+  const done=new Promise((resolve,reject)=>{child.on("error",reject);child.on("close",c=>{closed=true;code=c;resolve(c)})})
+  try {
+   const until=Date.now()+30000
+   while(!closed && (await queueOf(f))[0].attempts<1 && Date.now()<until) await pause(50)
+   await pause(500)
+   assert.equal(closed,false,`daemon exited ${code}: ${stdout} ${stderr}`)
+   const [entry]=await queueOf(f); assert.equal(entry.attempts,1,JSON.stringify(entry)); assert.equal(entry.outcome,undefined)
+   assert.match(stdout,/UPDATE-BRANCH PENDING/)
+   const s=await f.read(); assert.equal(s.state,"OPEN"); assert.equal(s.ghCalls.filter(merges).length,0)
+   assert.equal(s.ghCalls.filter(a=>a.some(v=>v.endsWith("/update-branch"))).length,1)
+  } finally { if(!closed) child.kill("SIGTERM"); await done }
  })
