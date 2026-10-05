@@ -133,6 +133,12 @@ Before/after behavior and job/evidence records.
         self.git("commit", "-qm", "changed child")
         self.assertEqual(self.scan("--base", "HEAD~1")["files_checked"], ["README.md"])
 
+    def test_relative_link_cannot_resolve_to_same_named_root_file(self):
+        self.write("guide.md", "# Root guide\n")
+        self.write("docs/README.md", "[guide](guide.md)\n")
+        self.assertEqual([(f["line"], f["target"]) for f in self.scan()["findings"]],
+                         [(1, "docs/guide.md")])
+
     def test_malformed_authority_never_reports_clean(self):
         self.write(".github/workflows/ci.yml", "jobs: [invalid\n")
         result = subprocess.run([sys.executable, str(CHECKER), '--root', str(self.root)], text=True, capture_output=True)

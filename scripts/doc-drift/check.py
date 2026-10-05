@@ -132,7 +132,7 @@ class Tree:
         choices = [self.root / raw]
         choices.extend(parent / raw for parent in (self.root / file).parents if parent.is_relative_to(self.root))
         if relative:
-            choices.reverse()
+            choices = [(self.root / file).parent / raw]
         for choice in choices:
             resolved = choice.resolve()
             if not resolved.is_relative_to(self.root):
