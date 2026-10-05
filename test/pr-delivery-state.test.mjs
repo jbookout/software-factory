@@ -5,6 +5,52 @@ import os from "node:os"
 import path from "node:path"
 import { acquireLease, withLease } from "../src/pr-delivery-state.mjs"
 
+test('review 2: release drains an in-flight binding and rejects subsequent bindings', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'factory-binding-order-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const release = await acquireLease(root, 'binding')
+  const rename = fs.rename.bind(fs)
+  let entered, resume
+  const started = new Promise(resolve => { entered = resolve })
+  const latch = new Promise(resolve => { resume = resolve })
+  t.mock.method(fs, 'rename', async (...args) => { entered(); await latch; return rename(...args) })
+  const binding = release.bindJob({ pid: process.pid, deadline: Date.now() + 1000 })
+  await started
+  const released = release()
+  resume(); await Promise.all([binding, released])
+  await assert.rejects(release.bindJob({ pid: process.pid }), /released/)
+  assert.deepEqual(await fs.readdir(path.join(root, 'binding.claims')), [])
+})
+import { createPrDeliveryAdapter } from "../src/pr-delivery.mjs"
+
+test('PR ownership admission shares the total attempt deadline',async t=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-pr-admission-'));t.after(()=>fs.rm(root,{recursive:true,force:true}))
+ const dir=path.join(root,'locks','pr-fixture%2Frepo-1.claims');await fs.mkdir(dir,{recursive:true})
+ await fs.writeFile(path.join(dir,'choosing.json'),JSON.stringify({pid:process.pid,token:'choosing',ticket:0}))
+ const adapter=createPrDeliveryAdapter({stateDir:root,repos:{'fixture/repo':{}},attemptTimeoutMs:100})
+ await assert.rejects(adapter.exclusive('fixture/repo',1,()=>assert.fail('expired admission entered its callback')),{code:142})
+ assert.deepEqual(await fs.readdir(dir),['choosing.json'])
+})
+
+test('legacy lease election remains bounded if the wall clock stops',{timeout:2000},async t=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-lease-wall-'));t.after(()=>fs.rm(root,{recursive:true,force:true}))
+ const dir=path.join(root,'slot.claims');await fs.mkdir(dir)
+ await fs.writeFile(path.join(dir,'choosing.json'),JSON.stringify({pid:process.pid,token:'choosing',ticket:0}))
+ t.mock.method(Date,'now',()=>0)
+ await assert.rejects(withLease(root,'slot',()=>assert.fail('choosing peer still owns its claim')),{code:75})
+})
+
+test('lease recovery does not kill a live job when only its wall deadline moved',async t=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-lease-clock-'));t.after(()=>fs.rm(root,{recursive:true,force:true}))
+ const release=await acquireLease(root,'slot')
+ try {
+  await release.bindJob({pid:process.pid,groupPid:123456,deadline:Date.now()-1000})
+  const signals=[];t.mock.method(process,'kill',(pid,signal)=>{signals.push(signal)})
+  assert.equal(await acquireLease(root,'slot'),null)
+  assert.equal(signals.filter(signal=>signal==='SIGKILL').length,0)
+ } finally {await release()}
+})
+
 for (const name of ["budget", "merge-owner", "queue-state"]) test(`dead ${name} and reaper recover without a second call`, async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "factory-lease-"))
   t.after(() => fs.rm(root, { recursive: true, force: true }))
