@@ -38,6 +38,10 @@ export async function loadDeliveryConfig(file) {
       if (!validRequiredChecks(local.requiredChecks)) throw new DeliveryError("config repo requiredChecks must name the expected checks", 9)
       if (local.dependencyRevision !== undefined && (typeof local.dependencyRevision !== "string" || !local.dependencyRevision.trim()))
         throw new DeliveryError("config dependencyRevision must be a nonempty owned input pin", 9)
+      if (local.reviewDecision && (!SHA.test(local.reviewDecision.policyRevision ?? "") ||
+          !/^[\w][\w/-]*\.py$/.test(local.reviewDecision.readerPath ?? "") ||
+          local.reviewDecision.readerPath.split("/").some(p => p === "..")))
+        throw new DeliveryError("config reviewDecision requires a policyRevision and repository Python readerPath", 9)
       return [repo, { ...local, checkout: absolute(local.checkout), worktreeRoot: absolute(local.worktreeRoot) }]
     })),
     limits: { runsPer24h: 8, slots: 4, timeoutMs: 4500_000, ...value.limits },
@@ -185,7 +189,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     if (!value || !["open", "closed"].includes(value.state) || !SHA.test(value.head?.sha ?? "") || !value.head?.ref || !value.base?.ref)
       throw new DeliveryError("invalid GitHub PR response", 1)
     const current = { number: value.number, title: value.title, state: value.merged ? "MERGED" : value.state.toUpperCase(),
-      baseRefName: value.base.ref, headRefName: value.head.ref, headRefOid: value.head.sha,
+      baseRefName: value.base.ref, baseRefOid: value.base.sha, headRefName: value.head.ref, headRefOid: value.head.sha,
       isCrossRepository: value.head.repo?.full_name !== value.base.repo?.full_name,
       mergeStateStatus: value.mergeable_state?.toUpperCase(), mergeable: value.mergeable === true ? "MERGEABLE" : value.mergeable === false ? "CONFLICTING" : "UNKNOWN",
       isDraft: value.draft, mergeCommit: { oid: value.merge_commit_sha } }
@@ -215,6 +219,9 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     if (pr.state !== "OPEN") throw new DeliveryError(`NOT OPEN (${pr.state}): no repair or review work`, 8)
   }
   async function latestReview(repo, pr, current) {
+    const decision = await repositoryReviewDecision(repo, pr, current)
+    if (decision?.lane === "tunable_scalar")
+      return { verdict: "APPROVE", sha: current.headRefOid, decision }
     const candidate = reviews(current).at(-1)
     if (!candidate || candidate.verdict !== "APPROVE") return candidate
     const id = /^Factory-Review: ([0-9a-f-]{36})$/m.exec(candidate.body)?.[1]
@@ -229,6 +236,37 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     if (prompt === null || output === null || digestOf(prompt) !== receipt.promptDigest || digestOf(output) !== receipt.outputDigest) return null
     if (await git(getRepo(repo).checkout, "rev-parse", `${receipt.head}^{tree}`) !== receipt.tree) return null
     return candidate
+  }
+  async function repositoryReviewDecision(repo, pr, current) {
+    const local = getRepo(repo), policy = local.reviewDecision
+    if (!policy) return null
+    if (!SHA.test(current.baseRefOid ?? "")) throw new DeliveryError("repository review base is unavailable", 9)
+    await git(local.checkout, "fetch", "-q", "origin", current.baseRefOid, current.headRefOid, policy.policyRevision)
+    const base = await git(local.checkout, "merge-base", current.baseRefOid, current.headRefOid)
+    const args = [base, current.headRefOid]
+    const diff = (await command(["git", "diff", "--binary", "--no-ext-diff", "--no-textconv", ...args], local.checkout, { mutation: false })).stdout
+    const paths = (await command(["git", "diff", "--no-ext-diff", "--name-only", "-z", ...args], local.checkout, { mutation: false })).stdout.split("\0").filter(Boolean)
+    const source = await git(local.checkout, "show", `${policy.policyRevision}:${policy.readerPath}`)
+    const result = await command(["python3", "-", "--base", base, "--head", current.headRefOid,
+      "--policy-revision", policy.policyRevision], local.checkout, { input: source, mutation: false })
+    let decision
+    try { decision = JSON.parse(result.stdout) } catch { throw new DeliveryError("invalid repository review decision", 9) }
+    if (!decision || decision.schema !== "repository-review-decision/v1" || decision.base !== base ||
+        decision.head !== current.headRefOid || decision.policy_revision !== policy.policyRevision ||
+        decision.diff_digest !== "sha256:" + digestOf(diff) || !/^sha256:[a-f0-9]{64}$/.test(decision.policy_digest ?? "") ||
+        JSON.stringify(decision.changed_paths) !== JSON.stringify(paths) || decision.required_ci !== true ||
+        ![1, 2, 3].includes(decision.tier) || !["review", "tunable_scalar"].includes(decision.lane) ||
+        decision.lane === "tunable_scalar" && (decision.tier !== 1 || !paths.length ||
+          !Array.isArray(decision.validated_fields) || !decision.validated_fields.length ||
+          decision.validated_fields.some(f => !paths.includes(f.path) || typeof f.field !== "string" ||
+            !Number.isSafeInteger(f.before) || !Number.isSafeInteger(f.after))))
+      throw new DeliveryError("repository review decision binding mismatch", 9)
+    await writeJson(path.join(config.stateDir, "review-decisions", `${keyFor(repo, pr)}-${current.headRefOid}.json`), decision)
+    return decision
+  }
+  function requireBoundedReady(current) {
+    if (current.ci.state !== "success") throw new DeliveryError("BOUNDED VALIDATION: required hosted CI must pass; no model fixer", 3)
+    if (current.mergeable !== "MERGEABLE") throw new DeliveryError("BOUNDED VALIDATION: integration needs resolution; no model fixer", 5)
   }
   async function log(event) {
     await fs.mkdir(config.stateDir, { recursive: true, mode: 0o700 })
@@ -360,6 +398,11 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     const initial = await view(repo, pr)
     requireOpen(initial)
     const current = await waitChecks(repo, pr, initial.headRefOid, true)
+    const decision = await repositoryReviewDecision(repo, pr, current)
+    if (decision?.lane === "tunable_scalar") {
+      requireBoundedReady(current)
+      return { head: current.headRefOid, verdict: "BOUNDED VALIDATED", decision }
+    }
     const local = getRepo(repo), head = current.headRefOid
     await git(local.checkout, "fetch", "-q", "origin", head)
     const attempt = randomUUID()
@@ -373,7 +416,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     const output = path.join(config.stateDir, `review-${keyFor(repo, pr)}-${attempt}.txt`)
     try {
       const prior = reviews(current).filter(r => ["REVIEW: BLOCKED", "CHANGES REQUESTED"].includes(r.verdict)).at(-1)
-      const prompt = deliveryPrompt("review", { repo, pr, head, prior })
+      const prompt = deliveryPrompt("review", { repo, pr, head, prior, decision })
       await fs.rm(output, { force: true })
       const argv = [config.codex.command ?? "codex", ...createCodexExecArgs(config.codex),
         "--sandbox", "danger-full-access", "--output-last-message", output, "-"]
@@ -406,6 +449,8 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
   async function fix(repo, pr, kind, worktree) {
     const current = await view(repo, pr)
     requireOpen(current)
+    if ((await repositoryReviewDecision(repo, pr, current))?.lane === "tunable_scalar")
+      throw new DeliveryError("BOUNDED VALIDATION: repair source explicitly and rerun required CI; no model fixer", 3)
     if (current.isCrossRepository !== false) throw new DeliveryError("fork repair is unsupported; origin is not the PR source")
     const fallback = worktree && worktree !== "-" ? path.resolve(worktree) : path.join(getRepo(repo).worktreeRoot, `fix-${pr}`)
     const cwd = await branchWorktree(repo, current.headRefName, fallback, current.headRefOid)
@@ -673,6 +718,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
               await eligible(repo, pr, current.headRefOid)
               current = await waitChecks(repo, pr, current.headRefOid, true)
               const review = await latestReview(repo, pr, current)
+              if (review?.decision?.lane === "tunable_scalar") requireBoundedReady(current)
               const approved = review?.verdict === "APPROVE" && review.sha === current.headRefOid
               const ci = current.ci
               if (ci.state === "success" && current.mergeable === "UNKNOWN") throw new DeliveryError("MERGEABILITY UNKNOWN: wait for provider observation", 75)

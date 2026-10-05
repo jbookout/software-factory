@@ -18,6 +18,23 @@ PRs targeting `main`; forks and other base branches stop before work starts.
 Keep config, worktrees, review output, and job/usage/queue records outside Git.
 Every invocation must use the same config/state directory for one serial queue.
 
+For repository-owned review routing, set that repository's optional
+`reviewDecision` to `{ "policyRevision": "<full approved commit SHA>",
+"readerPath": "lib/review_tiers.py" }`. Pin the CARR reader and policy together
+after source delivery; the factory reads the Python reader from that commit,
+never from the PR's edited files. The reader must use the standard library and
+emit `repository-review-decision/v1` for the requested base, head and policy
+revision. The factory independently binds its diff digest and changed paths,
+and retains the decision under private `review-decisions/`.
+
+CARR's named `daily_paid_call_cap` scalar allows integer changes within 0–3000
+through bounded validation with zero model review/fixer rounds. Required hosted
+CI and integration checks still apply. Invalid or stale decisions refuse
+dispatch; failed CI requires explicit source repair. Policy fields, schema,
+file modes and values above the approved range retain repository review tiers.
+Repositories without this configuration keep the existing full/confirmation
+review path. This source change does not install or edit a live configuration.
+
 All cutover steps are required:
 
 1. Set `FACTORY` to the merged factory checkout, `CONFIG` to the private JSON,
@@ -69,7 +86,9 @@ active `main` ruleset with strict required status checks that the merging
 identity cannot bypass, so GitHub itself refuses a merge after main moves; the
 delivered squash parent must equal the recorded integration base. Review uses a fresh,
 detached worktree and process; builders never post approvals. Queue approval
-attestations cannot substitute for independent review comments. Each review uses
+attestations cannot substitute for independent review comments on the review
+lane. A pinned repository decision authorizes the bounded scalar lane described
+above. Each model review uses
 a unique attempt directory; live, dirty, or interrupted attempts are preserved.
 Accepted approvals carry a `Factory-Review` reference to private execution,
 source tree, prompt, and exact reviewer output records. Keep these records in

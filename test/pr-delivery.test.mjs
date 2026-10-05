@@ -7,6 +7,16 @@ import { execFileSync, spawn } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { loadDeliveryConfig, createPrDeliveryAdapter } from "../src/pr-delivery.mjs"
 import { acquireLease, keyFor, pause } from "../src/pr-delivery-state.mjs"
+import { deliveryPrompt } from "../src/pr-delivery-prompts.mjs"
+
+test("full and confirmation reviewers require causal evidence for Jev credit",()=>{
+ for (const prior of [undefined, {sha:"a".repeat(40),body:"1. substantiate the Jev claim"}]) {
+  const prompt=deliveryPrompt("review",{repo:"fixture/repo",pr:7,head:"b".repeat(40),prior})
+  for (const evidence of ["verdict bound", "action taken because", "source/change evidence",
+                         "stated savings baseline", "causal value unproven", "name the action and measurement basis",
+                         "lower the evidence status", "never invent dollars or tokens"]) assert.ok(prompt.includes(evidence),evidence)
+ }
+})
 
 const cli = fileURLToPath(new URL("../bin/pr-delivery.mjs", import.meta.url))
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
@@ -77,7 +87,7 @@ if(tool === 'codex') {
  console.log('HTTP/2.0 200 OK\\n\\n'+s.restFault);process.exit(0); }
  const pr=()=>({number:s.number,title:s.title,state:s.state==='OPEN'?'open':'closed',merged:s.state==='MERGED',draft:s.isDraft,
  head:{sha:s.headRefOid,ref:s.headRefName,repo:{full_name:s.isCrossRepository?'fixture/fork':'fixture/new-repository'}},
- base:{ref:s.baseRefName,repo:{full_name:'fixture/new-repository'}},mergeable:s.mergeable==='UNKNOWN'?null:s.mergeable!=='CONFLICTING',mergeable_state:s.mergeStateStatus.toLowerCase(),merge_commit_sha:s.mergeCommit?.oid});
+ base:{ref:s.baseRefName,sha:git('--git-dir',s.remote,'rev-parse','refs/heads/main'),repo:{full_name:'fixture/new-repository'}},mergeable:s.mergeable==='UNKNOWN'?null:s.mergeable!=='CONFLICTING',mergeable_state:s.mergeStateStatus.toLowerCase(),merge_commit_sha:s.mergeCommit?.oid});
  if(/pulls\\/[0-9]+$/.test(route)) {
  if(s.moveDuringChecks && ++s.moveViewCount>1) {
  git('-C',s.checkout,'checkout','-q','topic');fs.writeFileSync(s.checkout+'/moved.txt','moved');git('-C',s.checkout,'add','moved.txt');git('-C',s.checkout,'commit','-qm','Move head');git('-C',s.checkout,'push','-q','origin','topic');
@@ -153,6 +163,66 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
 const repo="fixture/new-repository"
 const ok = r => assert.equal(r.code,0,JSON.stringify(r))
 const merges = a => a.includes("-X") && a.some(v=>v.endsWith("/merge"))
+
+async function repositoryDecision(f, lane = "tunable_scalar", wrongBinding = false) {
+ f.g("merge","--ff-only","topic")
+ const readerPath="lib/review_tiers.py"
+ await fs.mkdir(path.join(f.checkout,"lib"))
+ await fs.mkdir(path.join(f.checkout,"ops/config"),{recursive:true})
+ const producer=`import argparse, hashlib, json, subprocess
+p=argparse.ArgumentParser()
+for n in ('base','head','policy-revision'): p.add_argument('--'+n,required=True)
+a=p.parse_args()
+def git(*args): return subprocess.check_output(['git',*args])
+print(json.dumps({'schema':'repository-review-decision/v1','base':a.base,'head':${wrongBinding ? "'0'*40" : "a.head"},'policy_revision':a.policy_revision,'policy_digest':'sha256:'+'e'*64,'diff_digest':'sha256:'+hashlib.sha256(git('diff','--binary','--no-ext-diff','--no-textconv',a.base,a.head)).hexdigest(),'changed_paths':git('diff','--no-ext-diff','--name-only','-z',a.base,a.head).decode().split('\\0')[:-1],'lane':'${lane}','tier':${lane === "review" ? 3 : 1},'required_ci':True,'validated_fields':${lane === "review" ? "[]" : "[{'path':'ops/config/jev-cost-guard.v1.json','field':'daily_paid_call_cap','before':1500,'after':3000}]"}}))
+`
+ await fs.writeFile(path.join(f.checkout,readerPath),producer)
+ await fs.writeFile(path.join(f.checkout,"ops/config/jev-cost-guard.v1.json"),JSON.stringify({daily_paid_call_cap:1500}))
+ f.g("add",readerPath,"ops/config/jev-cost-guard.v1.json");f.g("commit","-qm","Repository review policy");f.g("push","-q","origin","main")
+ const revision=f.g("rev-parse","HEAD")
+ f.g("checkout","topic");f.g("merge","--ff-only",revision)
+ await fs.writeFile(path.join(f.checkout,"ops/config/jev-cost-guard.v1.json"),JSON.stringify({daily_paid_call_cap:3000}))
+ f.g("add","ops/config/jev-cost-guard.v1.json");f.g("commit","-qm","Budget scalar");f.g("push","-q","origin","topic");f.g("checkout","main")
+ f.cfg.repos[repo].reviewDecision={policyRevision:revision,readerPath}
+ await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ return revision
+}
+
+test("revision-bound budget-only dispatch runs required CI with zero review or fixer rounds",async t=>{
+ const f=await fixture(t),revision=await repositoryDecision(f)
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const inspect=await adapter.execute("pr:inspect",{repo,pr:7})
+ assert.equal(inspect.data.ready,true,"repository scalar validation plus required CI completes inspection")
+ ok(await f.wrapper("pr-loop",repo,"7","-","3"))
+ ok(await f.wrapper("review-pr",repo,"7"))
+ const s=await f.read()
+ assert.equal(s.calls.length,0)
+ assert.ok(s.ghCalls.some(a=>a.some(v=>v.includes('/check-runs'))))
+ const files=await fs.readdir(path.join(f.stateDir,"review-decisions"))
+ const receipt=JSON.parse(await fs.readFile(path.join(f.stateDir,"review-decisions",files[0])))
+ assert.equal(receipt.policy_revision,revision);assert.equal(receipt.head,s.headRefOid)
+ assert.match(receipt.diff_digest,/^sha256:[a-f0-9]{64}$/)
+ assert.equal(receipt.lane,"tunable_scalar");assert.equal(receipt.validated_fields[0].after,3000)
+})
+test("bounded scalar dispatch refuses failed required CI without a model fixer",async t=>{
+ const f=await fixture(t);await repositoryDecision(f)
+ const s=await f.read();s.statusCheckRollup=[{status:'COMPLETED',conclusion:'FAILURE'}]
+ await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const result=await adapter.execute("pr:inspect",{repo,pr:7})
+ assert.equal(result.data.code,3);assert.equal((await f.read()).calls.length,0)
+})
+test("stale repository review decision refuses dispatch",async t=>{
+ const f=await fixture(t);await repositoryDecision(f,"tunable_scalar",true)
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ assert.equal((await adapter.execute("pr:inspect",{repo,pr:7})).status,"fail")
+ assert.equal((await f.read()).calls.length,0)
+})
+test("repository higher-tier decision reaches the existing review",async t=>{
+ const f=await fixture(t);await repositoryDecision(f,"review")
+ ok(await f.wrapper("review-pr",repo,"7"))
+ assert.match((await f.read()).calls[0].prompt,/Repository review tier: 3/)
+})
 
 test("approve -> enqueue -> serial squash merge verifies main",async t=>{
  const f=await fixture(t);ok(await f.run("review-pr",repo,"7"));const s=await f.read()
