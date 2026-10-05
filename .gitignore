@@ -12,3 +12,6 @@ __pycache__/
 
 
 config/pr-delivery.local.json
+
+# Private leak reports and runtime receipts.
+out/

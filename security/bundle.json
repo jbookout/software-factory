@@ -1,0 +1,13 @@
+{
+  "schema": "leak-guard-bundle.v1",
+  "upstream": "jbookout/software-factory",
+  "scanner_version": "1.0.0",
+  "files": {
+    "leak_guard.py": "ba7213dcc94f15dbcf4ac0edd084eb92c96d725a7e28c0471fa112c49ec5b3ed",
+    "test_leak_guard.py": "cbc8aaaf929f0c7ffa99b90857e4fd920d35e6e8066126389ba3ea870161d396",
+    "hash_export.py": "c63c1011ed397dd8e905c7da5f00f3bd2925e342b11c70bdbb78c0015e57464f",
+    "install_hook.py": "e998c1c5739b3017161406c887a202e0d6f18b5160708af5c41da4c174175ad3",
+    "pre-push": "1f8042c119f5dafed8b524ed8e382d83adaa6c646cad8e5811549375d2a9dc33"
+  },
+  "gitleaks": "8.30.0"
+}
