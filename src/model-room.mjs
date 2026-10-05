@@ -115,8 +115,7 @@ export function verifyPinnedBuildContext(context) {
 }
 
 /** Jev may trim optional pinned context, never the required contract. */
-export async function selectOptionalBuildContext({ task, chunks = [], apiKey, fetchImpl = fetch,
-  usageLog, cacheDir }) {
+export async function selectOptionalBuildContext({ task, chunks = [], apiKey, sharedAsk }) {
   const taskText = bounded(task, MAX_TASK_CHARS)
   if (!Array.isArray(chunks) || chunks.length > MAX_OPTIONAL_CONTEXT)
     throw new Error("invalid optional build context")
@@ -136,7 +135,7 @@ export async function selectOptionalBuildContext({ task, chunks = [], apiKey, fe
   }]))
   try {
     const body = await askJev({ model: JEV_MODEL, state, questions, apiKey,
-      caller: "model-room-optional-context", fetchImpl, usageLog, cacheDir })
+      caller: "model-room-optional-context", sharedAsk })
     if (body?.model !== JEV_MODEL) return { ...hidden, reason: "invalid_answer" }
     const parsed = pinned.map((_, index) => parseChoice(body.answers?.[`context_${index}`], VISIBILITY))
     if (parsed.some(choice => !choice)) return { ...hidden, reason: "invalid_answer" }
@@ -203,8 +202,7 @@ function parseChoice(answer, keys) {
  * enough distinct, independently checked cases.
  */
 export async function routeDoctorCreBuild({ task, contracts, baseline, candidates, observations = [],
-  verifyObservation, verifyControl, minimumCases = 3, controlEnabled = false, apiKey, fetchImpl = fetch,
-  usageLog, cacheDir }) {
+  verifyObservation, verifyControl, minimumCases = 3, controlEnabled = false, apiKey, sharedAsk }) {
   const taskText = bounded(task, MAX_TASK_CHARS)
   const baselineRoute = validateRoute(baseline)
   if (!Array.isArray(contracts) || !contracts.length || !Array.isArray(candidates) ||
@@ -247,7 +245,7 @@ export async function routeDoctorCreBuild({ task, contracts, baseline, candidate
       ? `Use the existing baseline ${routeKey(baselineRoute)}.` : `Use ${key}.`])) } }
   try {
     const body = await askJev({ model: JEV_MODEL, state, questions, apiKey,
-      caller: "model-room-build-route", fetchImpl, usageLog, cacheDir })
+      caller: "model-room-build-route", sharedAsk })
     const choice = body?.model === JEV_MODEL ? parseChoice(body.answers?.preferred_route, choiceKeys) : null
     if (!choice) return { ...result, jev: { status: "unavailable", reason: "invalid_answer", model: JEV_MODEL, shadow_choice: null } }
     const chosenRoute = choiceRoutes.find(route => route.key === choice.choice)
