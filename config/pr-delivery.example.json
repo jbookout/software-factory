@@ -9,7 +9,10 @@
           "appId": 15368
         }
       ],
-      "dependencyRevision": "owned-actionable-input-revision"
+      "dependencyRevision": "owned-actionable-input-revision",
+      "trustedReviewers": [
+        "replace-with-verified-review-poster"
+      ]
     }
   },
   "stateDir": "/absolute/path/to/private/factory-delivery-state",

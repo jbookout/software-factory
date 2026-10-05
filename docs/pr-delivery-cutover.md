@@ -6,7 +6,13 @@ stays in the caller's environment/tool configuration; never put credentials in
 JSON. Copy [the example](../config/pr-delivery.example.json) to a private local
 config. It is the only repo registry: set each `checkout`, `worktreeRoot`, the
 shared `stateDir`, model, effort, limits, and holds (`repo`, `titlePattern`,
-`reason`). Each repository must also name its `requiredChecks` as
+`reason`). Include `jbookout/software-factory` with its own checkout; the example
+registry lists all three code homes. Set `trustedReviewers` to the verified
+GitHub logins used by the review poster (case-insensitive). This allowlist
+identifies whose verdicts count; approvals still need the private independent
+execution receipt. The latest trusted blocking verdict needs no approval receipt
+and defeats every older approval. Verdict order uses comment creation time and
+ID; editing an older comment cannot move it ahead of a newer block. Each repository must also name its `requiredChecks` as
 `[{ "name": "context", "appId": 15368 }]`; `appId` is optional where the
 product's policy does not bind a producer. An empty inventory refuses admission.
 Read the product's current branch rules via REST at rollout; the example's
@@ -34,7 +40,8 @@ imports, and refuses unknown/ambiguous repos or inconsistent records.
 The source directory, `merge-queue.txt`, `merge-queue.done`, and `budget/` must
 exist and be readable. Empty files and an empty budget directory represent an
 empty source; missing inputs fail before destination queue or usage writes.
-Imported review comments never authorize delivery. Run a fresh factory review
+Imported approval comments never authorize delivery. Trusted blocking comments
+remain blocking; an untrusted author cannot approve or impersonate a blocker. Run a fresh factory review
 for imported pending work so the private review evidence exists before merging.
 Move old hold patterns into the JSON before starting producers. Do not run both queues.
 The factory does not install a scheduler or take product deployment authority.
@@ -63,8 +70,12 @@ disables that for a caller already controlling rounds. Queue/auto-enqueue accept
 its own integration lease, shared by its queue consumer and direct merge-core
 calls; both also take the PR writer lease that fixers hold. Every GitHub write
 runs under the process supervisor bound to both leases, so a dead controller's
-ownership survives until its write job is gone. A behind-main head is updated,
-then stops for fresh review and CI of the integrated tree. Merging requires an
+ownership survives until its write job is gone. A behind-main head receives one
+update request. Accepted or ambiguous responses
+remain pending until a changed head proves the approved-head/main-merge relationship;
+consumer restarts reconcile the stored intent without repeating the write. Old-head
+CI is not consumed while pending. The integrated head requires fresh review
+and CI of the integrated tree. Merging requires an
 active `main` ruleset with strict required status checks that the merging
 identity cannot bypass, so GitHub itself refuses a merge after main moves; the
 delivered squash parent must equal the recorded integration base. Review uses a fresh,
@@ -73,7 +84,7 @@ attestations cannot substitute for independent review comments. Each review uses
 a unique attempt directory; live, dirty, or interrupted attempts are preserved.
 Accepted approvals carry a `Factory-Review` reference to private execution,
 source tree, prompt, and exact reviewer output records. Keep these records in
-the shared state directory. A matching GitHub author name alone proves nothing.
+the shared state directory. A matching GitHub author name alone cannot authorize delivery.
 Queue comments say `DELIVERY VERIFIED` and are outside the review protocol.
 
 Stops are observable in CLI output; process and adapter outcomes also enter
@@ -165,6 +176,67 @@ twice, respecting bounded provider delay. They never become CI-red.
 starts separately, and wait events name their cause/reset. Neither count proves
 paid model usage. The audit's weekly reduction targets require matched rollout
 cohorts; these replays do not establish fleet savings or active installation.
+
+## GitHub snapshot and verdict cutover
+
+`src/github-snapshot.mjs` owns all provider reads and REST writes. The loop,
+review, readiness, enqueue and merge entry points consume its typed
+`factory-github-snapshot/v1` result. `snapshot R N [H]` prints the complete
+read-only observation for private diagnostics; it includes public provider
+bodies, so keep its output out of public receipts. Unknown observations expose
+only sanitized errors and no usable source bindings. The types are in
+`src/github-snapshot.d.mts`.
+
+Known observations bind repository/PR, full head and base SHA/ref/repository,
+PR state/draft/mergeability, all comment/check/status pages, the named required
+inventory, fetch time and latest trusted verdict. The reader validates provider
+counts, duplicate IDs and advertised pagination links, and fences the observation
+with a second PR read and reads of the live target ref before and after collection.
+The PR response’s recorded base remains diagnostic; action checks bind the live
+target SHA. A changed source/base/state/comment count or policy is
+unknown. This is a REST observation, not an atomic provider transaction. Every
+write rechecks current preconditions; merge also sends the full head SHA as the
+provider compare-and-swap. REST cannot mark a draft ready: draft delivery refuses
+before a merge write. The orchestrator must account for that REST limitation
+when selecting candidates.
+
+There is no durable snapshot cache. Concurrent readers in one adapter coalesce
+in-flight observations; later ticks and action checks fetch mutable verdicts and
+checks again. Local review/CI predicates reuse one snapshot rather than fetching
+checks independently. Scans skip held candidates and, when the list supplies a count, PRs with no
+comment history. Approval-gated scans return an explicit `refused` snapshot for
+unapproved candidates, with checks `unobserved` and null check inventories; they
+spend no check/status calls. Refused/unknown evidence never authorizes an action
+or substitutes for a full observation.
+Private `delivery.jsonl` observation events emit `observationId`, `providerCalls`,
+`staleActions`, fetch time and sanitized errors. Deduplicate observation IDs when
+aggregating shared reads. A stale precondition event refuses the effect
+and requests another observation. Compare these counters and failed rounds on
+matched rollout cohorts; the audit's 18-to-about-10 target is a forecast, not a
+measured result of fixture tests. Cross-process snapshot caching is not provided.
+
+REST writes are not blindly retried. A lost/empty merge acknowledgement triggers
+a fresh PR read and Git ancestry/source-tree verification; an already merged
+retry verifies the same delivery and emits no second merge. A failed API body
+never supplies a Git ref.
+
+Install using the maintained `deploy/orch/` cutover above after draining current
+workers. Pin `FACTORY_ROOT` to the delivered revision and set every caller's
+`FACTORY_PR_CONFIG` to one updated private registry with the current named checks
+and verified review posters. Copy the entire wrapper set together, including
+`factory-entry.sh`; retain previous wrappers for rollback. This source change
+does not modify running `carr-system/out/orch` scripts, start workers, or change
+product deployment authority.
+
+Continuous merge queues keep polling while the PR writer or integration lane is
+owned. Contention returns transient code 75 without consuming an entry attempt;
+`--once` still exits 75. An uncertain update acknowledgement retains its saved
+intent for readback, including a supervised timeout, without another update write.
+
+Malformed attempted review envelopes from trusted authors invalidate older approval,
+including SHA-only comments and whitespace-damaged verdicts. Ordinary notes remain
+ignored. Missing local receipt source objects refuse that approval while keeping
+readiness and fresh review reachable; fresh review fetches and verifies its source.
 
 ## Deadline and child-capacity cutover
 
