@@ -404,7 +404,15 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     if(destinations.length!==1 || destinations[0]!==fetchUrl)
       throw new DeliveryError("repair push destination differs from bound origin",9)
     record.pushDestination=destinations[0]
-    return (await git(cwd,"ls-remote","--heads",record.pushDestination,`refs/heads/${record.branch}`)).split(/\s+/)[0]
+    const transport=repairTransport(record.pushDestination)
+    return (await git(cwd,...transport.options,"ls-remote","--heads",transport.remote,`refs/heads/${record.branch}`)).split(/\s+/)[0]
+  }
+  function repairTransport(destination) {
+    const remote=`factory-repair-${randomUUID()}`,alias=`${remote}:`
+    // Git expands this exact alias once. Explicit pushurl skips pushInsteadOf;
+    // neither observation nor push feeds the expanded URL back through rewrites.
+    return {remote,options:["-c",`url.${destination}.insteadOf=${alias}`,
+      "-c",`remote.${remote}.url=${alias}`,"-c",`remote.${remote}.pushurl=${alias}`]}
   }
   async function repairObservation(repo,pr,record,heads) {
     const current=await view(repo,pr)
@@ -479,9 +487,8 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     await repairObservation(repo,pr,record,[remoteHead])
     await persist("push_pending")
     if(remoteHead!==record.head) {
-      // Use the single observed effective destination literally. A later config
-      // edit cannot redirect this publication or add another recipient.
-      await command(["git","push",record.pushDestination,`${record.head}:refs/heads/${record.branch}`],cwd,
+      const transport=repairTransport(record.pushDestination)
+      await command(["git",...transport.options,"push",transport.remote,`${record.head}:refs/heads/${record.branch}`],cwd,
         {onSpawn:async(job,signal)=>{const owner=prLeases.get(keyFor(repo,pr));return owner?[await owner.bindJob(job,signal)]:[]}})
     }
     record.remoteHead=await repairRemote(repo,record)

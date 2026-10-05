@@ -1448,6 +1448,23 @@ for(const multiple of [false,true]) test(`blocking 5: effective push destination
  assert.equal(git(f.root,'--git-dir',other,'rev-parse','refs/heads/topic'),f.head)
 })
 
+for(const rewrite of ['pushInsteadOf','insteadOf']) test(`blocking 5: publication never re-expands the bound destination (${rewrite})`,async t=>{
+ const f=await fixture(t),other=path.join(f.root,'other.git')
+ git(f.root,'clone','--bare','--quiet',f.remote,other)
+ f.g('config','remote.origin.url','confirm-alias:')
+ f.g('config',`url.${f.remote}.insteadOf`,'confirm-alias:')
+ f.g('config',`url.${f.remote}.pushInsteadOf`,'confirm-alias:')
+ f.g('config',`url.${other}.${rewrite}`,f.remote)
+ assert.equal(f.g('remote','get-url','origin'),f.remote)
+ assert.equal(f.g('remote','get-url','--push','--all','origin'),f.remote)
+ const result=await f.run('fix-pr',repo,'7','-')
+ assert.equal(git(f.root,'--git-dir',other,'rev-parse','refs/heads/topic'),f.head,'unbound repository must receive no publication')
+ ok(result)
+ const record=await currentRepair(f)
+ assert.equal(record.status,'delivered');assert.equal(record.pushDestination,f.remote)
+ assert.equal(remoteTopic(f),record.testedHead)
+})
+
 test('blocking 6: closed PR after checks refuses publication and delivery',async t=>{
  const f=await fixture(t,{builderNoPush:true})
  f.cfg.repos[repo].checks=[[process.execPath,'-e',`const fs=require('fs'),p=${JSON.stringify(f.env.FAKE_PR)};const s=JSON.parse(fs.readFileSync(p));s.state='CLOSED';fs.writeFileSync(p,JSON.stringify(s));`]]

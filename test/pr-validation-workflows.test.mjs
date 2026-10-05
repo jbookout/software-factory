@@ -57,6 +57,18 @@ function replay(source, events) {
 }
 for (const file of files) {
   const source = read(file);
+  test(`${file}: full validation fits setup plus a representative full suite`, () => {
+    const job = parse(source).jobs.test;
+    const install = job.steps.find(step => step.run === "npm ci");
+    const suite = job.steps.find(step => step.run === "npm test");
+    // A foreground local run took 36 minutes. Round the representative workload
+    // up to 40, and reserve five more minutes for Python validation and audit.
+    const suiteMinutes = 40, remainingValidationMinutes = 5;
+    assert.ok((suite['timeout-minutes'] ?? job['timeout-minutes']) >= suiteMinutes,
+      'npm tests must finish before the step or job deadline cancels them');
+    assert.ok(job['timeout-minutes'] >= install['timeout-minutes'] + suiteMinutes + remainingValidationMinutes,
+      'job deadline must leave time for installation, the full suite and subsequent validation');
+  });
   test(`${file}: required context identity is retained`, () => {
     assert.deepEqual(policy(source, context()).jobs, ["test", "e2e-deterministic-qualification"]);
   });
