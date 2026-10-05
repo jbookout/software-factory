@@ -157,3 +157,13 @@ export async function acceptEvidence({ phase, kind, criterionId, binding, record
   const result = failed.length ? "failed" : blocked.length ? "blocked" : "passed"
   return { result, reasons: [...failed, ...blocked], artifacts }
 }
+
+// Effect identity binds semantic input; retries keep the same explicit attempt.
+export function deliveryEffectId({ repo, pr, head, action, attempt = 1, policy = "pr-delivery/v1" }) {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo ?? "") ||
+      repo.split("/").some(part => part === "." || part === "..") ||
+      !Number.isSafeInteger(pr) || pr <= 0 || !/^[0-9a-f]{40}$/.test(head ?? "") ||
+      typeof action !== "string" || !action || !Number.isSafeInteger(attempt) || attempt <= 0 ||
+      typeof policy !== "string" || !policy) throw Error("invalid delivery effect binding")
+  return digestOf(JSON.stringify([repo, pr, head, action, policy, attempt]))
+}

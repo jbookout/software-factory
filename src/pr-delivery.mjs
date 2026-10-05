@@ -8,17 +8,20 @@ import { runProcess, validateProcessRequest } from "./process-runner.mjs"
 import { createCodexExecArgs } from "./codex-build.mjs"
 import { normalizeResult } from "./adapters.mjs"
 import { deliveryPrompt } from "./pr-delivery-prompts.mjs"
+import { deliveryEffectId } from "./evidence.mjs"
 import { validRequiredChecks } from "./pr-readiness.mjs"
 import { createGithubProvider, parseReview } from "./github-snapshot.mjs"
-import { DeliveryError, keyFor, readJson, writeJson, withLease, reserveCodex, deliveryWait, completeDeliveryWait } from "./pr-delivery-state.mjs"
+import { DeliveryError, keyFor, readJson, writeJson, withLease, reserveCodex, deliveryWait, completeDeliveryWait, orphanLeaseCount } from "./pr-delivery-state.mjs"
 
 const SHA = /^[0-9a-f]{40}$/
 const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 const digestOf = value => createHash("sha256").update(value).digest("hex")
+const effectIdentity = (repo, pr, head, action, fields) => deliveryEffectId({ repo, pr, head, action: `${action}:${digestOf(JSON.stringify(fields))}` })
 const pass = data => normalizeResult({ status: "pass", data }, "delivery")
 const fail = error => normalizeResult({ status: "fail",
   data: { code: Number.isInteger(error.code) ? error.code : 1, message: error.message, transient: error.transient ?? false,
     ...(error.observation ?? {}),
+    ...(error.cancelled ? { cancelled: true, nextAction: "none" } : {}),
     ...(error.pendingUpdate ? { pendingUpdate: true } : {}),
     ...(error.phase ? { phase: error.phase, nextAction: error.nextAction } : {}),
     ...(error.uncertain ? { uncertain: true, nextAction: "readback-before-retry" } : {}),
@@ -71,9 +74,10 @@ export async function loadDeliveryConfig(file) {
   return config
 }
 
-export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
+export function createPrDeliveryAdapter(config, { env = process.env, onTransition = async () => {} } = {}) {
   const locks = path.join(config.stateDir, "locks"), queueFile = path.join(config.stateDir, "queue.json")
   const prLeases = new Map()
+  const cancelFile = path.join(config.stateDir, "cancellations.json")
   const deadlines = new AsyncLocalStorage()
   const inAttempt = fn => deadlines.getStore() ? fn() : deadlines.run(new Deadline(config.attemptTimeoutMs), fn)
   const budget = () => deadlines.getStore()
@@ -146,7 +150,8 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     return current
   }
   async function postComment(repo, pr, body) {
-    const { value, ok } = await provider.mutate(repo, "POST", `issues/${pr}/comments`, { body }, [prLeases.get(keyFor(repo, pr))].filter(Boolean))
+    const head = /^Reviewed-SHA: ([0-9a-f]{40})$/m.exec(body)?.[1] ?? (await view(repo, pr)).headRefOid
+    const { value, ok } = await mutation(repo, pr, head, "comment", { body }, [prLeases.get(keyFor(repo, pr))].filter(Boolean))
     if (!ok || !Number.isSafeInteger(value?.id) || value.id <= 0 || value.body !== body)
       throw new DeliveryError("GitHub comment acknowledgement missing", 1)
   }
@@ -249,6 +254,9 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     validateProcessRequest(argv, config.limits.timeoutMs)
     head ??= (await view(repo, pr)).headRefOid
     await eligible(repo, pr, head)
+    await requireNotCancelled(repo, pr, head)
+    const attemptId = randomUUID()
+    const effectId = deliveryEffectId({ repo, pr, head, action: kind + ":" + attemptId })
     let release, compute, mutationPending = false
     try {
       if (!config.resources) throw new DeliveryError("resource configuration required before child admission", 9)
@@ -256,12 +264,14 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       await measured("queue", repo, pr, async () => {
         compute = await reserveCompute(config,
           config.resources.agentUnits + config.resources.browserConcurrency, queue, { agentUnits: config.resources.agentUnits })
-        release = await reserveCodex(config, repo, pr, kind, queue)
+        release = await reserveCodex(config, repo, pr, kind, queue, { beforeAdmission: () => requireNotCancelled(repo, pr, head), identity: { attemptId, effectId, head } })
       })
+      await requireNotCancelled(repo, pr, head)
       const admitted = await view(repo, pr)
       requireOpen(admitted)
       if (admitted.headRefOid !== head) throw new DeliveryError("SUPERSEDED: HEAD MOVED before child dispatch; observe current head", 1)
-      await log({ repo, pr, step: kind, status: "started" })
+      await log({ repo, pr, head, step: kind, status: "started", attemptId: release.attemptId,
+        effectId })
       const digest = createHash("sha256")
       // Persist before launch: if the controller disappears there is no final
       // callback to write uncertainty. A completed child retires this marker.
@@ -274,6 +284,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       const runBudget = budget().phaseBudget("execution", config.limits.timeoutMs)
       const result = await measured("execution", repo, pr, () => deadlines.run(runBudget, () => command(argv, cwd, { input, timeoutMs: config.limits.timeoutMs, allowFailure: true,
         mutation: kind !== "review", captureOutput: false, onOutput: chunk => digest.update(chunk), onSpawn: async (job, signal) => {
+          await requireNotCancelled(repo, pr, head)
           const bindings = [await release.bindJob(job, signal), ...await compute.bindJob(job, signal)]
           const prLease = prLeases.get(keyFor(repo, pr))
           if (prLease) bindings.push(await prLease.bindJob(job, signal))
@@ -376,30 +387,133 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
   async function queueState(fn) {
     return withLease(locks, "queue-state", async () => {
       const queue = await readJson(queueFile, [])
+      if (!Array.isArray(queue)) throw new DeliveryError("invalid queue journal", 9)
+      for (const entry of queue) {
+        if (!config.repos[entry.repo] || !Number.isSafeInteger(entry.pr) || entry.pr <= 0 || !SHA.test(entry.head) || !entry.id)
+          throw new DeliveryError("invalid queue job binding", 9)
+        entry.state ??= entry.outcome ? "acknowledged" : "pending"
+        if (!["pending", "claimed", "effect-requested", "reconciled", "acknowledged"].includes(entry.state))
+          throw new DeliveryError("invalid queue transition", 9)
+        if (["claimed", "effect-requested", "reconciled"].includes(entry.state) &&
+            (typeof entry.attemptId !== "string" || !/^[0-9a-f]{64}$/.test(entry.effectId ?? "")))
+          throw new DeliveryError("unbound queue claim", 9)
+        if (["reconciled", "acknowledged"].includes(entry.state) && !["pass", "fail"].includes(entry.outcome?.status))
+          throw new DeliveryError("missing queue outcome", 9)
+      }
       const result = await fn(queue)
       await writeJson(queueFile, queue)
       return result
     }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget: budget() })
   }
+  const cancellationKey = (repo, pr, head) => deliveryEffectId({ repo, pr, head, action: "cancel" })
+  async function cancelled(repo, pr, head) {
+    return Boolean((await readJson(cancelFile, {}))[cancellationKey(repo, pr, head)])
+  }
+  async function requireNotCancelled(repo, pr, head) {
+    if (await cancelled(repo, pr, head)) {
+      const error = new DeliveryError("QUEUED WORK CANCELLED", 130)
+      error.cancelled = true
+      throw error
+    }
+  }
+  async function cancelQueued(repo, pr, head) {
+    const key = cancellationKey(repo, pr, head)
+    // The tombstone is authoritative if publication of the projection fails.
+    await withLease(locks, "queue-state", async () => {
+      const cancellations = await readJson(cancelFile, {})
+      cancellations[key] = { repo, pr, head, at: Date.now() }
+      await writeJson(cancelFile, cancellations)
+    }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget: budget() })
+    await queueState(queue => {
+      for (const entry of queue.filter(e => e.repo === repo && e.pr === pr && e.head === head && e.state === "pending")) {
+        entry.state = "acknowledged"
+        entry.outcome = pass({ message: "QUEUED WORK CANCELLED", cancelled: true })
+      }
+    })
+    return { message: "QUEUED WORK CANCELLED", cancelled: true }
+  }
   async function enqueue(repo, pr, head, note = "", mode = "manual") {
     getRepo(repo)
     if (!SHA.test(head)) throw new DeliveryError("approved SHA must be a full commit SHA")
+    if (await cancelled(repo, pr, head)) return { message: "QUEUED WORK CANCELLED", enqueued: false }
+    if (mode !== "import") {
+      const current = await view(repo, pr)
+      requireOpen(current)
+      if (current.headRefOid !== head || current.review?.verdict !== "APPROVE" || current.review.sha !== head ||
+          current.ci.state !== "success" || current.mergeable !== "MERGEABLE" || current.isDraft)
+        throw new DeliveryError("enqueue preconditions not satisfied", 4)
+    }
     return queueState(async queue => {
-      if (mode !== "import") {
-        const current = await view(repo, pr)
-        requireOpen(current)
-        if (current.headRefOid !== head || current.review?.verdict !== "APPROVE" || current.review.sha !== head ||
-            current.ci.state !== "success" || current.mergeable !== "MERGEABLE" || current.isDraft)
-          throw new DeliveryError("enqueue preconditions not satisfied", 4)
-      }
+      if (await cancelled(repo, pr, head)) return { message: "QUEUED WORK CANCELLED", enqueued: false }
       const prior = queue.filter(e => e.repo === repo && e.pr === pr && e.head === head)
-      if (mode !== "manual" && (prior.some(e => mode === "import" || !e.outcome || e.outcome.status === "pass") ||
-          prior.filter(e => (e.createdAt ?? 0) >= Date.now() - 86400_000).length >= config.queueRunsPer24h))
+      if (prior.some(e => mode === "import" || e.state !== "acknowledged" || e.outcome?.status === "pass") ||
+          mode !== "manual" && prior.filter(e => (e.createdAt ?? 0) >= Date.now() - 86400_000).length >= config.queueRunsPer24h)
         return { message: `ALREADY QUEUED or RETRY LIMIT ${repo}#${pr} ${head}`, enqueued: false }
       queue.push({ id: randomUUID(), repo, pr, head, note: note.replaceAll("\n", " "), attempts: 0,
-        availableAt: 0, createdAt: Date.now(), recoveryOf: prior.at(-1)?.id ?? null })
+        state: "pending", effectAttempt: prior.length + 1, availableAt: 0, createdAt: Date.now(), recoveryOf: prior.at(-1)?.id ?? null })
+      // Old pending heads cannot start after a newer candidate is offered.
+      for (const entry of queue.filter(e => e.repo === repo && e.pr === pr && e.head !== head && e.state === "pending")) {
+        entry.state = "acknowledged"
+        entry.outcome = pass({ message: "SUPERSEDED queued head", cancelled: true })
+      }
       return { message: `QUEUED ${repo}#${pr} ${head}`, enqueued: true }
     })
+  }
+  async function queueTransition(id, state, fields = {}) {
+    const entry = await queueState(queue => {
+      const stored = queue.find(e => e.id === id)
+      if (!stored) throw new DeliveryError("queue claim disappeared", 9)
+      Object.assign(stored, fields, { state })
+      return structuredClone(stored)
+    })
+    await onTransition(state, entry)
+    return entry
+  }
+  // A durable intent is never resent on missing acknowledgement. Provider state
+  // must reconcile it first; confirmed refusals may be retried with a new attempt.
+  async function mutation(repo, pr, head, action, fields, owners, reconcileOnly = false) {
+    const id = effectIdentity(repo, pr, head, action, fields)
+    const file = path.join(config.stateDir, "effects", `${id}.json`)
+    return withLease(locks, `effect-${id}`, async () => {
+      let record = await readJson(file, null)
+      if (record && (record.schema !== "factory-effect/v1" || record.id !== id || record.repo !== repo || record.pr !== pr ||
+          record.head !== head || record.action !== action || !Number.isSafeInteger(record.attempt) || record.attempt <= 0 ||
+          !/^[0-9a-f-]{36}$/.test(record.attemptId ?? "") || !["effect-requested", "acknowledged", "refused"].includes(record.state)))
+        throw new DeliveryError("invalid persisted effect binding", 9)
+      const reconcile = async () => {
+        const current = await view(repo, pr)
+        if (action === "comment") {
+          const match = current.comments.find(c => c.body === fields.body && getRepo(repo).trustedReviewers.some(login => login.toLowerCase() === c.user.login.toLowerCase()))
+          if (match) return { ok: true, status: 201, value: { id: match.id, body: fields.body } }
+        } else if (action === "merge" && current.state === "MERGED") {
+          return { ok: true, status: 200, value: { merged: true, sha: current.mergeCommit.oid } }
+        }
+        const error = new DeliveryError("EFFECT OUTCOME UNKNOWN: reconcile provider before retry", 6, true)
+        error.uncertain = true
+        throw error
+      }
+      const acknowledge = async result => {
+        // Persist only provider identity and typed outcome, never raw errors/body.
+        await writeJson(file, { ...record, state: "acknowledged", status: result.status,
+          providerId: result.value?.id ?? result.value?.sha ?? null })
+        return result
+      }
+      if (record && (record.state !== "refused" || reconcileOnly)) return acknowledge(await reconcile())
+      if (reconcileOnly) throw new DeliveryError("missing effect reconciliation intent", 9)
+      await requireNotCancelled(repo, pr, head)
+      record = { schema: "factory-effect/v1", id, repo, pr, head, action,
+        attemptId: randomUUID(), attempt: (record?.attempt ?? 0) + 1, state: "effect-requested" }
+      await writeJson(file, record)
+      await onTransition(`provider:${action}:requested`, record)
+      const route = action === "comment" ? `issues/${pr}/comments` : `pulls/${pr}/merge`
+      const result = await provider.mutate(repo, action === "comment" ? "POST" : "PUT", route, fields, owners)
+      await onTransition(`provider:${action}:returned`, record)
+      if (result.ok && (action === "comment" ? Number.isSafeInteger(result.value?.id) && result.value.id > 0 && result.value.body === fields.body
+          : result.value?.merged === true && SHA.test(result.value.sha ?? ""))) return acknowledge(result)
+      if (result.transient || result.ok) return acknowledge(await reconcile())
+      await writeJson(file, { ...record, state: "refused", status: result.status })
+      return result
+    }, { budget: budget() })
   }
   async function verifyApprovedHead(local, head, old, main = "origin/main") {
     let cursor = head, hops = 0
@@ -497,7 +611,13 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     const pending = await pendingUpdate(repo, pr, old)
     if (pending) return reconcileUpdate(repo, pr, pending)
     let current = await view(repo, pr)
-    if (current.state === "MERGED") return verifyDelivery(repo, pr, current, old, await integrationBase(repo, pr, old))
+    if (current.state === "MERGED") {
+      const delivered = await verifyDelivery(repo, pr, current, old, await integrationBase(repo, pr, old))
+      const id = effectIdentity(repo, pr, current.headRefOid, "merge", { merge_method: "squash", sha: current.headRefOid })
+      if (await readJson(path.join(config.stateDir, "effects", `${id}.json`), null))
+        await mutation(repo, pr, current.headRefOid, "merge", { merge_method: "squash", sha: current.headRefOid }, owners, true)
+      return delivered
+    }
     if (current.state !== "OPEN") throw new DeliveryError(`${repo}#${pr} NOT OPEN (${current.state})`, 8)
     if (current.isDraft) throw new DeliveryError("DRAFT: integration requires a published candidate", 8)
     if (current.review?.verdict !== "APPROVE" || current.review.sha !== old)
@@ -513,7 +633,9 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       requireOpen(current)
       if (current.review?.verdict !== "APPROVE" || current.review.sha !== old || current.isDraft)
         throw new DeliveryError("update-branch preconditions changed", 4)
-      const pending = { schema: "factory-branch-update/v1", repo, pr, head: current.headRefOid, base: current.base.sha }
+      await requireNotCancelled(repo, pr, old)
+      const pending = { schema: "factory-branch-update/v1", repo, pr, head: current.headRefOid, base: current.base.sha,
+        attemptId: randomUUID(), effectId: deliveryEffectId({ repo, pr, head: old, action: "update-branch:" + current.base.sha }) }
       // Persist intent before sending once. Accepted and ambiguous writes both
       // reconcile this intent, including after a controller restart.
       await writeJson(updateRecord(repo, pr, old), pending)
@@ -545,7 +667,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     if (await git(local.checkout, "rev-parse", "origin/main") !== base)
       throw new DeliveryError("INTEGRATION BASE MOVED; needs fresh integration, review and CI", 2)
     await writeJson(integrationRecord(repo, pr, head), { schema: "factory-integration/v1", repo, pr, head, base })
-    const evidence = await provider.mutate(repo, "POST", `issues/${pr}/comments`, { body: `DELIVERY VERIFIED\nSource-SHA: ${head}\nIntegration-Base: ${base}\n\nExact integrated head, independent review and hosted checks verified. ${note}` }, owners)
+    const evidence = await mutation(repo, pr, head, "comment", { body: `DELIVERY VERIFIED\nSource-SHA: ${head}\nIntegration-Base: ${base}\n\nExact integrated head, independent review and hosted checks verified. ${note}` }, owners)
     if (!evidence.ok) throw new DeliveryError("DELIVERY EVIDENCE REFUSED" + (evidence.transient ? ": transient service error" : ""), 6, evidence.transient)
     // The reviewed source and all mutable predicates are checked again after
     // publishing evidence. REST's sha field is the provider's final head CAS.
@@ -555,7 +677,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       await log({ step: "precondition", repo, pr, staleActions: 1, nextAction: "observe-current-checks-and-review" })
       throw new DeliveryError("MERGE PRECONDITIONS CHANGED: observe current draft, checks and review", 4)
     }
-    const result = await provider.mutate(repo, "PUT", `pulls/${pr}/merge`, { merge_method: "squash", sha: head }, owners)
+    const result = await mutation(repo, pr, head, "merge", { merge_method: "squash", sha: head }, owners)
     if (!result.ok) {
       if (result.transient) {
         const after = await view(repo, pr)
@@ -582,24 +704,58 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
   const integrationLane = (repo, fn) => withLease(locks, `merge-${encodeURIComponent(repo)}`, fn, { budget: budget() })
   const prWriter = (repo, pr, fn) => withLease(locks, `pr-${keyFor(repo, pr)}`, fn, { budget: budget() })
   async function consumeQueue(repo, lane) {
-    const entry = await queueState(queue => queue.find(e => e.repo === repo && !e.outcome && e.availableAt <= Date.now()))
+    const entry = await queueState(queue => queue.find(e => e.repo === repo && e.state !== "acknowledged" && e.availableAt <= Date.now()))
     if (!entry) return { message: "QUEUE IDLE", idle: true }
-    let outcome
-    try { outcome = pass(await prWriter(entry.repo, entry.pr, writer => mergeOne(entry.repo, entry.pr, entry.head, entry.note, [lane, writer]))) }
-    catch (e) { if (e.code === 75) throw e; outcome = fail(e) }
-    // The outcome is already decided; an expired attempt budget must not
-    // discard it, so bookkeeping runs under its own bound.
-    await deadlines.run(new Deadline(config.commandTimeoutMs), () => queueState(queue => {
-      const index = queue.findIndex(e => e.id === entry.id), stored = queue[index]
-      stored.attempts++
-      if (outcome.data.pendingUpdate || outcome.data.transient && stored.attempts < 4) {
-        stored.availableAt = Date.now() + config.retryMs
-        queue.splice(index, 1)
-        queue.push(stored)
-      } else stored.outcome = outcome
-    }))
-    await log({ step: "merge", repo: entry.repo, pr: entry.pr, head: entry.head, ...outcome.data })
-    return { message: outcome.data.message, processed: true, outcome, code: 0 }
+    return prWriter(entry.repo, entry.pr, async writer => {
+      let stored = await queueState(queue => structuredClone(queue.find(e => e.id === entry.id)))
+      if (stored.state === "acknowledged") return { message: stored.outcome.data.message, processed: true }
+      if (stored.state === "pending") {
+        if (await cancelled(repo, stored.pr, stored.head)) {
+          await cancelQueued(repo, stored.pr, stored.head)
+          return { message: "QUEUED WORK CANCELLED", processed: true }
+        }
+        stored = await queueTransition(entry.id, "claimed", { owner: process.pid, attemptId: randomUUID(),
+          effectId: deliveryEffectId({ repo, pr: entry.pr, head: entry.head, action: "queue-merge", attempt: entry.effectAttempt ?? 1 }) })
+      }
+      stored = await queueState(queue => {
+        const owned = queue.find(e => e.id === entry.id); owned.owner = process.pid; return structuredClone(owned)
+      })
+      let outcome = stored.outcome
+      if (stored.state !== "reconciled") {
+        if (stored.state === "claimed") stored = await queueTransition(entry.id, "effect-requested")
+        try { outcome = pass(await mergeOne(entry.repo, entry.pr, entry.head, entry.note, [lane, writer])) }
+        catch (e) {
+          if (e.cancelled) outcome = pass({ message: "QUEUED WORK CANCELLED", cancelled: true })
+          else outcome = fail(e)
+        }
+        await deadlines.run(new Deadline(config.commandTimeoutMs), async () => {
+          if (outcome.data.pendingUpdate || outcome.data.uncertain || outcome.data.transient && stored.attempts < 3 || outcome.data.code === 75) {
+            await queueTransition(entry.id, "effect-requested", { attempts: stored.attempts + 1, availableAt: Date.now() + config.retryMs,
+              owner: null, lastResult: outcome, nextAction: "reconcile-provider" })
+          } else {
+            stored = await queueTransition(entry.id, "reconciled", { attempts: stored.attempts + 1, outcome })
+          }
+        })
+        if (stored.state !== "reconciled") return { message: outcome.data.message, processed: true, outcome, code: 0 }
+      }
+      await deadlines.run(new Deadline(config.commandTimeoutMs), () => queueTransition(entry.id, "acknowledged", { owner: null, nextAction: "none" }))
+      await log({ step: "merge", repo: entry.repo, pr: entry.pr, head: entry.head, attemptId: stored.attemptId, effectId: stored.effectId, ...outcome.data })
+      return { message: outcome.data.message, processed: true, outcome, code: 0 }
+    })
+  }
+  async function queueSummary() {
+    return queueState(async queue => {
+      const pending = queue.filter(e => e.state === "pending").length
+      const terminal = queue.filter(e => e.state === "acknowledged").length
+      const owned = queue.length - pending - terminal
+      const effectIds = queue.map(e => e.effectId).filter(Boolean)
+      const orphanLeases = await orphanLeaseCount(locks, { recover: true, budget: budget() })
+      return { offered: queue.length, pending, owned, terminal,
+        orphanLeases,
+        duplicateEffectIds: effectIds.length - new Set(effectIds).size,
+        nextAction: effectIds.length !== new Set(effectIds).size ? "stop-and-reconcile-duplicate-effects"
+          : orphanLeases ? "wait-for-supervised-child-or-recover-lease" : owned ? "reconcile-provider" : "consume-pending" }
+    })
   }
   async function autoEnqueue() {
     let count = 0
@@ -718,6 +874,8 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
             case "fix": case "ci-fix": data = await fix(repo, pr, step, worktree); break
             case "branch-wt": data = { worktree: await branchWorktree(repo, request.branch, request.fallback) }; break
             case "codex-guard": data = await guarded(repo, pr, request.kind, request.argv, getRepo(repo).checkout, ""); break
+            case "queue-cancel": data = await cancelQueued(repo, pr, head); break
+            case "queue-status": data = await queueSummary(); break
             case "enqueue": data = await enqueue(repo, pr, head, note); break
             case "auto-enqueue": data = await autoEnqueue(); break
             case "import-legacy": data = await importLegacy(request.root); break

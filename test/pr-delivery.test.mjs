@@ -46,13 +46,15 @@ if(tool === 'codex') {
  const fault=s.writeFaults?.[name]?.shift();save();
  if(s.pauseWrite===name) {fs.writeFileSync(s.pauseMarker,String(process.pid));Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,3000);}
  if(fault==='no-response') process.exit(1);
- if(typeof fault==='number') reply(fault,{message:'synthetic'});
+ if(fault==='exception') {console.error(s.writeErrorMessage??'synthetic');process.exit(2);}
+ if(['empty','partial'].includes(fault)) {console.log('HTTP/2.0 200 OK\\n\\n'+(fault==='partial'?'{\"id\":':''));process.exit(0);}
+ if(typeof fault==='number') reply(fault,{message:s.writeErrorMessage??'synthetic'});
  const topicHasMain=()=>{try{git('--git-dir',s.remote,'merge-base','--is-ancestor','refs/heads/main','refs/heads/topic');return true}catch{return false}};
  if(name==='comments') {
  s.comments.push({body:body.body,pr:Number(route.split('/')[4]),author:{login:'reviewer'}});
  if(s.blockBeforeMerge&&body.body.startsWith('DELIVERY VERIFIED')) s.comments.push({body:'REVIEW: BLOCKED\\nReviewed-SHA: '+s.headRefOid,author:{login:'reviewer'}});
  if(s.advanceMainOnComment&&body.body.startsWith('DELIVERY VERIFIED')) {git('-C',s.checkout,'checkout','-q','main');fs.writeFileSync(s.checkout+'/late-main.txt','late');git('-C',s.checkout,'add','late-main.txt');git('-C',s.checkout,'commit','-qm','Late main');git('-C',s.checkout,'push','-q','origin','main');s.advanceMainOnComment=false;}
- save();reply(201,{id:s.comments.length,body:body.body});
+ save();if(s.lostCommentReply&&body.body.startsWith('DELIVERY VERIFIED'))reply(502,{});reply(201,{id:s.comments.length,body:body.body});
  } else if(name==='update-branch') {
  if(s.pendingUpdate) {s.updatePending=true;s.pendingReads=0;save();reply(s.pendingUpdate==='lost'?502:202,{message:'Updating pull request branch.'});}
  if(body.expected_head_sha!==s.headRefOid) reply(422,{message:'expected head sha mismatch'});
@@ -149,12 +151,12 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
  const run=(...args)=>launch(process.execPath,[cli,config,...args])
  const wrapper=(name,...args)=>launch("sh",[fileURLToPath(new URL(`../deploy/orch/${name}.sh`,import.meta.url)),...args],
    {...env,FACTORY_ROOT:fileURLToPath(new URL("../",import.meta.url)),FACTORY_PR_CONFIG:config})
- const approve=async (body,number=7)=>{
+ const approve=async (body,number=7,setupTimeoutMs=5000)=>{
   if(body) { const s=await read();s.comments.push({body,author:{login:"reviewer"}});await fs.writeFile(env.FAKE_PR,JSON.stringify(s));
    return }
   const before=await read(), apiFailure=before.apiFailure, move=before.moveDuringChecks;before.apiFailure=false;before.moveDuringChecks=false;await fs.writeFile(env.FAKE_PR,JSON.stringify(before))
   // The short readiness deadline is the property under test, not approval setup.
-  await fs.writeFile(config,JSON.stringify({...cfg,checksTimeoutMs:5000}))
+  await fs.writeFile(config,JSON.stringify({...cfg,checksTimeoutMs:setupTimeoutMs}))
   const r=await run("review-pr","fixture/new-repository",String(number))
   await fs.writeFile(config,JSON.stringify(cfg));assert.equal(r.code,0,JSON.stringify(r))
   const s=await read();s.apiFailure=apiFailure;s.moveDuringChecks=move;s.moveViewCount=0;s.calls=[];s.ghCalls=[];await fs.writeFile(env.FAKE_PR,JSON.stringify(s))
@@ -1212,3 +1214,120 @@ test('review 10: timeout exceptions are the sole delivery timeout policy', async
    assert.equal(s.ghCalls.filter(a=>a.some(v=>v.endsWith("/update-branch"))).length,1)
   } finally { if(!closed) child.kill("SIGTERM"); await done }
  })
+
+// Crash/restore replays exercise state, not five-second host scheduling. Keep
+// bounded setup/transport clocks large enough for concurrent builder load.
+const queueFixture = (t, overrides = {}) => fixture(t, overrides, {
+ apiTimeoutMs:30000,commandTimeoutMs:30000,checksTimeoutMs:30000,attemptTimeoutMs:180000,
+ limits:{runsPer24h:8,slots:2,timeoutMs:30000}
+})
+// Item 12 acceptance replays cross the deployed CLI and real file/provider adapters.
+test('fix12: duplicate manual offers are one logical pending job', async t => {
+ const f=await queueFixture(t);await f.approve(undefined,7,30000)
+ ok(await f.run('merge-enqueue',repo,'7',f.head));ok(await f.run('merge-enqueue',repo,'7',f.head))
+ assert.equal((await queueOf(f)).length,1)
+})
+for(const transition of ['claimed','effect-requested','reconciled','acknowledged']) test(`fix12: kill after ${transition} recovers one logical job/effect`,async t=>{
+ const f=await queueFixture(t);await f.approve(undefined,7,30000);ok(await f.run('merge-enqueue',repo,'7',f.head))
+ const code=`import {loadDeliveryConfig,createPrDeliveryAdapter} from ${JSON.stringify(fileURLToPath(new URL('../src/pr-delivery.mjs',import.meta.url)))};
+ const a=createPrDeliveryAdapter(await loadDeliveryConfig(process.argv[1]),{onTransition:async s=>{if(s===${JSON.stringify(transition)})process.kill(process.pid,'SIGKILL')}});
+ await a.execute('merge-queue',{repo:${JSON.stringify(repo)}});`
+ const killed=await new Promise((resolve,reject)=>{
+  const child=spawn(process.execPath,['--input-type=module','-e',code,f.config],{env:f.env,stdio:'ignore'})
+  child.on('error',reject);child.on('exit',(code,signal)=>resolve({code,signal}))
+ })
+ assert.equal(killed.signal,'SIGKILL','the durable transition must be reached')
+ const before=(await queueOf(f))[0];assert.equal(before.state,transition)
+ ok(await f.run('merge-queue',repo,'--once'));ok(await f.run('merge-queue',repo,'--once'))
+ const [entry]=await queueOf(f);assert.equal(entry.state,'acknowledged');assert.equal(entry.outcome.status,'pass')
+ assert.equal(entry.attemptId,before.attemptId);assert.equal((await f.read()).ghCalls.filter(merges).length,1)
+ const stats=await f.run('queue-status');ok(stats);const summary=JSON.parse(stats.stdout)
+ assert.equal(summary.offered,summary.pending+summary.owned+summary.terminal);assert.equal(summary.orphanLeases,0);assert.equal(summary.duplicateEffectIds,0)
+})
+test('fix12: cancelled pending job never starts when PR capacity frees',async t=>{
+ const f=await queueFixture(t);await f.approve(undefined,7,30000);ok(await f.run('merge-enqueue',repo,'7',f.head))
+ const release=await acquireLease(path.join(f.stateDir,'locks'),`pr-${keyFor(repo,7)}`)
+ try {assert.equal((await f.run('merge-queue',repo,'--once')).code,75);ok(await f.run('queue-cancel',repo,'7',f.head))} finally {await release()}
+ ok(await f.run('merge-queue',repo,'--once'));assert.equal((await f.read()).state,'OPEN')
+ const [entry]=await queueOf(f);assert.equal(entry.state,'acknowledged');assert.equal(entry.outcome.data.cancelled,true)
+ ok(await f.run('merge-enqueue',repo,'7',f.head));assert.equal((await queueOf(f)).length,1,'cancellation survives a repeated offer')
+})
+test('fix12: restored requested checkpoint reconciles success before another write',async t=>{
+ const f=await queueFixture(t,{lostMergeReply:true});await f.approve(undefined,7,30000);ok(await f.run('merge-enqueue',repo,'7',f.head))
+ const backup=path.join(f.root,'checkpoint');await fs.cp(f.stateDir,backup,{recursive:true})
+ const usage=await fs.readFile(path.join(f.stateDir,'usage.json'))
+ ok(await f.run('merge-queue',repo,'--once'));await fs.rm(f.stateDir,{recursive:true});await fs.cp(backup,f.stateDir,{recursive:true})
+ assert.deepEqual(await fs.readFile(path.join(f.stateDir,'usage.json')),usage)
+ ok(await f.run('merge-queue',repo,'--once'));assert.equal((await f.read()).ghCalls.filter(merges).length,1)
+ assert.equal((await queueOf(f))[0].state,'acknowledged')
+})
+
+for(const effect of ['comment','merge']) test(`fix12: kill after provider ${effect} success before recording acknowledgement`,async t=>{
+ const f=await queueFixture(t);await f.approve(undefined,7,30000);ok(await f.run('merge-enqueue',repo,'7',f.head))
+ const code=`import {loadDeliveryConfig,createPrDeliveryAdapter} from ${JSON.stringify(fileURLToPath(new URL('../src/pr-delivery.mjs',import.meta.url)))};
+ const a=createPrDeliveryAdapter(await loadDeliveryConfig(process.argv[1]),{onTransition:async s=>{if(s===${JSON.stringify('provider:'+effect+':returned')})process.kill(process.pid,'SIGKILL')}});
+ await a.execute('merge-queue',{repo:${JSON.stringify(repo)}});`
+ await new Promise((resolve,reject)=>{const child=spawn(process.execPath,['--input-type=module','-e',code,f.config],{env:f.env,stdio:'ignore'});child.on('error',reject);child.on('exit',(c,signal)=>{assert.equal(signal,'SIGKILL');resolve()})})
+ ok(await f.run('merge-queue',repo,'--once'))
+ const s=await f.read();assert.equal(s.ghCalls.filter(merges).length,1)
+ assert.equal(s.comments.filter(c=>c.body.startsWith('DELIVERY VERIFIED')).length,1)
+ assert.equal((await queueOf(f))[0].outcome.status,'pass')
+ const records=await Promise.all((await fs.readdir(path.join(f.stateDir,'effects'))).map(file=>fs.readFile(path.join(f.stateDir,'effects',file),'utf8')))
+ const effects=records.map(JSON.parse);assert.equal(new Set(effects.map(e=>e.id)).size,effects.length)
+ assert.ok(effects.every(e=>e.attemptId&&e.providerId&&e.state==='acknowledged'))
+})
+test('fix12: comment success then lost reply has one publication and one merge',async t=>{
+ const f=await queueFixture(t,{lostCommentReply:true});await f.approve(undefined,7,30000);ok(await f.run('merge-enqueue',repo,'7',f.head));ok(await f.run('merge-queue',repo,'--once'))
+ const s=await f.read();assert.equal(s.comments.filter(c=>c.body.startsWith('DELIVERY VERIFIED')).length,1);assert.equal(s.ghCalls.filter(merges).length,1)
+ assert.equal((await queueOf(f))[0].outcome.status,'pass')
+})
+for(const fault of ['no-response','empty','partial','exception',502,401]) test(`fix12: comment ${fault} stays typed without duplicate effect`,async t=>{
+ const f=await queueFixture(t);await f.approve(undefined,7,30000);const s=await f.read();s.writeFaults={comments:[fault]};s.writeErrorMessage='CANARY_PRIVATE_QUEUE_CLIENT_SECRET';await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ ok(await f.run('merge-enqueue',repo,'7',f.head));ok(await f.run('merge-queue',repo,'--once'));ok(await f.run('merge-queue',repo,'--once'))
+ assert.equal((await f.read()).ghCalls.filter(a=>a.includes('-X')&&a.some(v=>v.endsWith('/comments'))).length,1)
+ const [entry]=await queueOf(f)
+ if(fault===401){assert.equal(entry.state,'acknowledged');assert.equal(entry.outcome.status,'fail')}
+ else {assert.equal(entry.state,'effect-requested');assert.equal(entry.lastResult.data.uncertain,true);assert.equal(entry.nextAction,'reconcile-provider')}
+ assert.equal((await f.read()).ghCalls.filter(merges).length,0)
+ const sinkFiles=(await fs.readdir(path.join(f.stateDir,'effects'))).map(file=>path.join(f.stateDir,'effects',file))
+ sinkFiles.push(path.join(f.stateDir,'delivery.jsonl'),path.join(f.stateDir,'queue.json'))
+ for(const file of sinkFiles) assert.doesNotMatch(await fs.readFile(file,'utf8'),/CANARY_PRIVATE_QUEUE_CLIENT_SECRET/)
+})
+
+test('fix12: cancelled agent waiting for slots never launches or spends after capacity frees',async t=>{
+ const f=await queueFixture(t),locks=path.join(f.stateDir,'locks'),effect=path.join(f.root,'cancelled-child')
+ const releases=await Promise.all([0,1].map(i=>acquireLease(locks,`codex-slot-${i}`)))
+ const running=f.run('codex-guard',repo,'7','review',process.execPath,'-e',`require('fs').writeFileSync(${JSON.stringify(effect)},'started')`)
+ try {
+  for(let i=0;i<500;i++) {
+   const claims=await fs.readdir(path.join(locks,`pr-${keyFor(repo,7)}.claims`)).catch(()=>[])
+   if(claims.length) break
+   await pause(10)
+  }
+  ok(await f.wrapper('queue-cancel',repo,'7',f.head))
+ } finally {await Promise.all(releases.map(release=>release()))}
+ const result=await running;assert.equal(result.code,130,JSON.stringify(result))
+ await assert.rejects(fs.access(effect),{code:'ENOENT'})
+ assert.deepEqual(JSON.parse(await fs.readFile(path.join(f.stateDir,'usage.json'),'utf8').catch(()=>'[]')),[])
+ const summary=await f.wrapper('queue-status');ok(summary);assert.equal(JSON.parse(summary.stdout).offered,0)
+})
+for(const size of [10,100,250]) test(`fix12: ${size} offered burst jobs survive duplicate import and conserve projection`,async t=>{
+ const f=await queueFixture(t),legacy=path.join(f.root,'legacy');await fs.mkdir(path.join(legacy,'budget'),{recursive:true})
+ await fs.writeFile(path.join(legacy,'merge-queue.txt'),Array.from({length:size},(_,i)=>`${repo} ${i+1} ${f.head} burst`).join('\n')+'\n')
+ await fs.writeFile(path.join(legacy,'merge-queue.done'),'')
+ ok(await f.run('import-legacy',legacy));ok(await f.run('import-legacy',legacy))
+ const summary=JSON.parse((await f.run('queue-status')).stdout)
+ assert.equal(summary.offered,size);assert.equal(summary.pending,size);assert.equal(summary.owned,0);assert.equal(summary.terminal,0)
+ assert.equal(new Set((await queueOf(f)).map(e=>e.id)).size,size);assert.equal((await f.read()).ghCalls.length,0)
+})
+
+test('fix12: close/reopen retains cancellation and stale claimed bindings refuse before effects',async t=>{
+ const f=await queueFixture(t);await f.approve(undefined,7,30000);ok(await f.run('merge-enqueue',repo,'7',f.head))
+ ok(await f.run('queue-cancel',repo,'7',f.head))
+ const s=await f.read();s.state='CLOSED';await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s));ok(await f.run('merge-queue',repo,'--once'))
+ s.state='OPEN';await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s));ok(await f.run('merge-enqueue',repo,'7',f.head));assert.equal((await queueOf(f)).length,1)
+ const entries=await queueOf(f);entries[0].state='effect-requested';delete entries[0].attemptId
+ await fs.writeFile(path.join(f.stateDir,'queue.json'),JSON.stringify(entries))
+ const result=await f.run('merge-queue',repo,'--once');assert.equal(result.code,9);assert.match(result.stderr,/unbound queue claim/)
+ assert.equal((await f.read()).ghCalls.filter(merges).length,0)
+})
