@@ -23,8 +23,6 @@ export function evidenceReadLimits(input = {}) {
   return limits
 }
 
-const digestOf = bytes => createHash("sha256").update(bytes).digest("hex")
-
 // Reads evidence bytes from a store that outlives the job's scratch environment.
 // Pins the configured store identity. The POSIX helper opens each component
 // relative to a held directory descriptor with O_NOFOLLOW (no check/use gap).
@@ -92,7 +90,7 @@ export function createBoundReader({ readArtifact, limits: inputLimits, priorDige
     if (!Buffer.isBuffer(bytes)) return { failed: `invalid reader byte contract: ${artifact.ref}` }
     if (bytes.length > limits.maxBytes) return { failed: `artifact size limit exceeded: ${artifact.ref}` }
     if (!bytes.length) return { failed: `empty: ${artifact.ref}` }
-    const digest = digestOf(bytes)
+    const digest = createHash("sha256").update(bytes).digest("hex")
     if (digest !== artifact.digest) return { failed: `digest mismatch: ${artifact.ref}` }
     if (priorDigests.includes(digest)) return { failed: `reused from an earlier phase: ${artifact.ref}` }
     return { bytes, digest }

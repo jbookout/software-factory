@@ -12,12 +12,11 @@ const DEFAULT_CACHE = join(STATE_DIR, "jev-cache")
 const CACHE_MS = 60_000
 
 const sha = value => createHash("sha256").update(value).digest("hex")
-const encoded = value => JSON.stringify(value)
 
 async function receipt(path, row) {
   if (!path) return
   await mkdir(dirname(path), { recursive: true, mode: 0o700 })
-  await appendFile(path, `${encoded(row)}\n`, { mode: 0o600 })
+  await appendFile(path, `${JSON.stringify(row)}\n`, { mode: 0o600 })
 }
 
 async function cached(path) {
@@ -31,7 +30,7 @@ async function store(path, result) {
   try {
     await mkdir(dirname(path), { recursive: true, mode: 0o700 })
     const temp = `${path}.${process.pid}.tmp`
-    await writeFile(temp, encoded({ expires_at: Date.now() + CACHE_MS,
+    await writeFile(temp, JSON.stringify({ expires_at: Date.now() + CACHE_MS,
       model: result.model, answers: result.answers }), { mode: 0o600 })
     await rename(temp, path)
   } catch { /* Losing a cache entry must not erase a receipt. */ }
@@ -44,8 +43,8 @@ export async function askJev({ state, model, questions, apiKey, caller,
   const log = usageLog === undefined ? (fetchImpl === fetch ? DEFAULT_LOG : null) : usageLog
   const cache = cacheDir === undefined ? (fetchImpl === fetch ? DEFAULT_CACHE : null) : cacheDir
   const payload = { model, state, questions }
-  const promptHash = sha(encoded(payload))
-  const key = sha(encoded({ endpoint: ENDPOINT, caller, model, promptHash,
+  const promptHash = sha(JSON.stringify(payload))
+  const key = sha(JSON.stringify({ endpoint: ENDPOINT, caller, model, promptHash,
     credential: sha(apiKey) }))
   const cachePath = cache ? join(cache, `${key}.json`) : null
   const base = { ts: new Date().toISOString(),
@@ -65,7 +64,7 @@ export async function askJev({ state, model, questions, apiKey, caller,
   try {
     const response = await fetchImpl(ENDPOINT, { method: "POST",
       headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-      body: encoded(payload), signal: AbortSignal.timeout(1500) })
+      body: JSON.stringify(payload), signal: AbortSignal.timeout(1500) })
     if (!response.ok) throw new Error(`TypeSafe HTTP ${response.status ?? "error"}`)
     const result = await response.json()
     const usage = result?.usage && typeof result.usage === "object" ? result.usage : null

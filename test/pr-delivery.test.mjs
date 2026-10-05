@@ -169,6 +169,16 @@ const repo="fixture/new-repository"
 const ok = r => assert.equal(r.code,0,JSON.stringify(r))
 const merges = a => a.includes("-X") && a.some(v=>v.endsWith("/merge"))
 
+test("review refuses a rejected comment publication", async t => {
+ const f = await fixture(t, { writeFaults: { comments: [500] } })
+ const result = await f.run("review-pr", repo, "7")
+ assert.notEqual(result.code, 0, "review must not succeed when GitHub rejects its comment")
+ assert.match(result.stderr, /comment acknowledgement missing/)
+ const state = await f.read()
+ assert.equal(state.comments.length, 0)
+ assert.ok(state.ghCalls.some(args => args.includes("POST") && args.some(arg => arg.endsWith("/issues/7/comments"))))
+})
+
 test("approve -> enqueue -> serial squash merge verifies main",async t=>{
  const f=await fixture(t);ok(await f.run("review-pr",repo,"7"));const s=await f.read()
  assert.equal(s.comments[0].body.split("\n")[0],"APPROVE");assert.equal(s.comments[0].body.split("\n")[1],"Reviewed-SHA: "+f.head)
@@ -376,12 +386,15 @@ test("controller death cannot orphan a guarded child or release its occupied slo
  const f=await fixture(t,{}, {limits:{runsPer24h:8,slots:1,timeoutMs:700}})
  const pidFile=path.join(f.root,"child.pid")
  const childCode=`require('fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));process.on('SIGTERM',()=>{});setInterval(()=>{},1000)`
- const controller=spawn(process.execPath,[cli,f.config,"codex-guard",repo,"7","fix",process.execPath,"-e",childCode],{env:f.env,stdio:"ignore"})
+ const controller=spawn(process.execPath,[cli,f.config,"codex-guard",repo,"7","fix",process.execPath,"-e",childCode],{env:f.env,stdio:["ignore","pipe","pipe"]})
+ let controllerExit,diagnostics=""
+ controller.once("exit",(code,signal)=>{controllerExit={code,signal}})
+ for(const stream of [controller.stdout,controller.stderr]) stream.on("data",chunk=>{diagnostics=(diagnostics+chunk).slice(-8192)})
  t.after(()=>{try{controller.kill("SIGKILL")}catch{}})
  let pid
- const bootUntil=Date.now()+5000 // Readiness includes CLI/API/admission; execution still has its separate 700ms cap.
- for(;Date.now()<bootUntil;) {try{const observed=Number(await fs.readFile(pidFile,"utf8"));if(Number.isSafeInteger(observed)&&observed>0){pid=observed;break}}catch{} await new Promise(r=>setTimeout(r,10))}
- assert.ok(pid,"guarded child started")
+ const bootUntil=Date.now()+30_000 // CLI/API/admission readiness is separate from the child's 700ms execution cap.
+ for(;Date.now()<bootUntil&&!controllerExit;) {try{const observed=Number(await fs.readFile(pidFile,"utf8"));if(Number.isSafeInteger(observed)&&observed>0){pid=observed;break}}catch{} await new Promise(r=>setTimeout(r,10))}
+ assert.ok(pid,`guarded child started; controller=${JSON.stringify(controllerExit)}; diagnostics=${diagnostics}`)
  t.after(()=>{try{process.kill(-pid,"SIGKILL")}catch{}})
  const claims=path.join(f.stateDir,"locks","codex-slot-0.claims")
  const [claim]=await fs.readdir(claims)

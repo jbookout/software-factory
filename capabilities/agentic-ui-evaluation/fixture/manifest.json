@@ -1,0 +1,13 @@
+{
+  "schema": "e2e-qualification-manifest.v1",
+  "defects": [
+    { "id": "lost-save", "route": "/tasks/new", "assertion": "saved task survives reload", "testTitle": "lost-save" },
+    { "id": "dead-filter", "route": "/tasks?filter=done", "assertion": "done filter hides unfinished tasks", "testTitle": "dead-filter" }
+  ],
+  "traps": [
+    { "id": "blank-refusal", "kind": "intended-refusal", "route": "/tasks/new", "testTitle": "blank-refusal", "expectation": "Blank titles are refused without a success message" },
+    { "id": "lazy-empty", "kind": "empty-lazy-state", "route": "/tasks?filter=archived", "testTitle": "lazy-empty", "expectation": "Loading settles to an intentional empty archive" },
+    { "id": "denied-admin", "kind": "permission-denied", "route": "/admin", "testTitle": "denied-admin", "expectation": "Admin access is denied without exposing admin controls" },
+    { "id": "help-tab", "kind": "new-tab", "route": "/help", "testTitle": "help-tab", "expectation": "Help opens another tab while the original tab remains active" }
+  ]
+}
