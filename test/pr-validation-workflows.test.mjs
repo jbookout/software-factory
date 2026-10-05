@@ -70,7 +70,19 @@ for (const file of files) {
       'job deadline must leave time for installation, the full suite and subsequent validation');
   });
   test(`${file}: required context identity is retained`, () => {
-    assert.deepEqual(policy(source, context()).jobs, ["test", "e2e-deterministic-qualification"]);
+    assert.deepEqual(policy(source, context()).jobs, ["standards", "test", "e2e-deterministic-qualification"]);
+  });
+  test(`${file}: standards check runs directly with failures propagated and bounded feedback`, () => {
+    const job = parse(source).jobs.standards;
+    assert.equal(job['continue-on-error'], undefined);
+    assert.equal(job['timeout-minutes'], 5);
+    assert.deepEqual(job.steps.filter(step => step.run).map(step => step.run),
+      ['node --test test/schema-artifact-authority.test.mjs']);
+    for (const step of job.steps) {
+      assert.equal(step['continue-on-error'], undefined);
+      assert.equal(step.if, undefined);
+    }
+    assert.equal(job.steps.find(step => step.uses?.startsWith('actions/setup-node@')).with['node-version'], 22);
   });
   test(`${file}: rapid A/B/C supersedes A/B and C runs every job`, () => {
     const runs = replay(source, [context("pull_request", "opened", 9, 1), context("pull_request", "synchronize", 9, 2), context("pull_request", "synchronize", 9, 3)]);

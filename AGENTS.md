@@ -73,6 +73,34 @@ configuration and derived artifact. The pilot must beat `rg` and
 language-symbol baselines on representative work or be retired; it is never a
 merge, release, repository-creation, or runtime prerequisite.
 
+## Standards from the 2026-10-05 review retro
+
+Counts are distinct blocking findings in the harvested review history; repeated
+confirmation of the same finding counts once. The retro PR carries the source
+comment links and follow-up scopes. Each rule below is required.
+
+- Keep each validation rule in one owner; reuse schemas/helpers and remove dead paths (18 findings).
+- Snapshot caller-owned inputs before the first await and derive outputs only from that snapshot (5 findings).
+- Resolve paths against the caller's cwd before adapters change it; enforce physical ownership and publish immutable evidence atomically (12 findings).
+- Bound the whole operation, including admission, reads, callbacks and cleanup; retain child ownership until termination is observed (13 findings).
+- Sanitize sensitive diagnostics before every log, receipt and error sink, including nested fields (6 findings).
+- Authenticate executable inputs and installation bindings before evaluating their code; never use an unbound fallback (3 findings).
+- Reject malformed or incomplete inputs explicitly; unknown, missing and invalid must never become success (22 findings).
+- Exercise the production guard with a valid control and one defect per fixture; require the expected refusal reason and count executed test bodies (4 findings).
+- Derive success from bound artifact bytes and exercised operations, including required traps, stored values and producer outcomes (21 findings).
+- Bind evidence to source, target, policy and destination; reobserve mutable bindings immediately before effects (27 findings).
+- Keep pending, failed, unknown and complete distinct; incomplete observations must preserve known evidence and missing denominators (21 findings).
+- Persist intent before effects; reconcile interruption before retry and test contention, cancellation, recovery and fairness (28 findings).
+- Parse supported syntax with its parser and normalize equivalent forms; report unsupported forms as unmeasured (15 findings).
+
+`test/schema-artifact-authority.test.mjs`, included in `npm test`, rejects
+inline copies of two-field artifact contracts, missing local owners and unused
+owners. Different artifact formats remain separate contracts. This check does
+not establish semantic correctness or detect duplicated JavaScript/Python rules;
+its failing fixtures cover structural detection and its passing fixtures cover
+annotations and extended evidence records. Change or remove this repository
+policy and its selftests together; it is not a required product template.
+
 ## Before every PR: design and debt pass
 
 Before opening or updating any pull request, apply both skills to the diff:
