@@ -29,6 +29,7 @@
     "workflow:audit": "node scripts/orch/audit-workflows.mjs",
     "factory": "node ./bin/factory.mjs",
     "design-cloud:qualify": "node ./bin/design-cloud-qualify.mjs",
+    "e2e:qualify": "node ./capabilities/agentic-ui-evaluation/qualify.mjs",
     "model-room:evidence": "node ./bin/model-room-evidence.mjs"
   },
   "devDependencies": {

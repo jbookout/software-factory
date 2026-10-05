@@ -4,6 +4,9 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { fileURLToPath } from 'node:url'
 import { createArtifactReader } from 'software-factory'
 import * as e2e from '../../capabilities/agentic-ui-evaluation/wrapper.mjs'
 
@@ -28,6 +31,7 @@ const repro = (defect, build = brokenBuild, outcome = 'failed') => ({ test: { re
   digest: sha(`repro ${defect.id}`) }, binding: { ...build }, outcome, assertion: defect.assertion,
   assertionKind: 'deterministic', route: defect.route })
 const charters = [{ id: 'save-journey', stateNamespace: 'run-1/save' }, { id: 'filter-bash', stateNamespace: 'run-1/filter' }]
+const trapRuns = candidate => manifest.traps.map(trap => ({ id: trap.id, binding: candidate, outcome: 'passed' }))
 
 function findings() {
   return [
@@ -53,17 +57,17 @@ async function archive() {
 async function qualification(edit = x => x) {
   const store = await archive()
   const input = await edit({
-    manifest, broken: { candidate: brokenBuild, charters, findings: findings() },
-    repaired: { candidate: cleanBuild, reruns: manifest.defects.map(d => ({ ...repro(d, cleanBuild, 'passed') })) },
-    replay: { candidate: brokenBuild, providerInvocations: 0, reruns: manifest.defects.map(d => repro(d)) },
+    manifest, broken: { candidate: brokenBuild, charters, findings: findings(), trapRuns: trapRuns(brokenBuild) },
+    repaired: { candidate: cleanBuild, reruns: manifest.defects.map(d => ({ ...repro(d, cleanBuild, 'passed') })), trapRuns: trapRuns(cleanBuild) },
+    replay: { candidate: brokenBuild, providerInvocations: 0, reruns: manifest.defects.map(d => repro(d)), trapRuns: trapRuns(brokenBuild) },
     archive: { refs: store.refs, readArtifact: store.readArtifact }
   }, store)
   return e2e.qualifyAgenticEvaluation(input)
 }
 
 test('e2e pin, license and telemetry switch are fixed on every invocation', () => {
-  assert.deepEqual(e2e.E2E_PIN, { package: 'e2e', version: '0.15.1', license: 'Apache-2.0',
-    sourceRevision: '8d38206f460415b70706b45acb820bb0e24832ae' })
+  assert.deepEqual(e2e.E2E_PIN, { package: 'e2e', version: '0.16.0', license: 'Apache-2.0',
+    sourceRevision: 'a0ee3e9061b666fa3dd43e7dcc8e1a5da47362d6' })
   for (const env of [{}, { E2E_TELEMETRY_DISABLED: '0', PATH: '/bin' }]) {
     const out = e2e.e2eEnvironment(env)
     assert.equal(out.E2E_TELEMETRY_DISABLED, '1')
@@ -133,6 +137,9 @@ test('qualification disqualifies missed defects, flagged traps, missing repros, 
     [input => ({ ...input, replay: { ...input.replay, providerInvocations: undefined } }), /model call during replay/],
     [input => ({ ...input, replay: { ...input.replay, reruns: input.replay.reruns.map(r => ({ ...r, assertionKind: 'model-judged' })) } }), /deterministic/],
     [input => ({ ...input, replay: { ...input.replay, reruns: input.replay.reruns.map(r => ({ ...r, outcome: 'passed' })) } }), /replay changed the outcome/],
+    [input => ({ ...input, broken: { ...input.broken, trapRuns: [] } }), /trap blank-refusal not exercised/],
+    [input => ({ ...input, repaired: { ...input.repaired, trapRuns: trapRuns(brokenBuild) } }), /trap blank-refusal not exercised/],
+    [input => ({ ...input, replay: { ...input.replay, trapRuns: [] } }), /trap blank-refusal not exercised/],
     [async (input, store) => { await fs.unlink(path.join(store.root, 'trace.zip')); return input }, /lost evidence: unreadable: trace.zip/],
     [async (input, store) => { await fs.writeFile(path.join(store.root, 'report.json'), 'rewritten'); return input },
       /lost evidence: digest mismatch: report.json/]
@@ -141,6 +148,53 @@ test('qualification disqualifies missed defects, flagged traps, missing repros, 
     assert.equal(result.status, 'disqualified', pattern.source)
     assert.match(result.reasons.join('\n'), pattern)
   }
+})
+
+test('published report normalization distinguishes assertions from tool failures and binds each repro', () => {
+  const manifest = { defects: [{ id: 'save', testTitle: 'save', route: '/new', assertion: 'save persists' }],
+    traps: [{ id: 'deny', testTitle: 'deny', route: '/admin', expectation: 'permission denied' }] }
+  const result = (title, status, error) => ({ id: title, titlePath: [title], selected: true,
+    status, attempts: [{ steps: [], ...(error ? { error } : {}) }] })
+  const report = { schemaVersion: 'report-1', run: { runner: { version: e2e.E2E_PIN.version }, errors: [], results: [
+    result('save', 'failed', { code: 'ASSERTION_FAILED', category: 'test', phase: 'body' }), result('deny', 'passed') ] } }
+  const normalize = report => e2e.normalizeE2eReport({ report, candidate: brokenBuild, manifest,
+    test: { ref: 'journeys.e2e.mts', digest: sha('suite') } })
+  const normalized = normalize(report)
+  assert.equal(normalized.reruns[0].outcome, 'failed')
+  assert.equal(normalized.reruns[0].test.ref, 'journeys.e2e.mts#save')
+  assert.equal(normalized.trapRuns[0].outcome, 'passed')
+  assert.equal(e2e.triageFindings(normalized).confirmed.length, 1)
+  assert.equal(e2e.triageFindings(normalized).rejected.length, 1)
+  for (const code of ['LOGIN_REQUIRED', 'ENGINE_FAILURE', 'ERROR', 'OPERATION_TIMEOUT']) {
+    const changed = structuredClone(report)
+    changed.run.results[0].attempts[0].error.code = code
+    assert.equal(normalize(changed).reruns[0].outcome, 'blocked')
+  }
+  for (const mutate of [
+    r => { r.run.runner.version = '0.15.1' },
+    r => { r.run.results.pop() },
+    r => { r.run.results[0].selected = false },
+    r => { r.run.errors.push({ code: 'ENGINE_FAILURE' }) },
+    r => { r.run.results[0].attempts[0].steps.push({ kind: 'agent' }) },
+  ]) {
+    const changed = structuredClone(report); mutate(changed)
+    assert.throws(() => normalize(changed))
+  }
+})
+
+test('qualification network guard counts rejected fetch, HTTP and HTTPS provider attempts', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'e2e-provider-counter-'))
+  const log = path.join(root, 'calls.log')
+  await fs.writeFile(log, 'counter-start\n')
+  const guard = fileURLToPath(new URL('../../capabilities/agentic-ui-evaluation/no-provider.mjs', import.meta.url))
+  await promisify(execFile)(process.execPath, ['--import', guard, '--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import http from 'node:http'; import https from 'node:https';
+    assert.throws(() => fetch('https://example.invalid/model'), /forbidden/);
+    assert.throws(() => http.get('http://example.invalid/model'), /forbidden/);
+    assert.throws(() => https.request('https://example.invalid/model'), /forbidden/);
+  `], { env: { PATH: process.env.PATH, PROVIDER_CALL_LOG: log } })
+  assert.equal((await fs.readFile(log, 'utf8')).split('\n').filter(line => line === 'external-invocation').length, 3)
 })
 
 test('qualification refuses an empty defect manifest, an empty trap list and an empty archive', async () => {
