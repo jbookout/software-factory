@@ -1,5 +1,7 @@
 // Node's host monotonic clock is shared by the controller and its supervisor.
 export const monotonicNow = () => Number(process.hrtime.bigint() / 1_000_000n)
+const MAX_TIMER_MS = 2 ** 31 - 1
+export const validDuration = (ms, minimum = 1) => Number.isSafeInteger(ms) && ms >= minimum && ms <= MAX_TIMER_MS
 const realClock = { now: monotonicNow, setTimer: setTimeout, clearTimer: clearTimeout }
 export class DeadlineError extends Error {
   constructor(phase) {
@@ -12,7 +14,7 @@ export class DeadlineError extends Error {
 // probes never renew it. Injectable clock is used by deterministic replays.
 export class Deadline {
   constructor(ms, { phase = 'attempt', clock = realClock, end = Infinity, signal } = {}) {
-    if (!Number.isSafeInteger(ms) || ms <= 0) throw new Error('deadline must be a positive integer')
+    if (!validDuration(ms)) throw new Error('deadline must fit the supported timer range')
     this.clock = clock; this.phase = phase; this.signal = signal
     this.end = Math.min(end, clock.now() + ms)
   }

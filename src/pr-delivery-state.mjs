@@ -32,7 +32,14 @@ export async function acquireLease(root, name, { budget } = {}) {
   await fs.mkdir(dir, { recursive: true, mode: 0o700 })
   const token = randomUUID(), file = path.join(dir, `${token}.json`)
   let owner = { pid: process.pid, token, ticket: 0 }
-  const release = () => fs.rm(file, { force: true })
+  let released = false, binding = Promise.resolve()
+  const release = async () => {
+    released = true
+    // A write already in progress must retire before removal. Later binders
+    // see revocation immediately and cannot recreate a live controller claim.
+    await binding.catch(() => {})
+    await fs.rm(file, { force: true })
+  }
   const peers = async () => {
     const result = []
     for (const entry of await fs.readdir(dir)) {
@@ -69,9 +76,13 @@ export async function acquireLease(root, name, { budget } = {}) {
     const blocked = contenders.some(p => p.ticket < owner.ticket ||
       (p.ticket === owner.ticket && p.token < token))
     if (blocked) { await release(); return null }
-    release.bindJob = async job => {
-      owner = { ...owner, job }; await writeJson(file, owner)
-      return { file, token }
+    release.bindJob = (job, signal) => {
+      binding = binding.then(async () => {
+        if (released || signal?.aborted) throw new Error('job lease released or launch revoked')
+        owner = { ...owner, job }; await writeJson(file, owner)
+        return { file, token }
+      })
+      return binding
     }
     return release
   } catch (error) { await release(); throw error }
@@ -129,7 +140,7 @@ export async function reserveCodex(config, repo, pr, kind, budget = new Deadline
 
 // All recovery writers use the same record. Reading eligibility is advisory;
 // callers still take the PR lease and reserve the budget at dispatch time.
-export async function deliveryWait(config, repo, pr, input, stop = null) {
+export async function deliveryWait(config, repo, pr, input, stop, budget) {
   return withLease(path.join(config.stateDir, "locks"), `wait-${keyFor(repo, pr)}`, async () => {
     const file = path.join(config.stateDir, "waits", `${keyFor(repo, pr)}.json`)
     const prior = await readJson(file, null)
@@ -153,13 +164,13 @@ export async function deliveryWait(config, repo, pr, input, stop = null) {
     const error = new DeliveryError(prior.message, prior.code)
     error.wait = prior
     throw error
-  }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs })
+  }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget })
 }
 
-export async function completeDeliveryWait(config, repo, pr) {
+export async function completeDeliveryWait(config, repo, pr, budget) {
   return withLease(path.join(config.stateDir, "locks"), `wait-${keyFor(repo, pr)}`, async () => {
     const file = path.join(config.stateDir, "waits", `${keyFor(repo, pr)}.json`)
     const prior = await readJson(file, null)
     if (prior) await writeJson(file, { ...prior, status: "complete" })
-  }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs })
+  }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget })
 }

@@ -6,6 +6,44 @@ import path from 'node:path'
 import { fakeClock, never } from './helpers/deadline-and-process.mjs'
 import { Deadline, waitForCondition } from '../src/deadline.mjs'
 
+test('review 9: deadline and phase clocks reject timer overflow', () => {
+ assert.throws(() => new Deadline(3000000000), /deadline/)
+ assert.throws(() => new Deadline(100).phaseBudget('api', 3000000000), /deadline/)
+})
+
+for (const managed of [false, true]) test(`review 4: separate Node option values count ${managed ? 'managed excess' : 'unmanaged workers'}`, async t => {
+ const { reserveCompute } = await import('../src/process-capacity.mjs')
+ const root = await fs.mkdtemp(path.join(os.tmpdir(), 'factory-option-order-'))
+ t.after(() => fs.rm(root, { recursive: true, force: true }))
+ const config = { stateDir: root, resources: { capacity: 4, browserConcurrency: 1 }, pollMs: 5 }
+ let owned, admitted
+ try {
+  if (managed) {
+   owned = await reserveCompute(config, 1, new Deadline(1000), { snapshot: async () => [] })
+   const bindings = await owned.bindJob({ pid: process.pid, deadline: Date.now() + 10000 })
+   for (const { file } of bindings) {
+    const row = JSON.parse(await fs.readFile(file)); row.job.groupPid = process.pid; await fs.writeFile(file, JSON.stringify(row))
+   }
+  }
+  const rows = [{ pid: managed ? process.pid : 123, ppid: 1, command: 'node --test-reporter spec --test-concurrency 4 --test suite.mjs' }]
+  await assert.rejects(async () => { admitted = await reserveCompute(config, 1, new Deadline(3000), { snapshot: async () => rows }) }, { code: 142 })
+ } finally { if (admitted) await admitted(); if (owned) await owned() }
+})
+
+test('review 5: production observation ignores a PATH replacement for ps', async t => {
+ const { processSnapshot } = await import('../src/process-capacity.mjs')
+ const root = await fs.mkdtemp(path.join(os.tmpdir(), 'factory-observer-path-'))
+ t.after(() => fs.rm(root, { recursive: true, force: true }))
+ await fs.writeFile(path.join(root, 'ps'), '#!/bin/sh\nprintf "987654321 1 fake-observer\\n"\n', { mode: 0o755 })
+ const previous = process.env.PATH
+ process.env.PATH = root + path.delimiter + previous
+ try {
+  const rows = await processSnapshot(new Deadline(2000))
+  assert.ok(rows.some(row => row.pid === process.pid), 'native observer must include this controller')
+  assert.ok(!rows.some(row => row.pid === 987654321))
+ } finally { process.env.PATH = previous }
+})
+
 test('Codex slot queue exhaustion retains its typed refusal at every deadline boundary',async t=>{
  const {reserveCodex,acquireLease}=await import('../src/pr-delivery-state.mjs')
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-slot-boundary-'));t.after(()=>fs.rm(root,{recursive:true,force:true}))

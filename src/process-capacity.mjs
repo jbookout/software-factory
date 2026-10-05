@@ -5,7 +5,7 @@ import { runProcess } from './process-runner.mjs'
 import { acquireLease, withLease, readJson } from './pr-delivery-state.mjs'
 
 export async function processSnapshot(budget) {
-  const result = await runProcess(['ps', '-axo', 'pid=,ppid=,args='], {
+  const result = await runProcess(['/bin/ps', '-axo', 'pid=,ppid=,args='], {
     timeoutMs: Math.max(1, Math.floor(Math.min(5000, budget.remaining())))
   })
   if (result.timedOut) throw new DeadlineError(budget.phase)
@@ -27,9 +27,36 @@ function descends(pid, roots, parents) {
   }
   return false
 }
+// Stop at the script/-- separator; test-looking application arguments are not
+// Node flags. Value-bearing flags support both attached and separate values.
+const nodeValueOptions = new Set(`-r -C --require --conditions --import --loader --experimental-loader
+  --test-reporter --test-reporter-destination --test-concurrency --test-name-pattern --test-skip-pattern
+  --test-shard --test-timeout --test-coverage-branches --test-coverage-functions --test-coverage-lines
+  --test-coverage-exclude --test-coverage-include --experimental-test-isolation --input-type
+  --allow-fs-read --allow-fs-write --build-snapshot-config --cpu-prof-dir --cpu-prof-interval --cpu-prof-name
+  --diagnostic-dir --disable-proto --disable-warning --dns-result-order --env-file --env-file-if-exists
+  --experimental-config-file --experimental-default-type --experimental-sea-config
+  --heap-prof-dir --heap-prof-interval --heap-prof-name --heapsnapshot-near-heap-limit --heapsnapshot-signal
+  --icu-data-dir --inspect-port --inspect-publish-uid --localstorage-file --max-http-header-size
+  --max-old-space-size --max-old-space-size-percentage --network-family-autoselection-attempt-timeout
+  --openssl-config --redirect-warnings --report-directory --report-dir --report-filename --report-signal
+  --secure-heap --secure-heap-min --snapshot-blob --title --tls-cipher-list --tls-keylog
+  --trace-event-categories --trace-event-file-pattern --trace-require-module --unhandled-rejections
+  --use-largepages --v8-pool-size --watch-kill-signal --watch-path`.split(/\s+/))
+function isTestLauncher(command) {
+  const [executable, ...args] = command.trim().split(/\s+/)
+  if (!/^(?:\S*\/)?node$/.test(executable)) return false
+  for (let i = 0; i < args.length; i++) {
+    const option = args[i].split('=')[0]
+    if (option === '--test') return true
+    if (option === '--' || !option.startsWith('-') || ['-e', '--eval', '-p', '--print', '--run'].includes(option)) return false
+    if (nodeValueOptions.has(option) && !args[i].includes('=')) i++
+  }
+  return false
+}
 function unmanagedUnits(rows, owned, browserConcurrency) {
   const parents = new Map(rows.map(row => [row.pid, row.ppid]))
-  const tests = rows.filter(row => /^(?:\S*\/)?node\s+(?:(?:--[\w-]+(?:=[^ ]+)?|-r\s+[^ ]+)\s+)*--test(?:\s|=|$)/.test(row.command))
+  const tests = rows.filter(row => isTestLauncher(row.command))
   const testRoots = new Set(tests.map(row => row.pid))
   const browsers = rows.filter(row => /(?:chrome|chromium|firefox|webkit|playwright)/i.test(row.command.split(" ")[0]) ||
     /^\/(?:Users\/[^/]+\/)?Applications\/[^/]*(?:chrome|chromium|firefox|webkit|playwright)[^/]*\.app\/Contents\/MacOS\//i.test(row.command))
@@ -99,7 +126,7 @@ export async function reserveCompute(config, units, budget, { snapshot = process
         if (occupied + unmanagedUnits(rows, owned, browserConcurrency) + units > capacity) return null
         const selected = releases.splice(0, units)
         const release = async () => { await Promise.all(selected.map(fn => fn())) }
-        release.bindJob = async job => Promise.all(selected.map(fn => fn.bindJob({ ...job, agentUnits })))
+        release.bindJob = async (job, signal) => Promise.all(selected.map(fn => fn.bindJob({ ...job, agentUnits }, signal)))
         return release
       } finally { await Promise.all(releases.map(fn => fn())) }
     }, { waitMs: Math.ceil(budget.remaining()), pollMs: config.pollMs, budget })

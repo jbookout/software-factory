@@ -1,14 +1,17 @@
 import { killOwnedGroup } from './process-group.mjs'
-import { monotonicNow } from './deadline.mjs'
+import { monotonicNow, validDuration } from './deadline.mjs'
 import { fork } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
 
 // The supervisor owns the group even when the caller disappears. Reserve TERM
 // and hard-stop time inside the caller's elapsed budget, including launch/bind.
+export function validateProcessRequest(argv, timeoutMs = 120_000) {
+  if (!Array.isArray(argv) || !argv.length || argv.some(v => typeof v !== 'string' || v.includes('\0')) ||
+      !argv[0] || !validDuration(timeoutMs)) throw new Error('invalid process request')
+}
 export function runProcess(argv, { cwd, env = process.env, input = '', timeoutMs = 120_000,
   maxOutputBytes = 1_000_000, captureOutput = true, onOutput, onSpawn, signal, mutation = false } = {}) {
-  if (!Array.isArray(argv) || !argv.length || argv.some(v => typeof v !== 'string') ||
-      !Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) return Promise.reject(new Error('invalid process request'))
+  try { validateProcessRequest(argv, timeoutMs) } catch (error) { return Promise.reject(error) }
   if (signal?.aborted) return Promise.resolve({ code: 130, cancelled: true, timedOut: false,
     uncertain: false, stdout: '', stderr: '', started: false })
   return new Promise((resolve, reject) => {
@@ -19,8 +22,10 @@ export function runProcess(argv, { cwd, env = process.env, input = '', timeoutMs
     })
     let result, groupPid, stdout = '', stderr = '', bytes = 0
     let timedOut = false, overflow = false, cancelled = false, launchError
+    const binding = new AbortController()
     const decoders = { stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8') }
     const hardKill = () => {
+      binding.abort()
       if (groupPid) {
         try { killOwnedGroup(groupPid, 'SIGKILL') }
         catch (e) { if (e.code !== 'ESRCH') launchError ??= new Error(`process cleanup failed (${e.code})`) }
@@ -28,6 +33,7 @@ export function runProcess(argv, { cwd, env = process.env, input = '', timeoutMs
       child.kill('SIGKILL')
     }
     const stop = () => {
+      binding.abort()
       // TERM is caught by the supervisor, which stops its group first.
       child.kill('SIGTERM')
     }
@@ -55,6 +61,7 @@ export function runProcess(argv, { cwd, env = process.env, input = '', timeoutMs
       if (code || exitSignal) hardKill()
     })
     child.on('close', (code, exitSignal) => {
+      binding.abort()
       clearTimeout(timer); clearTimeout(hardStop); signal?.removeEventListener('abort', abort)
       if (groupPid) {
         try { killOwnedGroup(groupPid, 'SIGKILL') }
@@ -67,16 +74,16 @@ export function runProcess(argv, { cwd, env = process.env, input = '', timeoutMs
         reject(launchError); return
       }
       timedOut ||= result?.timedOut ?? false
-      const uncertain = mutation && Boolean(groupPid) && (timedOut || cancelled || overflow || !result)
+      const uncertain = mutation && Boolean(groupPid) && Boolean(timedOut || cancelled || overflow || result?.signal || exitSignal || !result)
       resolve({ code: timedOut ? 142 : cancelled ? 130 : overflow ? 1 : result?.code ?? code ?? 1,
         signal: result?.signal ?? exitSignal, stdout, stderr, timedOut, overflow, cancelled,
         uncertain, ...(uncertain ? { nextAction: 'readback-before-retry' } : {}), pid: child.pid, started: Boolean(groupPid) })
     })
-    Promise.resolve().then(() => onSpawn?.({ pid: child.pid, deadline })).then(bindings => {
-      if (child.connected && !timedOut && !cancelled && !launchError)
+    Promise.resolve().then(() => onSpawn?.({ pid: child.pid, deadline }, binding.signal)).then(bindings => {
+      if (child.connected && !binding.signal.aborted && !launchError)
         child.send({ argv, cwd, env, input, elapsedDeadline, grace, bindings: bindings ?? [] }, error => {
           if (error) { launchError = new Error('process launch binding failed'); stop() }
         })
-    }).catch(() => { launchError = new Error('process launch binding failed'); stop() })
+    }).catch(() => { if (!binding.signal.aborted) { launchError = new Error('process launch binding failed'); stop() } })
   })
 }

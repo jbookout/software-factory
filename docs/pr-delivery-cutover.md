@@ -50,7 +50,7 @@ Use `R=owner/repository`, `N=<pr>`, `W=<worktree-or-dash>`, `H=<approved-full-sh
 | `ci-fix.sh R N` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" ci-fix "$R" "$N"` |
 | `codex-guard.sh R N kind command...` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" codex-guard "$R" "$N" "$KIND" "${COMMAND[@]}"` |
 | `branch-wt.sh repo-dir B F` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" branch-wt "$R" "$B" "$F"` |
-| `merge-queue.sh` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" merge-queue` |
+| `merge-queue.sh` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" merge-queue "$R"` (one consumer per repository) |
 | `merge-one-core.sh R N H note` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" merge-one-core "$R" "$N" "$H" "$NOTE"` |
 | `merge-enqueue.sh R N H note` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" merge-enqueue "$R" "$N" "$H" "$NOTE"` |
 | `auto-enqueue.sh` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" auto-enqueue` |
@@ -59,8 +59,15 @@ Set `KIND` and the `COMMAND` argv array for the guard. Replace the loop's `3`
 with the existing caller's round limit. `branch-wt` takes the configured repo
 identity instead of a checkout path. `ci-fix` re-enters the PR loop; `--no-loop`
 disables that for a caller already controlling rounds. Queue/auto-enqueue accept
-`--once` for supervised checks. Never use GitHub auto-merge. Direct merge-core
-calls acquire the same global merge lease as the queue. Review uses a fresh,
+`--once` for supervised checks. Never use GitHub auto-merge. Each repository has
+its own integration lease, shared by its queue consumer and direct merge-core
+calls; both also take the PR writer lease that fixers hold. Every GitHub write
+runs under the process supervisor bound to both leases, so a dead controller's
+ownership survives until its write job is gone. A behind-main head is updated,
+then stops for fresh review and CI of the integrated tree. Merging requires an
+active `main` ruleset with strict required status checks that the merging
+identity cannot bypass, so GitHub itself refuses a merge after main moves; the
+delivered squash parent must equal the recorded integration base. Review uses a fresh,
 detached worktree and process; builders never post approvals. Queue approval
 attestations cannot substitute for independent review comments. Each review uses
 a unique attempt directory; live, dirty, or interrupted attempts are preserved.

@@ -8,6 +8,53 @@ import { runProcess } from "../src/process-runner.mjs"
 import { runCodexBuild } from "../src/codex-build.mjs"
 import { createPinnedBuildContext } from "../src/model-room.mjs"
 
+test('review 1: latched and direct command signals retain mutation uncertainty', async t => {
+  const { acquireLease } = await import('../src/pr-delivery-state.mjs')
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'factory-signal-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  for (const latched of [false, true]) {
+    const release = await acquireLease(root, 'signal')
+    try {
+      const result = await runProcess([process.execPath, '-e', "process.kill(process.pid,'SIGKILL')"], {
+        timeoutMs: 2000, mutation: true, onSpawn: latched ? job => release.bindJob(job).then(binding => [binding]) : undefined
+      })
+      assert.equal(result.signal, 'SIGKILL')
+      assert.notEqual(result.code, 0)
+      assert.equal(result.uncertain, true)
+    } finally { await release() }
+  }
+})
+
+test('review 2: timeout revokes a pending launch binding before lease release', async t => {
+  const { acquireLease } = await import('../src/pr-delivery-state.mjs')
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'factory-late-bind-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const release = await acquireLease(root, 'late')
+  let resume, settled, bindingSignal
+  const latch = new Promise(resolve => { resume = resolve })
+  const done = new Promise(resolve => { settled = resolve })
+  const result = await runProcess(['/usr/bin/true'], { timeoutMs: 100,
+    onSpawn: async (job, signal) => {
+      bindingSignal = signal
+      await latch
+      try { return [await release.bindJob(job)] } catch { return [] } finally { settled() }
+    }
+  })
+  await release()
+  resume(); await done
+  assert.equal(result.code, 142)
+  assert.deepEqual(await fs.readdir(path.join(root, 'late.claims')), [])
+  assert.equal(bindingSignal?.aborted, true)
+})
+
+test('review 9: process timers reject overflow before binding or launch', async () => {
+  let bound = false
+  await assert.rejects(runProcess(['/usr/bin/true'], { timeoutMs: 3000000000,
+    onSpawn: () => { bound = true }
+  }), /invalid process request/)
+  assert.equal(bound, false)
+})
+
 test("buffered streams preserve UTF-8 split across byte chunks", async () => {
   const result = await runProcess([process.execPath, "-e", `
     for (const s of [process.stdout, process.stderr]) s.write(Buffer.from([0xe2]));

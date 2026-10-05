@@ -4,6 +4,23 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { acquireLease, withLease } from "../src/pr-delivery-state.mjs"
+
+test('review 2: release drains an in-flight binding and rejects subsequent bindings', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'factory-binding-order-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const release = await acquireLease(root, 'binding')
+  const rename = fs.rename.bind(fs)
+  let entered, resume
+  const started = new Promise(resolve => { entered = resolve })
+  const latch = new Promise(resolve => { resume = resolve })
+  t.mock.method(fs, 'rename', async (...args) => { entered(); await latch; return rename(...args) })
+  const binding = release.bindJob({ pid: process.pid, deadline: Date.now() + 1000 })
+  await started
+  const released = release()
+  resume(); await Promise.all([binding, released])
+  await assert.rejects(release.bindJob({ pid: process.pid }), /released/)
+  assert.deepEqual(await fs.readdir(path.join(root, 'binding.claims')), [])
+})
 import { createPrDeliveryAdapter } from "../src/pr-delivery.mjs"
 
 test('PR ownership admission shares the total attempt deadline',async t=>{
