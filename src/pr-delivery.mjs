@@ -4,7 +4,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { createHash, randomUUID } from "node:crypto"
 import { reserveCompute } from "./process-capacity.mjs"
-import { runProcess, validateProcessRequest } from "./process-runner.mjs"
+import { runProcess, validateProcessRequest, observeProcessJob } from "./process-runner.mjs"
 import { createCodexExecArgs } from "./codex-build.mjs"
 import { normalizeResult } from "./adapters.mjs"
 import { deliveryPrompt } from "./pr-delivery-prompts.mjs"
@@ -39,6 +39,13 @@ export async function loadDeliveryConfig(file) {
       if (!Array.isArray(local.trustedReviewers) || !local.trustedReviewers.length || local.trustedReviewers.some(login => typeof login !== "string" || !/^[A-Za-z0-9-]+(?:\[bot\])?$/.test(login)))
         throw new DeliveryError("config repo trustedReviewers must name trusted GitHub identities", 9)
       if (!validRequiredChecks(local.requiredChecks)) throw new DeliveryError("config repo requiredChecks must name the expected checks", 9)
+      if (local.checks !== undefined && (!Array.isArray(local.checks) || !local.checks.length))
+        throw new DeliveryError("config repo checks must be nonempty argv commands", 9)
+      if(local.checkTimeoutMs !== undefined && !validDuration(local.checkTimeoutMs)) throw new DeliveryError("invalid repository check timeout",9)
+      for (const argv of local.checks ?? []) {
+        try {validateProcessRequest(argv)}
+        catch {throw new DeliveryError("config repo checks must be valid argv commands",9)}
+      }
       if (local.dependencyRevision !== undefined && (typeof local.dependencyRevision !== "string" || !local.dependencyRevision.trim()))
         throw new DeliveryError("config dependencyRevision must be a nonempty owned input pin", 9)
       return [repo, { ...local, checkout: absolute(local.checkout), worktreeRoot: absolute(local.worktreeRoot) }]
@@ -63,6 +70,7 @@ export async function loadDeliveryConfig(file) {
     if (config.resources.agentUnits + config.resources.browserConcurrency > config.resources.capacity)
       throw new DeliveryError("agent and child reservation exceeds capacity", 9)
   }
+  if(value.orchInbox) config.orchInbox = {command:absolute(value.orchInbox.command),store:absolute(value.orchInbox.store)}
   createCodexExecArgs(config.codex)
   config.holds = (value.holds ?? []).map(h => {
     if (!config.repos[h.repo] || typeof h.titlePattern !== "string") throw new DeliveryError("invalid config hold", 9)
@@ -208,12 +216,15 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       return current
     }, { budget: phase, boundedProbe: true, ready: value => value.ci.state !== "pending", pollMs: config.pollMs })))
   }
-  async function branchWorktree(repo, branch, fallback, observedHead) {
-    const local = getRepo(repo)
+  async function verifyOrigin(repo,local) {
     const origin = await git(local.checkout, "remote", "get-url", "origin")
     const identity = origin.replace(/^git@github\.com:/, "").replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "")
     if (local.originUrl ? origin !== local.originUrl : identity !== repo)
       throw new DeliveryError("repair repository binding does not match configured origin")
+  }
+  async function branchWorktree(repo, branch, fallback, observedHead) {
+    const local = getRepo(repo)
+    await verifyOrigin(repo,local)
     if (branch === "main" || branch.startsWith("-")) throw new DeliveryError("refusing to repair main or invalid branch")
     await git(local.checkout, "check-ref-format", "--branch", branch)
     await git(local.checkout, "fetch", "-q", "origin", branch)
@@ -244,7 +255,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     if (await git(worktree, "rev-parse", "HEAD") !== remoteHead) throw new DeliveryError("repair source binding mismatch; retained")
     return worktree
   }
-  async function guarded(repo, pr, kind, argv, cwd, input, head) {
+  async function guarded(repo, pr, kind, argv, cwd, input, head, afterExecution, beforeExecution) {
     if (!["review", "fix", "ci-fix", "rescope"].includes(kind)) throw new DeliveryError("invalid guarded delivery kind", 9)
     validateProcessRequest(argv, config.limits.timeoutMs)
     head ??= (await view(repo, pr)).headRefOid
@@ -261,7 +272,9 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       const admitted = await view(repo, pr)
       requireOpen(admitted)
       if (admitted.headRefOid !== head) throw new DeliveryError("SUPERSEDED: HEAD MOVED before child dispatch; observe current head", 1)
-      await log({ repo, pr, step: kind, status: "started" })
+      const jobId = randomUUID()
+      const job = {id:jobId, ownership:"caller", worktree:cwd, model:config.codex.model, effort:config.codex.effort,
+        log:path.join(config.stateDir,"jobs",`${jobId}.log`), receipt:path.join(config.stateDir,"jobs",`${jobId}.json`)}
       const digest = createHash("sha256")
       // Persist before launch: if the controller disappears there is no final
       // callback to write uncertainty. A completed child retires this marker.
@@ -271,20 +284,24 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
           message: "MUTATION UNCERTAIN: readback required before retry", resetAt: null }, budget())
         mutationPending = true
       }
+      await beforeExecution?.(job)
       const runBudget = budget().phaseBudget("execution", config.limits.timeoutMs)
       const result = await measured("execution", repo, pr, () => deadlines.run(runBudget, () => command(argv, cwd, { input, timeoutMs: config.limits.timeoutMs, allowFailure: true,
+        job, onStarted: receipt => log({repo,pr,step:kind,status:"running",jobId:receipt.id,receipt:job.receipt}),
         mutation: kind !== "review", captureOutput: false, onOutput: chunk => digest.update(chunk), onSpawn: async (job, signal) => {
           const bindings = [await release.bindJob(job, signal), ...await compute.bindJob(job, signal)]
           const prLease = prLeases.get(keyFor(repo, pr))
           if (prLease) bindings.push(await prLease.bindJob(job, signal))
           return bindings
         } })))
-      if (mutationPending) { await completeDeliveryWait(config, repo, pr, budget()); mutationPending = false }
+      if (mutationPending && (!afterExecution || result.code)) { await completeDeliveryWait(config, repo, pr, budget()); mutationPending = false }
       const outputDigest = digest.digest("hex")
       await log({ repo, pr, step: kind, status: result.code ? "failed" : "complete", code: result.code,
         outputDigest })
       if (result.code) throw new DeliveryError(`${kind} exited ${result.code}`, result.code)
-      return { ...result, outputDigest }
+      const completed = afterExecution ? await afterExecution(compute) : { ...result, outputDigest }
+      if (mutationPending) { await completeDeliveryWait(config, repo, pr, budget()); mutationPending = false }
+      return completed
     } catch (error) {
       if (mutationPending && error.uncertain === false)
         await completeDeliveryWait(config, repo, pr, budget())
@@ -353,25 +370,213 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
         await git(local.checkout, "worktree", "remove", "--force", dir)
     }
   }
-  async function fix(repo, pr, kind, worktree) {
-    const current = await view(repo, pr)
+  const repairFile = (repo, pr) => path.join(config.stateDir,"repairs",`${keyFor(repo,pr)}.json`)
+  const repairReceipt = record => path.join(config.stateDir,"repair-receipts",`${record.id}.json`)
+  async function retainRepair(record) {
+    const file=repairReceipt(record), bytes=JSON.stringify(record)
+    await fs.mkdir(path.dirname(file),{recursive:true,mode:0o700})
+    const temp=`${file}.${randomUUID()}.tmp`
+    await writeJson(temp,record)
+    try {await fs.link(temp,file)}
+    catch(error) {
+      if(error.code!=="EEXIST")throw error
+      if(await fs.readFile(file,"utf8")!==bytes)throw new DeliveryError("terminal repair receipt changed",9)
+    } finally {await fs.unlink(temp)}
+    return file
+  }
+  const checkPolicyFor = local => digestOf(JSON.stringify({checks:local.checks,timeoutMs:local.checkTimeoutMs ?? config.checksTimeoutMs}))
+  async function verifyRepairSource(repo,pr,record) {
+    const local=getRepo(repo),cwd=record.worktree
+    if(record.schema!=="factory-repair-delivery/v1" || record.repo!==repo || record.pr!==pr ||
+       await git(cwd,"rev-parse","--path-format=absolute","--git-common-dir")!==
+       await git(local.checkout,"rev-parse","--path-format=absolute","--git-common-dir"))
+      throw new DeliveryError("repair receipt repository binding mismatch",9)
+    await verifyOrigin(repo,local)
+    if(await git(cwd,"symbolic-ref","--short","HEAD")!==record.branch ||
+       await git(cwd,"rev-parse","HEAD")!==record.head || await git(cwd,"rev-parse","HEAD^{tree}")!==record.tree ||
+       await git(cwd,"status","--porcelain"))throw new DeliveryError("repair source changed; retain worktree and reconcile",9)
+  }
+  async function repairRemote(repo,record) {
+    const local=getRepo(repo),cwd=record.worktree
+    await verifyOrigin(repo,{...local,checkout:cwd})
+    const fetchUrl=await git(cwd,"remote","get-url","origin")
+    const destinations=(await git(cwd,"remote","get-url","--push","--all","origin")).split("\n")
+    if(destinations.length!==1 || destinations[0]!==fetchUrl)
+      throw new DeliveryError("repair push destination differs from bound origin",9)
+    record.pushDestination=destinations[0]
+    const transport=repairTransport(record.pushDestination)
+    return (await git(cwd,...transport.options,"ls-remote","--heads",transport.remote,`refs/heads/${record.branch}`)).split(/\s+/)[0]
+  }
+  function repairTransport(destination) {
+    const remote=`factory-repair-${randomUUID()}`,alias=`${remote}:`
+    // Git expands this exact alias once. Explicit pushurl skips pushInsteadOf;
+    // neither observation nor push feeds the expanded URL back through rewrites.
+    return {remote,options:["-c",`url.${destination}.insteadOf=${alias}`,
+      "-c",`remote.${remote}.url=${alias}`,"-c",`remote.${remote}.pushurl=${alias}`]}
+  }
+  async function repairObservation(repo,pr,record,heads) {
+    const current=await view(repo,pr)
     requireOpen(current)
-    if (current.isCrossRepository !== false) throw new DeliveryError("fork repair is unsupported; origin is not the PR source")
-    const fallback = worktree && worktree !== "-" ? path.resolve(worktree) : path.join(getRepo(repo).worktreeRoot, `fix-${pr}`)
-    const cwd = await branchWorktree(repo, current.headRefName, fallback, current.headRefOid)
-    await git(cwd, "fetch", "-q", "origin")
-    await fresh(repo, pr, current)
-    if (await git(cwd, "rev-parse", "HEAD") !== current.headRefOid)
-      throw new DeliveryError("HEAD MOVED before repair; source retained")
-    await guarded(repo, pr, kind, [config.codex.command ?? "codex", ...createCodexExecArgs(config.codex), "--sandbox", "danger-full-access", "-"], cwd,
-      deliveryPrompt(kind, { repo, pr, head: current.headRefOid, branch: current.headRefName }), current.headRefOid)
-    const head = (await view(repo, pr)).headRefOid
-    if (head === current.headRefOid) {
-      const error = new DeliveryError("NO-PROGRESS: fix pushed nothing", 2)
-      error.wait = await suspend(repo, pr, head, { cause: "source-no-progress", code: 2, message: error.message, resetAt: null })
-      throw error
+    if(current.isCrossRepository!==false || current.head.repo!==repo || current.headRefName!==record.branch ||
+       current.base.repo!==record.base.repo || current.base.ref!==record.base.ref || current.base.sha!==record.base.sha ||
+       !heads.includes(current.headRefOid))throw new DeliveryError("repair PR source/base binding moved; reconcile retained source",9)
+    return current
+  }
+  async function terminalJob(job,label) {
+    const observed=await observeProcessJob(job.receipt)
+    if(["starting","running","startup_unconfirmed"].includes(observed.status))
+      throw new DeliveryError(`${label} INCOMPLETE: observe job receipt before retry`,75)
+    if(observed.id!==job.id || observed.worktree!==job.worktree || observed.ownership!=="caller")
+      throw new DeliveryError(`${label} job binding mismatch`,9)
+    return observed
+  }
+  async function finishRepair(repo, pr, record, ownedCompute) {
+    const local=getRepo(repo),cwd=record.worktree,file=repairFile(repo,pr)
+    const persist=async status=>{record={...record,status};await writeJson(file,record)}
+    await verifyRepairSource(repo,pr,record)
+    let remoteHead=await repairRemote(repo,record)
+    // A checked push may have succeeded before its controller died. Any earlier
+    // publication is an observed contract violation, never an unpushed claim.
+    if(remoteHead!==record.baseHead && !(record.testedHead===record.head && remoteHead===record.head)) {
+      record.remoteHead=remoteHead;await persist("early_publication");await retainRepair(record)
+      throw new DeliveryError("EARLY PUBLICATION: remote changed before runner-owned checks; reconcile published source",9)
     }
-    return { head }
+    await repairObservation(repo,pr,record,[record.baseHead,...(record.testedHead===record.head?[record.head]:[])])
+    const checkPolicy=checkPolicyFor(local)
+    if(record.checkPolicy!==checkPolicy)delete record.testedHead
+    if(record.checkJob)await terminalJob(record.checkJob,"CHECK")
+    if(record.testedHead!==record.head) {
+      let compute
+      try {
+        compute=ownedCompute ?? await reserveCompute(config,config.resources.browserConcurrency,budget().phaseBudget("queue",config.queueTimeoutMs))
+        record.checks=[]
+        for(const argv of local.checks) {
+          const id=randomUUID()
+          record.checkJob={id,ownership:"caller",worktree:cwd,model:"repository-check",effort:"deterministic",
+            log:path.join(config.stateDir,"jobs",`${id}.log`),receipt:path.join(config.stateDir,"jobs",`${id}.json`)}
+          record.checkPolicy=checkPolicy
+          await persist("checking")
+          let result
+          try {
+            result=await command(argv,cwd,{allowFailure:true,timeoutMs:local.checkTimeoutMs ?? config.checksTimeoutMs,
+              job:record.checkJob,captureOutput:false,onSpawn:async(job,signal)=>{
+                const bindings=[...await compute.bindJob(job,signal)]
+                const owner=prLeases.get(keyFor(repo,pr));if(owner)bindings.push(await owner.bindJob(job,signal))
+                return bindings
+              }})
+          } catch(error){await persist("check_interrupted");throw error}
+          record.checks.push({argv,code:result.code,receipt:record.checkJob.receipt})
+          remoteHead=await repairRemote(repo,record)
+          if(remoteHead!==record.baseHead) {
+            record.remoteHead=remoteHead;await persist("early_publication");await retainRepair(record)
+            throw new DeliveryError("EARLY PUBLICATION: remote changed during runner checks",9)
+          }
+          if(result.code) {
+            record.remoteHead=remoteHead;await persist("check_failed");await retainRepair(record)
+            throw new DeliveryError(`repository check failed (${result.code}); source unpushed at observed remote ${remoteHead}`,result.code)
+          }
+          delete record.checkJob
+          await verifyRepairSource(repo,pr,record)
+        }
+        record.testedHead=record.head;record.checkPolicy=checkPolicy
+      } finally {if(compute && !ownedCompute)await compute()}
+    }
+    await verifyRepairSource(repo,pr,record)
+    remoteHead=await repairRemote(repo,record)
+    if(![record.baseHead,record.head].includes(remoteHead))throw new DeliveryError("repair remote moved before publication",9)
+    await repairObservation(repo,pr,record,[remoteHead])
+    await persist("push_pending")
+    if(remoteHead!==record.head) {
+      const transport=repairTransport(record.pushDestination)
+      await command(["git",...transport.options,"push",transport.remote,`${record.head}:refs/heads/${record.branch}`],cwd,
+        {onSpawn:async(job,signal)=>{const owner=prLeases.get(keyFor(repo,pr));return owner?[await owner.bindJob(job,signal)]:[]}})
+    }
+    record.remoteHead=await repairRemote(repo,record)
+    if(record.remoteHead!==record.head)throw new DeliveryError("PUSH PENDING: remote head differs from tested source",1)
+    await repairObservation(repo,pr,record,[record.head])
+    const terminal={...record,status:"delivered"},receipt=await retainRepair(terminal)
+    if(config.orchInbox) {
+      await persist("inbox_pending")
+      await command([config.orchInbox.command,"--store",config.orchInbox.store,"inbox","push","PlatformEngineer",`${repo}#${pr}`,"delivered","--report",receipt],cwd,{captureOutput:false})
+    }
+    record=terminal;await writeJson(file,record)
+    await log({repo,pr,step:"repair-delivery",status:"delivered",head:record.head,testedHead:record.testedHead,remoteHead:record.remoteHead,receipt})
+    return {head:record.head,receipt}
+  }
+  async function reconcileBuilder(repo,pr,record) {
+    const job=await terminalJob(record.builderJob,"BUILDER"),cwd=record.worktree
+    const head=await git(cwd,"rev-parse","HEAD"),tree=await git(cwd,"rev-parse","HEAD^{tree}")
+    record={...record,head,tree,builderOutcome:{status:job.status,code:job.code},status:"candidate_unconfirmed"}
+    await verifyRepairSource(repo,pr,record)
+    await repairRemote(repo,record)
+    await repairObservation(repo,pr,record,[record.baseHead])
+    await writeJson(repairFile(repo,pr),record)
+    // Even a clean commit from an interrupted builder has no completion claim.
+    // Recovery observes it; an explicit fix request may dispatch a corrective builder.
+    return record
+  }
+  async function fix(repo, pr, kind, worktree, repairId) {
+    const local=getRepo(repo)
+    if(!local.checks?.length)throw new DeliveryError("repository-owned checks required before repair",9)
+    let prior=await readJson(repairFile(repo,pr),null)
+    if(repairId && (!prior || prior.status==="delivered"))return {message:"REPAIR ALREADY RECONCILED"}
+    if(repairId && prior.id!==repairId)throw new DeliveryError("repair recovery receipt changed; observe before retry",75)
+    const current=await view(repo,pr)
+    requireOpen(current)
+    if(prior?.status==="no_progress") {await eligible(repo,pr,current.headRefOid);prior=null}
+    if(current.isCrossRepository!==false)throw new DeliveryError("fork repair is unsupported; origin is not the PR source")
+    let corrective=false
+    if(prior && prior.status!=="delivered") {
+      if(prior.status==="building")prior=await reconcileBuilder(repo,pr,prior)
+      if(prior.status==="candidate_unconfirmed") {
+        await terminalJob(prior.builderJob,"BUILDER")
+        if(repairId)throw new DeliveryError("CANDIDATE UNCONFIRMED: observed interrupted builder; explicit corrective fix required",75)
+        corrective=true
+      } else if(prior.status==="check_failed" && prior.checkPolicy===checkPolicyFor(local)) {
+        const job=await terminalJob(prior.checkJob,"CHECK")
+        if(job.status!=="failed" || !job.code || job.code!==prior.checks.at(-1)?.code)
+          throw new DeliveryError("failed check receipt unconfirmed; observe before correction",75)
+        corrective=true
+      } else {
+        if(prior.status==="early_publication")throw new DeliveryError("EARLY PUBLICATION: reconcile published source before repair",9)
+        if(prior.status==="check_failed") {
+          // A changed repository-owned policy can recheck the same source, but
+          // the failed attempt remains immutable and keeps its original ID.
+          prior={...prior,id:randomUUID(),corrects:prior.id,status:"built"}
+          await writeJson(repairFile(repo,pr),prior)
+        }
+        return finishRepair(repo,pr,prior)
+      }
+      await verifyRepairSource(repo,pr,prior)
+      if(await repairRemote(repo,prior)!==prior.baseHead)throw new DeliveryError("corrective repair remote moved",9)
+      await repairObservation(repo,pr,prior,[prior.baseHead])
+      await retainRepair(prior)
+      await completeDeliveryWait(config,repo,pr,budget())
+    }
+    const fallback=worktree && worktree!=="-"?path.resolve(worktree):path.join(local.worktreeRoot,`fix-${pr}`)
+    const cwd=corrective?prior.worktree:await branchWorktree(repo,current.headRefName,fallback,current.headRefOid)
+    await git(cwd,"fetch","-q","origin")
+    await fresh(repo,pr,current)
+    const inputHead=corrective?prior.head:current.headRefOid
+    if(await git(cwd,"rev-parse","HEAD")!==inputHead)throw new DeliveryError("HEAD MOVED before repair; source retained")
+    let record={schema:"factory-repair-delivery/v1",id:randomUUID(),repo,pr,branch:current.headRefName,
+      baseHead:current.headRefOid,base:current.base,inputHead,head:inputHead,tree:await git(cwd,"rev-parse","HEAD^{tree}"),
+      worktree:cwd,status:"building",checks:[],...(corrective?{corrects:prior.id}:{})}
+    const prompt=deliveryPrompt(kind,{repo,pr,head:inputHead,branch:current.headRefName})+
+      (corrective?`\nCorrective repair of ${prior.id} on retained local candidate ${inputHead}. Prior status: ${prior.status}. Check outcomes: ${JSON.stringify(prior.checks)}. Builder receipt: ${prior.builderJob?.receipt ?? "none"}. Confirm and finish this candidate; never repeat an uncertain external action.`:"")
+    return guarded(repo,pr,kind,[config.codex.command ?? "codex",...createCodexExecArgs(config.codex),"--sandbox","danger-full-access","-"],cwd,
+      prompt,current.headRefOid,async compute=>{
+        const head=await git(cwd,"rev-parse","HEAD")
+        if(head===inputHead) {
+          record={...record,status:"no_progress"};await writeJson(repairFile(repo,pr),record);await retainRepair(record)
+          const error=new DeliveryError("NO-PROGRESS: fix produced no commit",2)
+          error.wait=await suspend(repo,pr,current.headRefOid,{cause:"source-no-progress",code:2,message:error.message,resetAt:null})
+          throw error
+        }
+        record={...record,head,tree:await git(cwd,"rev-parse","HEAD^{tree}"),status:"built"}
+        await writeJson(repairFile(repo,pr),record)
+        return finishRepair(repo,pr,record,compute)
+      },async job=>{record.builderJob=job;await writeJson(repairFile(repo,pr),record)})
   }
   async function queueState(fn) {
     return withLease(locks, "queue-state", async () => {
@@ -662,17 +867,21 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
   return {
     config,
     async recoveryCandidates() {
-      const dir = path.join(config.stateDir, "waits")
-      const names = await fs.readdir(dir).catch(e => { if (e.code === "ENOENT") return []; throw e })
-      const candidates = []
-      for (const name of names) {
-        if (!name.endsWith(".json")) continue
-        const record = await readJson(path.join(dir, name))
-        if (record.schema !== "factory-delivery-wait/v1" || !config.repos[record.repo] || !Number.isSafeInteger(record.pr) || record.pr <= 0)
-          throw new DeliveryError("invalid delivery recovery record", 9)
-        if (["suspended", "resumable"].includes(record.status)) candidates.push({ repo: record.repo, pr: record.pr })
+      const candidates = new Map()
+      for (const [directory, schema] of [["waits","factory-delivery-wait/v1"],["repairs","factory-repair-delivery/v1"]]) {
+        const dir = path.join(config.stateDir,directory)
+        const names = await fs.readdir(dir).catch(e => { if (e.code === "ENOENT") return []; throw e })
+        for (const name of names) {
+          if (!name.endsWith(".json")) continue
+          const record = await readJson(path.join(dir,name))
+          if (record.schema !== schema || !config.repos[record.repo] || !Number.isSafeInteger(record.pr) || record.pr <= 0 ||
+              directory === "repairs" && (typeof record.id !== "string" || !record.id))
+            throw new DeliveryError("invalid delivery recovery record",9)
+          if (directory === "repairs" ? !["delivered","no_progress"].includes(record.status) : ["suspended","resumable"].includes(record.status))
+            candidates.set(keyFor(record.repo,record.pr),{repo:record.repo,pr:record.pr,...(directory === "repairs" ? {repairId:record.id} : {})})
+        }
       }
-      return candidates
+      return [...candidates.values()]
     },
     async exclusive(repo, pr, fn) {
       getRepo(repo)
@@ -706,6 +915,8 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
               break
             }
             case "review": data = await review(repo, pr); break
+            case "repair-status": data = await readJson(repairFile(repo,pr),{status:"absent"});
+              if(data.checkJob) data = {...data,job:await observeProcessJob(data.checkJob.receipt)}; break
             case "readiness": {
               const current = await view(repo, pr, { head })
               requireOpen(current)
@@ -715,7 +926,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
             }
             case "pr:suspend": data = await suspend(repo, pr, head, request.stop); break
             case "pr:complete": await completeDeliveryWait(config, repo, pr, budget()); data = {}; break
-            case "fix": case "ci-fix": data = await fix(repo, pr, step, worktree); break
+            case "fix": case "ci-fix": data = await fix(repo, pr, step, worktree, request.repairId); break
             case "branch-wt": data = { worktree: await branchWorktree(repo, request.branch, request.fallback) }; break
             case "codex-guard": data = await guarded(repo, pr, request.kind, request.argv, getRepo(repo).checkout, ""); break
             case "enqueue": data = await enqueue(repo, pr, head, note); break

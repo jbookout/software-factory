@@ -124,11 +124,21 @@ scripts are unchanged by this PR.
 
 The maintained adapters are in `deploy/orch/`. They execute the same CLI used by
 the replay tests; they contain no budget, review or CI policy of their own.
-After draining active workers, copy **all** of that directory's `.sh` files to
-the private orchestration script directory. Set `FACTORY_ROOT` to the merged,
-pinned factory checkout and `FACTORY_PR_CONFIG` to the shared private config
-in every worker and scheduler environment. Keep the prior scripts for rollback.
-The factory does not edit or install into the running script directory itself.
+After draining active workers, use the source-bound installer:
+`node "$FACTORY/bin/orch-install.mjs" install "$FACTORY" "$OLD" "$CONFIG"`.
+It retains the previous receipt and wrappers in a revision-named rollback
+directory, preserves their source revision in a sibling snapshot, and writes
+`.factory-orch.json` beside the installed wrappers. The receipt binds the clean
+source revision, runtime hashes, executable hashes, entrypoint, config and private
+state location. `node "$FACTORY/bin/orch-install.mjs" check "$OLD"` compares
+those artifacts without changing them. A mismatch names the file and requires
+reinstalling delivered source. Installed wrappers read their own receipt and
+use the installed, builtin-only verifier to check source bytes before evaluating
+the PR adapter. Installed entrypoints require a receipt even in a `deploy/orch`
+directory; caller environment cannot select a
+different factory implementation. Source-directory wrappers retain the existing
+`FACTORY_ROOT`/`FACTORY_PR_CONFIG` replay route. Keep config and state outside both
+source and installed executables. The installer does not start jobs or a scheduler.
 
 `unstick.sh` and `stall-watch.sh` are **PR recovery entry points**: both reconcile
 the same private wait records through `recover`, with `--once` for supervision.
@@ -289,3 +299,66 @@ checks both modes and child peaks; it does not qualify the product's full browse
 suite or establish the audit's weekly savings. Factory CI has a 15-minute outer
 job deadline and a five-minute install deadline; the factory's Node test command
 also limits file concurrency to two. Keep required CI coverage intact.
+
+
+## Process and repair receipts
+
+Every guarded job has explicit `caller` ownership. The foreground CLI owns it;
+ending that owner interrupts its process group. This release provides no detached
+service mode. The supervisor binds a unique job ID, assigned worktree, configured
+model and effort, private log, supervisor PID, group PID and deadline. It writes
+`running` only after that command acknowledges startup and its log exists.
+The supervisor writes the terminal receipt even after the caller disconnects.
+Job receipts and logs live under `stateDir/jobs`. Sensitive-output commands keep
+raw stdout/stderr out of logs as well as delivery records; their output digest
+remains available. Process scans cannot establish
+startup for another job.
+
+Repairs require repository-owned `checks`, a nonempty list of literal argv
+arrays, and optionally `checkTimeoutMs`. Configure CARR with
+`[["ops/ci.sh", "--strict"]]`. Configure DoctorCRE with its privacy, check, test,
+build and artifact-verification commands. Factory configuration includes `npm test`,
+the browser-select Python test and orchestration evidence replay steps from its CI.
+Install required dependencies before admission. Commands execute in the assigned
+worktree, under the existing process supervisor and compute reservations.
+
+The builder performs focused tests and returns a local commit. The runner owns
+full checks, ordinary push and both remote/PR head readback. A remote change
+before checks finish produces `early_publication` and refuses delivery. Failed
+checks report the observed remote head; they cannot infer unpublished source
+from a check's exit code. The runner binds the worktree's effective push URL,
+refuses extra destinations, and pushes to that observed URL. It rechecks the
+open PR and its branch, repository and base binding immediately before push,
+and requires those bindings again in the final readback.
+
+The current repair at `stateDir/repairs/<repo-pr>.json` binds the builder job and
+source before dispatch. It transitions through `building`, `checking`,
+`check_failed` or `check_interrupted`, `push_pending`, then `delivered`.
+`node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" repair-status "$R" "$N"`
+reads that record and current job owner. The installed `unstick` and `stall-watch`
+entrypoints discover both waits and incomplete repairs. Recovery observes the
+job before retrying. It refuses live jobs and reconciles a committed interrupted
+builder to `candidate_unconfirmed`, without repeating the builder or publishing.
+An explicit fix request can confirm and finish that retained candidate.
+A terminal failed repository check permits a bounded corrective builder on the
+retained source under the PR lease and existing admission budget. A changed
+check policy can recheck that source without rebuilding. Each new attempt keeps
+a new repair ID and names its predecessor. Failed and delivered receipts remain
+immutable under `stateDir/repair-receipts/<repair-id>.json`; inbox reports use
+those paths, while the current record exists for recovery. Pending pushes read
+remote state before another push. Delivery binds the tested commit/tree, check
+results and observed remote head; builder prose cannot supply that evidence.
+
+An optional private `orchInbox` configuration names the installed pstack
+`orch.ts` executable as `command` and its initialized private `store` directory.
+The runner uses its existing `inbox push` command to publish a terminal receipt
+pointer for `<repo>#<pr>`. Pstack's verification ledger retains its independent
+reviewer verdicts; process completion never overwrites one. This is a pointer
+into the existing store, with no copied store implementation or second job DB.
+
+The workflow audit now runs on actual repository workflows in hosted CI as a
+non-blocking pilot. Missing action provenance or unclassified shell execution
+remains an audit finding; the YAML audit does not certify installed shell behavior.
+Installed-wrapper replays provide that separate evidence. To remove the pilot,
+remove its optional CI step. To roll back orchestration, drain jobs, reconcile
+private queue/usage records and restore retained wrappers as described above.

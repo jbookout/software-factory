@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import test from "node:test";
+import {parse} from "yaml";
 
 const files = ["ci.yml"];
 const read = name => readFileSync(new URL("../.github/workflows/" + name, import.meta.url), "utf8");
@@ -56,6 +57,18 @@ function replay(source, events) {
 }
 for (const file of files) {
   const source = read(file);
+  test(`${file}: full validation fits setup plus a representative full suite`, () => {
+    const job = parse(source).jobs.test;
+    const install = job.steps.find(step => step.run === "npm ci");
+    const suite = job.steps.find(step => step.run === "npm test");
+    // A foreground local run took 36 minutes. Round the representative workload
+    // up to 40, and reserve five more minutes for Python validation and audit.
+    const suiteMinutes = 40, remainingValidationMinutes = 5;
+    assert.ok((suite['timeout-minutes'] ?? job['timeout-minutes']) >= suiteMinutes,
+      'npm tests must finish before the step or job deadline cancels them');
+    assert.ok(job['timeout-minutes'] >= install['timeout-minutes'] + suiteMinutes + remainingValidationMinutes,
+      'job deadline must leave time for installation, the full suite and subsequent validation');
+  });
   test(`${file}: required context identity is retained`, () => {
     assert.deepEqual(policy(source, context()).jobs, ["test", "e2e-deterministic-qualification"]);
   });
@@ -97,7 +110,13 @@ for (const file of files) {
     for (const action of ["opened", "synchronize", "reopened", "edited", "ready_for_review"]) {
       assert.deepEqual(policy(source, context("pull_request", action)).runnable, policy(source, context()).jobs);
     }
-    assert.doesNotMatch(source, /github\.event\.pull_request\.draft|continue-on-error:/);
+    assert.doesNotMatch(source, /github\.event\.pull_request\.draft/);
+    const job=parse(source).jobs.test;
+    assert.equal(job['continue-on-error'],undefined,'required job must fail on validation errors');
+    for(const step of job.steps) {
+      if(step.run==='npm run workflow:audit -- .') assert.equal(step['continue-on-error'],true,'audit remains a non-blocking pilot');
+      else assert.equal(step['continue-on-error'],undefined,'required validation step cannot suppress failure');
+    }
     const events = [context("pull_request", "opened"), ...Array.from({ length: 5 }, (_, i) => context("push", "", 9, 100 + i)), context("pull_request", "closed", 9, 7)];
     assert.equal(replay(source, events)[0].status, "success", "a close event must not erase completed green evidence");
   });
