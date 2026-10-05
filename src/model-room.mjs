@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
+import fs from "node:fs/promises"
+import path from "node:path"
 import { askJev } from "./jev-usage.mjs"
 import { hmacSignature, hmacSignatureMatches, isHmacSignature } from "./hmac-signature.mjs"
 import { canonicalDigest } from "./canonical.mjs"
@@ -386,4 +388,45 @@ export async function routeDoctorCreBuild({ task, contracts, baseline, candidate
   } catch {
     return { ...result, jev: { status: "unavailable", reason: "service_error", model: JEV_MODEL, shadow_choice: null } }
   }
+}
+
+
+/** Prepare a build from product-owned policy; credentials stay runtime inputs. */
+export async function prepareModelRoomBuild({ task, policy, baseDir, apiKey, evaluationKey,
+  fetchImpl = fetch, usageLog, cacheDir }) {
+  const load = reference => readPinnedContract({ ...reference,
+    root: path.resolve(baseDir, reference.root) })
+  const contracts = await Promise.all(policy.contracts.map(load))
+  const optional = await Promise.all((policy.optionalContext ?? []).map(load))
+  const jevInputs = { apiKey, fetchImpl, usageLog, cacheDir }
+  const selection = await selectOptionalBuildContext({ task, chunks: optional, ...jevInputs })
+  const buildContext = createPinnedBuildContext([...contracts, ...selection.contracts])
+  let evidence = { status: "unavailable", reason: "not_configured", bundle_digest: null }
+  let authenticated = { observations: [], minimumCases: policy.minimumCases ?? 3,
+    verifyObservation: () => false, verifyControl: () => false }
+  if (policy.evaluationBundle) {
+    try {
+      const bundle = JSON.parse(await fs.readFile(path.resolve(baseDir, policy.evaluationBundle), "utf8"))
+      authenticated = authenticateEvaluationBundle(bundle, evaluationKey)
+      evidence = { status: "authenticated", reason: null, bundle_digest: authenticated.bundleDigest }
+    } catch (error) {
+      evidence = { status: "unavailable", reason: error.message.includes("signature")
+        ? "signature_mismatch" : "invalid_or_missing_bundle", bundle_digest: null }
+    }
+  }
+  const route = await routeDoctorCreBuild({ task, contracts, baseline: policy.baseline,
+    candidates: policy.candidates, observations: authenticated.observations,
+    verifyObservation: authenticated.verifyObservation, verifyControl: authenticated.verifyControl,
+    minimumCases: authenticated.minimumCases, controlEnabled: policy.controlMode === "qualified_only",
+    ...jevInputs })
+  const { contracts: selectedText, ...contextSelection } = selection
+  return { ...route, qualification_evidence: evidence,
+    context_selection: contextSelection, build_context: buildContext }
+}
+
+/** Receipts describe preparation without publishing the build's private text. */
+export function modelRoomReceipt(advice) {
+  if (!advice) return null
+  const { build_context, ...receipt } = advice
+  return receipt
 }
