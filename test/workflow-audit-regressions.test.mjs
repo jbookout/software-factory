@@ -199,3 +199,12 @@ test('12: CLI returns bounded JSON on provider timeout', () => cliFixture(({dir,
   assert.equal(result.status, 1);
   assert.ok(result.output.findings.some(f => f.property === 'upstream-provenance'));
 }));
+
+for (const [name, jobs] of [
+  ['job alias', '  a: &base\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n  b: *base\n'],
+  ['job merge', '  a: &base\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n  b:\n    <<: *base\n'],
+  ['nested anchor', '  a:\n    runs-on: ubuntu-latest\n    steps:\n      - &step\n        run: npm test\n'],
+]) test(`shared workflow parser refuses ${name}`, () => {
+  const findings = auditWorkflow('on: push\npermissions:\n  contents: read\njobs:\n' + jobs, {})
+  assert.ok(findings.some(f => f.property === 'invalid-yaml'))
+})

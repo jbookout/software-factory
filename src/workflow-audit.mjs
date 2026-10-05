@@ -1,5 +1,19 @@
-import { parseDocument, LineCounter } from 'yaml';
+import { parseDocument, LineCounter, visit, isAlias, isPair, isScalar } from 'yaml';
 import { posix } from 'node:path';
+
+// Shared interpretation for audits and runner experiments. Job indirection needs
+// a separate effective-configuration review; never certify a partial job graph.
+export function parseWorkflowDocument(source, options = {}) {
+  if (typeof source !== 'string' || source.length > 1024 * 1024) throw new Error('input bound');
+  const document = parseDocument(source, {...options, uniqueKeys:true});
+  if (document.errors.length) throw new Error('invalid YAML');
+  visit(document.get('jobs',true), (_key,node) => {
+    if (node?.anchor || isAlias(node) || isPair(node) && isScalar(node.key) && node.key.value === '<<') {
+      throw new Error('job indirection requires effective-config review');
+    }
+  });
+  return document;
+}
 
 const shaPattern = /^[a-f0-9]{40}$/;
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -136,9 +150,7 @@ export function auditWorkflow(source, pins, file = 'workflow.yml') {
   };
   let workflow;
   try {
-    if (typeof source !== 'string' || source.length > 1024 * 1024) throw new Error('input bound');
-    document = parseDocument(source,{lineCounter:lines,uniqueKeys:true});
-    if (document.errors.length) throw new Error('invalid YAML');
+    document = parseWorkflowDocument(source,{lineCounter:lines});
     workflow = document.toJS({maxAliasCount:100});
   } catch { add('invalid-yaml',[],'Repair YAML or reduce input nesting/aliases before interpreting trust.'); return findings; }
   if (!record(workflow) || !record(workflow.jobs) || !Object.keys(workflow.jobs).length || !eventNames(workflow.on).length || !eventNames(workflow.on).every(event => typeof event === 'string' && event.length)) {
