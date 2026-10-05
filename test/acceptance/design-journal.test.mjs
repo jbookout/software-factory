@@ -184,6 +184,26 @@ test('reported decisions, gates and worker receipts retain limits and confer no 
   assert.equal(state.authority, 'reported-only')
   assert.equal(state.view, null)
 })
+test('relative backup destinations resolve from the caller directory and restore by the same path', async t => {
+  const { dir, root, journal, artifact } = await fixture(t)
+  const before = await journal.execute({ command: 'read' })
+  const moduleUrl = new URL('../../src/design-journal.mjs', import.meta.url).href
+  const restoredState = execFileSync(process.execPath, ['--input-type=module', '-e', `
+    import { openDesignJournal, restoreDesignJournal } from ${JSON.stringify(moduleUrl)}
+    const scope = ${JSON.stringify(scope)}
+    const journal = await openDesignJournal({ root: 'private', ...scope })
+    await journal.execute({ command: 'backup', destination: 'backup' })
+    const restored = await restoreDesignJournal({ root: 'restored', backupRoot: 'backup', ...scope })
+    console.log(JSON.stringify({ state: await restored.execute({ command: 'read' }),
+      artifact: (await restored.readArtifact(${JSON.stringify(artifact.ref)})).toString() }))
+  `], { cwd: dir, encoding: 'utf8' })
+  const restored = JSON.parse(restoredState)
+  assert.deepEqual(restored.state, before)
+  assert.equal(restored.artifact, 'synthetic reference bytes')
+  assert.equal(JSON.parse(await fs.readFile(path.join(dir, 'backup', 'manifest.json'), 'utf8')).schema,
+    'design-journal-backup.v1')
+  await assert.rejects(fs.stat(path.join(root, 'backup')), /ENOENT/)
+})
 test('restore rejects incomplete/corrupt backups and never overwrites existing journals', async t => {
   const { api, dir, journal, root, artifact } = await fixture(t)
   const backupRoot = path.join(dir, 'backup')

@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import Ajv2020 from 'ajv/dist/2020.js'
@@ -100,7 +100,7 @@ export async function openDesignJournal(options) {
     if (request?.command === 'read') { exact(request, ['command']); return checkedState(await call({ op: 'read' }), scope) }
     if (request?.command === 'backup') {
       exact(request, ['command', 'destination'])
-      return call({ op: 'backup', destination: request.destination })
+      return call({ op: 'backup', destination: resolve(request.destination) })
     }
     const fields = commandFields[request?.command]
     if (!fields) throw new Error('unknown journal command')
