@@ -10,6 +10,7 @@
         }
       ],
       "dependencyRevision": "owned-actionable-input-revision",
+      "dependencyBotLogin": "renovate[bot]",
       "checks": [
         [
           "npm",

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "enabledManagers": ["npm", "pip_requirements", "github-actions"],
+  "timezone": "America/Chicago",
+  "schedule": ["* 0-5 * * 1"],
+  "labels": ["dependencies"],
+  "automerge": false,
+  "platformAutomerge": false,
+  "separateMajorMinor": true,
+  "separateMinorPatch": true,
+  "pip_requirements": {
+    "managerFilePatterns": ["/(^|/)requirements\\.lock$/"]
+  },
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["patch", "pin", "pinDigest", "digest"],
+      "groupName": "patch dependencies",
+      "addLabels": ["dependency-patch"]
+    },
+    {
+      "matchUpdateTypes": ["minor"],
+      "groupName": "minor dependencies",
+      "addLabels": ["dependency-minor"]
+    },
+    {
+      "matchUpdateTypes": ["major"],
+      "groupName": null,
+      "addLabels": ["dependency-major"]
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "pinDigests": true
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "schedule": [],
+    "groupName": null,
+    "addLabels": ["dependency-security"],
+    "automerge": false,
+    "platformAutomerge": false
+  }
+}

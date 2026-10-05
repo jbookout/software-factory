@@ -69,6 +69,8 @@ function prValue(value, repo, pr) {
     isCrossRepository: value.head.repo.full_name !== repo, mergeStateStatus: value.mergeable_state.toUpperCase(),
     mergeable: value.mergeable === true ? "MERGEABLE" : value.mergeable === false ? "CONFLICTING" : "UNKNOWN",
     isDraft: value.draft, mergeCommit: { oid: value.merge_commit_sha ?? null },
+    author: typeof value.user?.login === "string" ? value.user.login : null,
+    labels: Array.isArray(value.labels) && value.labels.every(l => typeof l?.name === "string") ? value.labels.map(l => l.name) : [],
     commentCount: value.comments, updatedAt: value.updated_at ?? null }
 }
 
