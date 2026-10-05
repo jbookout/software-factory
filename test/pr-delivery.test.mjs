@@ -13,6 +13,7 @@ const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8",
 const fake = `#!/usr/bin/env node
 const fs = require('node:fs'), cp = require('node:child_process');
 const args = process.argv.slice(2), file = process.env.FAKE_PR;
+if(require('node:path').basename(process.argv[1])==='gh' && process.env.FAKE_WORKER_GH_TLS==='1'){console.log(JSON.stringify({credentialPresent:Boolean(process.env.GH_TOKEN||process.env.GITHUB_TOKEN)}));console.error('tls: failed to verify certificate: x509: OSStatus -26276');process.exit(1);}
 const s = JSON.parse(fs.readFileSync(file));
 // Concurrent fake calls and the test read this file; replace it atomically.
 const save = () => { const temp = file + '.' + process.pid + '.tmp'; fs.writeFileSync(temp, JSON.stringify(s)); fs.renameSync(temp, file); };
@@ -33,6 +34,18 @@ if(tool === 'codex') {
  if(s.childCode) { console.error(s.childError??'synthetic child refusal');process.exit(s.childCode); }
  if(s.hang) { process.on('SIGTERM',()=>{}); setInterval(()=>{},1000); return; }
  if(prompt.includes('REVIEW MODE:')) {
+ if(s.workerTlsFailure || s.inputTamper) {
+ const probeArgs=['gh','api','repos/'+s.repo+'/pulls/7'];
+ const probe=cp.spawnSync(probeArgs[0],probeArgs.slice(1),{encoding:'utf8',env:{...process.env,FAKE_WORKER_GH_TLS:'1',GH_TOKEN:'',GITHUB_TOKEN:''}});
+ const match=/^OWNER-CAPTURED INPUT: (.+)$/m.exec(prompt);
+ if(!match){console.error(probe.stderr);process.exit(1);}
+ const manifest=JSON.parse(fs.readFileSync(match[1]));
+ s.workerInput={binding:manifest.binding,description:fs.readFileSync(manifest.files.description.path,'utf8'),diff:fs.readFileSync(manifest.files.diff.path,'utf8'),checks:JSON.parse(fs.readFileSync(manifest.files.checks.path)),probe:{client:'gh',route:'repos/'+s.repo+'/pulls/7',code:probe.status,error:probe.stderr,argv:probeArgs,credentialPresent:JSON.parse(probe.stdout).credentialPresent}};save();
+ if(s.inputTamper==='digest'){fs.chmodSync(manifest.files.diff.path,0o600);fs.appendFileSync(manifest.files.diff.path,'altered');}
+ if(s.inputTamper==='omit'){fs.chmodSync(match[1],0o600);delete manifest.files.diff;fs.writeFileSync(match[1],JSON.stringify(manifest));}
+ if(s.inputTamper==='rebless'){fs.chmodSync(manifest.files.diff.path,0o600);fs.appendFileSync(manifest.files.diff.path,'altered');manifest.files.diff.digest=require('node:crypto').createHash('sha256').update(fs.readFileSync(manifest.files.diff.path)).digest('hex');fs.chmodSync(match[1],0o600);fs.writeFileSync(match[1],JSON.stringify(manifest));}
+ if(s.inputTamper==='head'){git('-C',s.checkout,'checkout','-q','topic');fs.writeFileSync(s.checkout+'/moved.txt','moved');git('-C',s.checkout,'add','moved.txt');git('-C',s.checkout,'commit','-qm','Move review input');git('-C',s.checkout,'push','-q','origin','topic');git('-C',s.checkout,'checkout','-q','main');}
+ }
  if(s.reviewerCommit) { fs.writeFileSync('feature.txt','prohibited');git('add','feature.txt');git('commit','-qm','Prohibited reviewer edit'); }
  const body=(s.blockOnce && !s.blocked ? 'REVIEW: BLOCKED' : 'APPROVE')+'\\nReviewed-SHA: '+s.headRefOid+'\\n\\n'+(s.blockOnce && !s.blocked ? '1. fix defect\\nNon-blocking\\nNone' : 'Non-blocking\\nNone');
  s.blocked=true; save(); fs.writeFileSync(args[args.indexOf('--output-last-message')+1], body);
@@ -90,7 +103,7 @@ if(tool === 'codex') {
  if(s.apiFailure) { console.log('HTTP/2.0 403 Forbidden\\nx-ratelimit-remaining: 0\\n\\n{}');console.error('provider unavailable');process.exit(1); }
  if(s.restFault) { if(s.restFault==='exception') process.exit(2); if(s.restFault==='refusal') {console.log('HTTP/2.0 401 Unauthorized\\n\\n{}');process.exit(1);}
  console.log('HTTP/2.0 200 OK\\n\\n'+s.restFault);process.exit(0); }
- const pr=(number=s.number)=>({id:number,number,title:s.title,state:s.state==='OPEN'?'open':'closed',merged:s.state==='MERGED',draft:s.isDraft,
+ const pr=(number=s.number)=>({id:number,number,title:s.title,body:s.description??'',state:s.state==='OPEN'?'open':'closed',merged:s.state==='MERGED',draft:s.isDraft,
  head:{sha:s.headRefOid,ref:s.headRefName,repo:{full_name:s.isCrossRepository?'fixture/fork':(s.repo??'fixture/new-repository')}},
  base:{ref:s.baseRefName,sha:s.recordedBase??git('--git-dir',s.remote,'rev-parse','refs/heads/main'),repo:{full_name:s.repo??'fixture/new-repository'}},comments:s.comments.filter(c=>(c.pr??7)===number).length,mergeable:s.mergeable==='UNKNOWN'?null:s.mergeable!=='CONFLICTING',mergeable_state:s.mergeStateStatus.toLowerCase(),merge_commit_sha:s.mergeCommit?.oid});
  if(/pulls\\/[0-9]+$/.test(route)) {
@@ -1402,7 +1415,7 @@ test('retro 7: recovery refuses a still-running check and resumes only after obs
 async function installedFixture(f) {
  const source=path.join(f.root,'factory-source'),installed=path.join(f.root,'installed')
  git(f.checkout,'clone','--quiet','--no-hardlinks',fileURLToPath(new URL('../',import.meta.url)),source)
- const names=['src/orch-installation.mjs','bin/orch-install.mjs','src/github-snapshot.mjs','src/pr-delivery.mjs','src/pr-delivery-prompts.mjs',
+ const names=['src/review-evidence.mjs','src/orch-installation.mjs','bin/orch-install.mjs','src/github-snapshot.mjs','src/pr-delivery.mjs','src/pr-delivery-prompts.mjs',
    'src/process-group.mjs','src/process-runner.mjs','src/process-launcher.mjs','src/process-supervisor.mjs','bin/pr-delivery.mjs',
    'deploy/orch/factory-verify.mjs','deploy/orch/factory-entry.sh','deploy/orch/test-browser.sh','deploy/orch/branch-wt.sh','deploy/orch/merge-enqueue.sh']
  for(const name of names){await fs.copyFile(fileURLToPath(new URL('../'+name,import.meta.url)),path.join(source,name))}
@@ -1759,4 +1772,82 @@ test('blocking 5: worktree-specific push destination is checked after repository
  const result=await f.run('fix-pr',repo,'7','-')
  assert.equal(result.code,9,JSON.stringify(result));assert.match(result.stdout+result.stderr,/push destination/)
  assert.equal(remoteTopic(f),f.head);assert.equal(git(f.root,'--git-dir',other,'rev-parse','refs/heads/topic'),f.head)
+})
+
+test('owner input lets a TLS-refused worker review without a network credential',async t=>{
+ const f=await fixture(t,{workerTlsFailure:true,description:'Fixture review description',repo})
+ ok(await f.run('review-pr',repo,'7'))
+ const s=await f.read();assert.equal(s.workerInput.description,'Fixture review description')
+ assert.equal(s.workerInput.binding.head,f.head);assert.match(s.workerInput.diff,/feature.txt/)
+ assert.equal(s.workerInput.checks.ci.state,'success');assert.equal(s.workerInput.checks.availability.availability,'reachable');assert.match(s.workerInput.probe.error,/OSStatus -26276/)
+ assert.equal(s.workerInput.probe.credentialPresent,false);assert.equal(s.workerInput.probe.argv[0],'gh')
+ assert.equal(s.comments.length,1)
+})
+for(const inputTamper of ['digest','omit','head','rebless'])test(`review refuses owner input tampering: ${inputTamper}`,async t=>{
+ const f=await fixture(t,{inputTamper,repo})
+ assert.notEqual((await f.run('review-pr',repo,'7')).code,0)
+ const state=await f.read();assert.ok(state.workerInput);assert.equal(state.comments.length,0)
+})
+test('fixture worker client measures credential presence without printing its value',async t=>{
+ const f=await fixture(t)
+ for(const value of ['', 'fixture-sentinel']) {
+  const result=await new Promise((resolve,reject)=>{
+   const child=spawn('gh',['api',`repos/${repo}/pulls/7`],{env:{...f.env,FAKE_WORKER_GH_TLS:'1',GH_TOKEN:value,GITHUB_TOKEN:''},stdio:['ignore','pipe','pipe']})
+   let stdout='',stderr='';child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b)
+   child.on('error',reject);child.on('close',code=>resolve({code,stdout,stderr}))
+  })
+  assert.equal(result.code,1);assert.match(result.stderr,/OSStatus -26276/)
+  assert.equal(JSON.parse(result.stdout).credentialPresent,Boolean(value))
+  assert.doesNotMatch(result.stdout+result.stderr,/fixture-sentinel/)
+ }
+})
+
+async function capturedReviewInput(f) {
+ const state = await f.read()
+ const manifestPath = /^OWNER-CAPTURED INPUT: (.+)$/m.exec(state.calls.at(-1).prompt)?.[1]
+ assert.ok(manifestPath)
+ const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"))
+ return {state, manifest, diff: await fs.readFile(manifest.files.diff.path, "utf8")}
+}
+
+test("PR52 finding 1: full review captures only topic changes when main diverges", async t => {
+ const f = await fixture(t)
+ const mergeBase = f.g("merge-base", "main", "topic")
+ await fs.writeFile(path.join(f.checkout, "main-only.txt"), "upstream\n")
+ f.g("add", "main-only.txt"); f.g("commit", "-qm", "Advance main"); f.g("push", "-q", "origin", "main")
+ const target = f.g("rev-parse", "main")
+ ok(await f.run("review-pr", repo, "7"))
+ const {state, manifest, diff} = await capturedReviewInput(f)
+ assert.match(diff, /feature.txt/)
+ assert.doesNotMatch(diff, /main-only.txt/)
+ assert.equal(diff, f.g("diff", "--no-ext-diff", "--no-textconv", mergeBase, f.head))
+ assert.equal(manifest.binding.base, target)
+ assert.equal(manifest.binding.mergeBase, mergeBase)
+ assert.equal(state.comments.length, 1)
+})
+
+for (const mode of ["full", "confirm"]) test(`PR52 finding 2: ${mode} review captures raw changes despite textconv`, async t => {
+ const f = await fixture(t)
+ if (mode === "confirm") await f.approve(`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. change base.txt`)
+ const converter = path.join(f.root, "mask.mjs")
+ await fs.writeFile(converter, 'process.stdout.write("masked\\n")')
+ f.g("config", "diff.mask.textconv", `${process.execPath} ${converter}`)
+ f.g("checkout", "topic")
+ await fs.writeFile(path.join(f.checkout, ".gitattributes"), "base.txt diff=mask\n")
+ await fs.writeFile(path.join(f.checkout, "base.txt"), "changed source\n")
+ f.g("add", ".gitattributes", "base.txt"); f.g("commit", "-qm", "Change masked source"); f.g("push", "-q", "origin", "topic")
+ const head = f.g("rev-parse", "HEAD")
+ f.g("checkout", "main")
+ ok(await f.run("review-pr", repo, "7"))
+ const {state, manifest, diff} = await capturedReviewInput(f)
+ if (mode === "confirm") {
+  assert.match(state.calls.at(-1).prompt, /REVIEW MODE: confirm/)
+  const fixDiff = await fs.readFile(manifest.files.fixDiff.path, "utf8")
+  assert.match(fixDiff, /-base\n\+changed source/)
+  assert.equal(fixDiff, f.g("diff", "--no-ext-diff", "--no-textconv", f.head, head))
+ }
+ assert.match(diff, /diff --git a\/base.txt b\/base.txt/)
+ assert.match(diff, /-base\n\+changed source/)
+ assert.equal(manifest.binding.head, head)
+ assert.equal(state.comments.length, mode === "confirm" ? 2 : 1)
 })

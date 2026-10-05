@@ -1,3 +1,4 @@
+import {writeReviewEvidence,readReviewEvidence} from "./review-evidence.mjs"
 import { createGitHubObservation } from "./github-observation.mjs"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { Deadline, DeadlineError, waitForCondition, validDuration } from "./deadline.mjs"
@@ -187,6 +188,12 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     const prompt = await fs.readFile(`${artifacts}.prompt`, "utf8").catch(() => null)
     const output = await fs.readFile(receipt.output, "utf8").catch(() => null)
     if (prompt === null || output === null || digestOf(prompt) !== receipt.promptDigest || digestOf(output) !== receipt.outputDigest) return false
+    if (!receipt.input?.binding || receipt.input.binding.head!==receipt.head || receipt.input.binding.tree!==receipt.tree ||
+        receipt.input.binding.repo!==repo || receipt.input.binding.pr!==pr) return false
+    try {
+      if(digestOf(await fs.readFile(receipt.input.manifest,"utf8"))!==receipt.input.digest)return false
+      await readReviewEvidence(receipt.input.manifest,receipt.input.binding)
+    } catch {return false}
     const source = await command(["git", "rev-parse", `${receipt.head}^{tree}`], getRepo(repo).checkout, { allowFailure: true })
     if (source.code || source.stdout.trim() !== receipt.tree) return false
     return true
@@ -352,13 +359,24 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     const output = path.join(config.stateDir, `review-${keyFor(repo, pr)}-${attempt}.txt`)
     try {
       const prior = current.review?.verdict !== "APPROVE" ? current.review : null
-      const prompt = deliveryPrompt("review", { repo, pr, head, prior, description: current.body, ci: current.ci, reader: { root: fileURLToPath(new URL("../", import.meta.url)) } })
+      await git(dir,"fetch","-q","origin",current.baseRefOid)
+      const mergeBase=await git(dir,"merge-base",current.baseRefOid,head)
+      const binding={repo,pr,base:current.baseRefOid,mergeBase,head,tree,observedAt:current.fetchedAt}
+      const manifest=await writeReviewEvidence(path.join(config.stateDir,"reviews",`${attempt}-input`),binding,{
+        description:current.body,diff:await git(dir,"diff","--no-ext-diff","--no-textconv",binding.mergeBase,head),
+        checks:{head,ci:current.ci,inventory:current.inventory,availability:current.availability,observedAt:current.fetchedAt},
+        ...(prior?{fixDiff:await git(dir,"diff","--no-ext-diff","--no-textconv",prior.sha,head)}:{})})
+      const inputDigest=digestOf(await fs.readFile(manifest,"utf8"))
+      const evidence=await readReviewEvidence(manifest,binding)
+      const prompt = deliveryPrompt("review", { repo, pr, head, prior, evidence })
       await fs.rm(output, { force: true })
       const argv = [config.codex.command ?? "codex", ...createCodexExecArgs(config.codex),
         "--sandbox", "danger-full-access", "--output-last-message", output, "-"]
       const execution = await guarded(repo, pr, "review", argv, dir, prompt, head)
       if (!(await unchanged()))
         throw new DeliveryError("reviewer changed pinned source; refusing approval, worktree retained")
+      if(digestOf(await fs.readFile(manifest,"utf8"))!==inputDigest)throw new DeliveryError("review input manifest changed")
+      await readReviewEvidence(manifest,binding)
       const body = await fs.readFile(output, "utf8")
       const parsed = parseReview(body)
       if (!parsed || parsed.sha !== head || !["APPROVE", "REVIEW: BLOCKED"].includes(parsed.verdict))
@@ -372,6 +390,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       await fs.writeFile(`${artifacts}.prompt`, prompt, { mode: 0o600 })
       await writeJson(`${artifacts}.json`, { schema: "factory-review/v1", repo, pr, head, tree,
         verdict: parsed.verdict, sourceVerified: true, cwd: dir, argv, execution,
+        input:{manifest,binding,digest:inputDigest},
         promptDigest: digestOf(prompt), output, outputDigest: digestOf(body), commentDigest: digestOf(comment) })
       await postComment(repo, pr, comment)
       return { head, verdict: parsed.verdict }

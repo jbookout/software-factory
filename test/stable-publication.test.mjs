@@ -13,7 +13,7 @@ for (const kind of ["fix", "ci-fix"]) test(`${kind}: returns a committed candida
   assert.match(prompt, /Never merge/);
 });
 test("review remains read-only and never publishes a candidate", () => {
-  const prompt = deliveryPrompt("review", input);
+  const prompt = deliveryPrompt("review", {...input,evidence:{manifest:"/synthetic/input/manifest.json",files:{diff:{path:"/synthetic/input/diff.txt"}}}});
   assert.match(prompt, /Review only: never edit source, push, merge/);
   assert.doesNotMatch(prompt, /Publish once per verified candidate/);
 });
