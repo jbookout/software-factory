@@ -36,14 +36,17 @@ test('artifact authority finds copies inside arrays, alternatives and other defi
 })
 
 test('artifact authority rejects a removed, unused or malformed canonical definition', () => {
-  for (const mutate of [
-    input => { delete input.$defs.artifact },
-    input => { input.properties = {} },
-    input => { input.$defs.artifact = { type: 'string' } }
+  for (const [mutate, remediation] of [
+    [input => { delete input.$defs.artifact },
+      'Define the ref/digest contract once at #/$defs/artifact.'],
+    [input => { input.properties = {} },
+      'Use #/$defs/artifact at artifact fields; remove an unused definition.'],
+    [input => { input.$defs.artifact = { type: 'string' } },
+      'Define the ref/digest contract once at #/$defs/artifact.']
   ]) {
     const input = schema()
     mutate(input)
-    assert.ok(artifactAuthorityFindings(input).length > 0)
+    assert.deepEqual(artifactAuthorityFindings(input), [{ pointer: '/$defs/artifact', remediation }])
   }
 })
 
