@@ -127,19 +127,25 @@ export async function recordDiagnosis(root, observation) {
       if (observation.state === "pending") return prior;
       const at = Date.parse(observation.observedAt);
       const previousAt = Date.parse(prior?.observedAt);
+      if (observation.state === "fresh" && !prior) return null;
+      let order = 0;
+      if (prior?.workflow && observation.workflow) {
+        const run = BigInt(observation.workflow.runId), previousRun = BigInt(prior.workflow.runId);
+        const attempt = BigInt(observation.workflow.attempt), previousAttempt = BigInt(prior.workflow.attempt);
+        const difference = run === previousRun ? attempt - previousAttempt : run - previousRun;
+        order = difference < 0n ? -1 : difference > 0n ? 1 : 0;
+        if (order < 0 || (order === 0 && observation.state === "fresh" && prior.status === "open")) return prior;
+        if (order === 0 && observation.completedAt && prior.completedAt) {
+          order = Date.parse(observation.completedAt) - Date.parse(prior.completedAt);
+          if (order < 0) return prior;
+        }
+      }
       if (
-        prior &&
+        prior && order === 0 &&
         (at < previousAt ||
           (at === previousAt && prior.status === "open" && observation.state === "fresh"))
       )
         return prior;
-      if (observation.state === "fresh" && !prior) return null;
-      if (prior?.workflow && observation.workflow) {
-        const run = BigInt(observation.workflow.runId), previousRun = BigInt(prior.workflow.runId);
-        const attempt = BigInt(observation.workflow.attempt), previousAttempt = BigInt(prior.workflow.attempt);
-        const order = run === previousRun ? attempt - previousAttempt : run - previousRun;
-        if (order < 0 || (order === 0 && observation.state === "fresh" && prior.status === "open")) return prior;
-      }
       if (observation.state === "fresh" &&
           !(Date.parse(observation.completedAt) > Date.parse(prior.completedAt ?? prior.observedAt))) return prior;
       const status = observation.state === "fresh" ? "closed" : "open";

@@ -44,6 +44,34 @@ test("PR60 finding 2: later reads of older runs or attempts cannot clear or repl
   assert.equal((await recordDiagnosis(root, staleFailure)).status, "closed");
 });
 
+test("PR60 finding 2: run and attempt ordering survives out-of-order observation clocks", async t => {
+  for (const [runId, attempt] of [["125", "1"], ["124", "3"]]) {
+    const root = await temporary(t);
+    const failed = r => ({ ...r, status: "failed" });
+    await recordDiagnosis(root, assessNightly(failed(receipt("124", "1")), policy, base + 5000));
+    const newerFailure = assessNightly(failed(receipt(runId, attempt, 2000)), policy, base + 4000);
+    const owned = await recordDiagnosis(root, newerFailure);
+    assert.equal(owned.status, "open");
+    assert.deepEqual(owned.workflow, { runId, attempt });
+    const olderRetry = assessNightly(receipt("124", "2", 5000), policy, base + 7000);
+    const held = await recordDiagnosis(root, olderRetry);
+    assert.equal(held.status, "open");
+    assert.deepEqual(held.workflow, { runId, attempt });
+    const recovery = assessNightly(receipt(runId, String(Number(attempt) + 1), 6000), policy, base + 7000);
+    assert.equal((await recordDiagnosis(root, recovery)).status, "closed");
+  }
+});
+
+test("PR60 finding 2: newer completion supersedes the observation clock for the same run and attempt", async t => {
+  const root = await temporary(t);
+  const failed = offset => assessNightly({ ...receipt("124", "1", offset), status: "failed" }, policy, base + 5000 - offset / 2);
+  await recordDiagnosis(root, failed(0));
+  const newer = await recordDiagnosis(root, failed(2000));
+  assert.equal(newer.completedAt, new Date(base + 3000).toISOString());
+  const held = await recordDiagnosis(root, failed(0));
+  assert.equal(held.completedAt, newer.completedAt);
+});
+
 test("PR60 finding 3: incomplete run and artifact pages cannot certify green", async () => {
   const r = receipt();
   const run = { id: 123, run_attempt: 1, head_sha: sha, event: "schedule", head_branch: "main", status: "completed", conclusion: "success", created_at: r.startedAt, updated_at: r.completedAt };
