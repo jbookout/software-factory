@@ -1,0 +1,413 @@
+{
+  "schema": "doc-drift/v1",
+  "owner": "orchestrator",
+  "source_sha": "6c0d41e2f4734d04e17efe8d115cfbc9ea9f416b",
+  "scope": "full",
+  "files_checked": [
+    "AGENTS.md",
+    "README.md",
+    "capabilities/agentic-ui-evaluation/README.md",
+    "capabilities/client-presentation/SKILL.md",
+    "capabilities/client-presentation/references/acceptance.md",
+    "capabilities/client-presentation/references/financial-model.md",
+    "capabilities/client-presentation/references/inputs-and-delivery.md",
+    "capabilities/client-presentation/references/presentation-standard.md",
+    "capabilities/jev-browser-select/SKILL.md",
+    "capabilities/tailwind-design-system-lint/README.md",
+    "docs/agents/domain.md",
+    "docs/agents/issue-tracker.md",
+    "docs/agents/triage-labels.md",
+    "docs/design-manager/entry-playbooks.md",
+    "docs/design-manager/journal.md",
+    "docs/design-manager/parked.md",
+    "docs/design-manager/plan.md",
+    "docs/design-manager/settings-cloud.md",
+    "docs/finish-line.md",
+    "docs/pr-delivery-cutover.md",
+    "scripts/doc-drift/README.md",
+    "test/fixtures/verify-sample-app/verify-skill/SKILL.md",
+    "test/fixtures/verify-sample-app/verify-skill/features/add-task.md"
+  ],
+  "findings": [
+    {
+      "file": "capabilities/agentic-ui-evaluation/README.md",
+      "line": 16,
+      "kind": "path",
+      "target": "e2e.config.ts",
+      "sources": [
+        "e2e.config.ts"
+      ],
+      "unchecked": null,
+      "message": "missing path: e2e.config.ts",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "capabilities/client-presentation/references/inputs-and-delivery.md",
+      "line": 7,
+      "kind": "path",
+      "target": "data.js",
+      "sources": [
+        "data.js"
+      ],
+      "unchecked": null,
+      "message": "missing path: data.js",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "capabilities/client-presentation/references/inputs-and-delivery.md",
+      "line": 7,
+      "kind": "path",
+      "target": "app.js",
+      "sources": [
+        "app.js"
+      ],
+      "unchecked": null,
+      "message": "missing path: app.js",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "capabilities/client-presentation/references/inputs-and-delivery.md",
+      "line": 7,
+      "kind": "path",
+      "target": "finance.js",
+      "sources": [
+        "finance.js"
+      ],
+      "unchecked": null,
+      "message": "missing path: finance.js",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/design-manager/journal.md",
+      "line": 30,
+      "kind": "path",
+      "target": "database-identity.json",
+      "sources": [
+        "database-identity.json"
+      ],
+      "unchecked": null,
+      "message": "missing path: database-identity.json",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/design-manager/parked.md",
+      "line": 17,
+      "kind": "path",
+      "target": "capabilities/mobile-verification",
+      "sources": [
+        "capabilities/mobile-verification"
+      ],
+      "unchecked": null,
+      "message": "missing path: capabilities/mobile-verification",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/design-manager/parked.md",
+      "line": 21,
+      "kind": "path",
+      "target": "capabilities/mobile-verification",
+      "sources": [
+        "capabilities/mobile-verification"
+      ],
+      "unchecked": null,
+      "message": "missing path: capabilities/mobile-verification",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/design-manager/parked.md",
+      "line": 32,
+      "kind": "path",
+      "target": "capabilities/mobile-verification",
+      "sources": [
+        "capabilities/mobile-verification"
+      ],
+      "unchecked": null,
+      "message": "missing path: capabilities/mobile-verification",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/design-manager/plan.md",
+      "line": 92,
+      "kind": "path",
+      "target": "plugin.json",
+      "sources": [
+        "plugin.json"
+      ],
+      "unchecked": null,
+      "message": "missing path: plugin.json",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/design-manager/plan.md",
+      "line": 94,
+      "kind": "path",
+      "target": "mcp.json",
+      "sources": [
+        "mcp.json"
+      ],
+      "unchecked": null,
+      "message": "missing path: mcp.json",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/design-manager/plan.md",
+      "line": 95,
+      "kind": "path",
+      "target": ".codex-plugin/plugin.json",
+      "sources": [
+        ".codex-plugin/plugin.json"
+      ],
+      "unchecked": null,
+      "message": "missing path: .codex-plugin/plugin.json",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/design-manager/plan.md",
+      "line": 500,
+      "kind": "path",
+      "target": "e2e.config.ts",
+      "sources": [
+        "e2e.config.ts"
+      ],
+      "unchecked": null,
+      "message": "missing path: e2e.config.ts",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/design-manager/plan.md",
+      "line": 578,
+      "kind": "path",
+      "target": "app.json",
+      "sources": [
+        "app.json"
+      ],
+      "unchecked": null,
+      "message": "missing path: app.json",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/design-manager/plan.md",
+      "line": 581,
+      "kind": "path",
+      "target": "app.json",
+      "sources": [
+        "app.json"
+      ],
+      "unchecked": null,
+      "message": "missing path: app.json",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/design-manager/plan.md",
+      "line": 599,
+      "kind": "path",
+      "target": "capabilities/mobile-verification",
+      "sources": [
+        "capabilities/mobile-verification"
+      ],
+      "unchecked": null,
+      "message": "missing path: capabilities/mobile-verification",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/design-manager/plan.md",
+      "line": 630,
+      "kind": "path",
+      "target": "SKILL.md",
+      "sources": [
+        "SKILL.md"
+      ],
+      "unchecked": null,
+      "message": "missing path: SKILL.md",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/design-manager/plan.md",
+      "line": 633,
+      "kind": "path",
+      "target": "SKILL.md",
+      "sources": [
+        "SKILL.md"
+      ],
+      "unchecked": null,
+      "message": "missing path: SKILL.md",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/design-manager/plan.md",
+      "line": 838,
+      "kind": "path",
+      "target": "scripts/observations/screens",
+      "sources": [
+        "scripts/observations/screens"
+      ],
+      "unchecked": null,
+      "message": "missing path: scripts/observations/screens",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/design-manager/plan.md",
+      "line": 920,
+      "kind": "path",
+      "target": "e2e.config.ts",
+      "sources": [
+        "e2e.config.ts"
+      ],
+      "unchecked": null,
+      "message": "missing path: e2e.config.ts",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/pr-delivery-cutover.md",
+      "line": 25,
+      "kind": "path",
+      "target": "config/state",
+      "sources": [
+        "config/state"
+      ],
+      "unchecked": null,
+      "message": "missing path: config/state",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/pr-delivery-cutover.md",
+      "line": 93,
+      "kind": "path",
+      "target": "queue.json",
+      "sources": [
+        "queue.json"
+      ],
+      "unchecked": null,
+      "message": "missing path: queue.json",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/pr-delivery-cutover.md",
+      "line": 105,
+      "kind": "path",
+      "target": "usage.json",
+      "sources": [
+        "usage.json"
+      ],
+      "unchecked": null,
+      "message": "missing path: usage.json",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/pr-delivery-cutover.md",
+      "line": 116,
+      "kind": "path",
+      "target": "queue.json",
+      "sources": [
+        "queue.json"
+      ],
+      "unchecked": null,
+      "message": "missing path: queue.json",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/pr-delivery-cutover.md",
+      "line": 117,
+      "kind": "path",
+      "target": "usage.json",
+      "sources": [
+        "usage.json"
+      ],
+      "unchecked": null,
+      "message": "missing path: usage.json",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/pr-delivery-cutover.md",
+      "line": 131,
+      "kind": "path",
+      "target": ".factory-orch.json",
+      "sources": [
+        ".factory-orch.json"
+      ],
+      "unchecked": null,
+      "message": "missing path: .factory-orch.json",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/pr-delivery-cutover.md",
+      "line": 182,
+      "kind": "path",
+      "target": "github.json",
+      "sources": [
+        "github.json"
+      ],
+      "unchecked": null,
+      "message": "missing path: github.json",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/pr-delivery-cutover.md",
+      "line": 202,
+      "kind": "path",
+      "target": "usage.json",
+      "sources": [
+        "usage.json"
+      ],
+      "unchecked": null,
+      "message": "missing path: usage.json",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/pr-delivery-cutover.md",
+      "line": 336,
+      "kind": "path",
+      "target": "ops/ci.sh",
+      "sources": [
+        "ops/ci.sh"
+      ],
+      "unchecked": null,
+      "message": "missing path: ops/ci.sh",
+      "suggestion": null,
+      "suggestion_evidence": null
+    },
+    {
+      "file": "docs/pr-delivery-cutover.md",
+      "line": 370,
+      "kind": "path",
+      "target": "orch.ts",
+      "sources": [
+        "orch.ts"
+      ],
+      "unchecked": null,
+      "message": "missing path: orch.ts",
+      "suggestion": null,
+      "suggestion_evidence": null
+    }
+  ],
+  "unchecked_count": 156,
+  "note": "Remaining missing-reference candidates at this source revision. The orchestrator resolves ambiguous external, generated or intended references; this is a dated scan, not a live verdict.",
+  "scanned_at": "2026-10-05T20:04:09.503195+00:00"
+}

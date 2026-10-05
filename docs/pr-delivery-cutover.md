@@ -140,7 +140,7 @@ different factory implementation. Source-directory wrappers retain the existing
 `FACTORY_ROOT`/`FACTORY_PR_CONFIG` replay route. Keep config and state outside both
 source and installed executables. The installer does not start jobs or a scheduler.
 
-`unstick.sh` and `stall-watch.sh` are **PR recovery entry points**: both reconcile
+`deploy/orch/unstick.sh` and `deploy/orch/stall-watch.sh` are **PR recovery entry points**: both reconcile
 the same private wait records through `recover`, with `--once` for supervision.
 They no longer use independent cooldown ledgers or tail-log heuristics. They
 resume only recorded factory waits; retain the legacy watcher's unrelated Dot
@@ -251,7 +251,7 @@ Install using the maintained `deploy/orch/` cutover above after draining current
 workers. Pin `FACTORY_ROOT` to the delivered revision and set every caller's
 `FACTORY_PR_CONFIG` to one updated private registry with the current named checks
 and verified review posters. Copy the entire wrapper set together, including
-`factory-entry.sh`; retain previous wrappers for rollback. This source change
+`deploy/orch/factory-entry.sh`; retain previous wrappers for rollback. This source change
 does not modify running `carr-system/out/orch` scripts, start workers, or change
 product deployment authority.
 
@@ -294,9 +294,9 @@ The example values are configuration examples, not qualified host tuning.
 Keep the supervising host's release/load governor: this change counts test
 compute but does not replace its release-priority policy or pause existing work.
 
-Install the maintained `review-pr.sh`, `codex-guard.sh`, `pr-loop.sh` and their
-shared `factory-entry.sh` through the existing drained cutover above. No live
-wrapper was edited by this source change. The new `test-browser.sh` invokes
+Install the maintained `deploy/orch/review-pr.sh`, `deploy/orch/codex-guard.sh`, `deploy/orch/pr-loop.sh` and their
+shared `deploy/orch/factory-entry.sh` through the existing drained cutover above. No live
+wrapper was edited by this source change. The new `deploy/orch/test-browser.sh` invokes
 `bin/browser-suite.mjs` for an independently scheduled browser suite:
 `test-browser.sh owner/repository <explicit-test-files...>`. It reserves its
 worker count and invokes Node with explicit test file concurrency. The wrapper

@@ -15,7 +15,7 @@ required, in order; `../verify.mjs` implements them for this app.
 3. **Drive** every entry point listed in the feature file through its route and
    handles. Never substitute one entry point for another.
 4. **Evidence**: record the action and list result, then re-read the stored
-   value through `read-store.mjs` in a separate process.
+   value through `../app/read-store.mjs` in a separate process.
 5. **Cleanup**: stop only the launched process and remove only this run's
    scratch directory. Evidence lives in the evidence store, outside scratch.
 
