@@ -121,3 +121,13 @@ for (const file of files) {
     assert.equal(replay(source, events)[0].status, "success", "a close event must not erase completed green evidence");
   });
 }
+
+test('workflow policy runs before the full suite in the same required job', () => {
+  const job = parse(read('ci.yml')).jobs.test;
+  const fast = job.steps.findIndex(step => step.run === 'npm run ci:fast');
+  const full = job.steps.findIndex(step => step.run === 'npm test');
+  assert.ok(fast >= 0, 'the workflow policy fast lane must run');
+  assert.ok(fast < full, 'workflow errors must fail before the full suite');
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(pkg.scripts['ci:fast'], 'node --test test/pr-validation-workflows.test.mjs');
+});
