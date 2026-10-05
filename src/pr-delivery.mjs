@@ -117,7 +117,6 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     return result
   }
   const git = async (cwd, ...args) => (await command(["git", ...args], cwd)).stdout.trim()
-  const gh = async (repo, pr, action, ...args) => (await command(["gh", "pr", action, String(pr), "-R", repo, ...args], getRepo(repo).checkout)).stdout
   function rest(response) {
     const parts = response.stdout.split(/\r?\n\r?\n/), headers = parts.shift() ?? ""
     const status = Number(/^HTTP\/[^ ]+ (\d+)/.exec(headers)?.[1])
@@ -394,7 +393,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       await writeJson(`${artifacts}.json`, { schema: "factory-review/v1", repo, pr, head, tree,
         verdict: parsed.verdict, sourceVerified: true, cwd: dir, argv, execution,
         promptDigest: digestOf(prompt), output, outputDigest: digestOf(body), commentDigest: digestOf(comment) })
-      await gh(repo, pr, "comment", "--body", comment)
+      await command(["gh", "pr", "comment", String(pr), "-R", repo, "--body", comment], getRepo(repo).checkout)
       return { head, verdict: parsed.verdict }
     } finally {
       // Test artifacts may be untracked; keep a modified tracked source tree for
