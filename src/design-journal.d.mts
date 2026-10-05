@@ -49,7 +49,7 @@ export interface DesignJournal {
   execute(request: JournalMutation & MutationBinding): Promise<JournalReceipt>;
   readArtifact(ref: string): Promise<Buffer>;
 }
-/** Private POSIX state, outside Git. Python 3's standard library is required. */
+/** Private POSIX state, outside Git. Python 3.11+ with SQLite deserialization is required. */
 export function openDesignJournal(options: JournalScope & { root?: string }): Promise<DesignJournal>;
 /** Administrative restore into a new private directory; no overwrite or cross-scope import. */
 export function restoreDesignJournal(options: JournalScope & { root: string; backupRoot: string }): Promise<DesignJournal>;

@@ -27,9 +27,11 @@ identity is not authentication; transport and reviewer-seat authentication remai
 slice 7/4 responsibilities.
 
 The default root is `~/.local/share/software-factory/design-manager/`, containing
-`journal.sqlite` and `artifacts/`. Python 3 and a POSIX local filesystem are
+`journal.sqlite`, `database-identity.json` and `artifacts/`. Python 3.11 or newer
+with [SQLite deserialization support](https://docs.python.org/3/library/sqlite3.html#sqlite3.Connection.deserialize) and a POSIX local filesystem are
 required. Standard-library SQLite preserves the factory's Node 20 minimum without
-new npm dependencies. Direct database/file mutation is unsupported.
+new runtime npm dependencies. The adapter checks restore capability before opening
+a store. Direct database/file mutation is unsupported.
 
 | Command | Input beyond `command` | Result |
 | --- | --- | --- |
@@ -94,9 +96,17 @@ symlinks, hard links and substitution fail. Digests bind bytes, not authority.
 Migration version 1 partitions users/projects/versions, enforces unique IDs/keys
 and prevents updates/deletions of event, record and artifact registrations.
 A host directory lock serializes file operations with SQLite transactions.
+After acquiring it, the adapter rechecks directory identity and privacy and
+accesses files relative to that locked directory. First-time initialization
+creates a database identity seal; reopening requires the same database file.
+Missing or replaced databases refuse reads and retries instead of resetting
+history. Restore creates a new seal for the new root.
 Concurrent writers at one revision produce one commit and one conflict. Answers
 and projections commit with their events. Archive events retain digest/origin
-rather than duplicating binary bytes in SQLite. Files sync before registration.
+rather than duplicating binary bytes in SQLite. Archives write to unique temporary
+files, verify and sync complete bytes, then atomically publish the digest filename
+before registration. Interrupted temporary files cannot block identical retries
+and are excluded from scoped backups.
 
 Roots/directories are user-owned mode 700, databases mode 600, artifacts mode 400.
 State and snapshots must be outside every Git checkout, including worktrees and
@@ -112,21 +122,32 @@ artifact list, and is written last. An interrupted snapshot cannot restore.
 the snapshot before creating a **new** private root. It compares records,
 registrations and interview projection against event history; a lost rejected
 record cannot be concealed by updating the database checksum. Existing roots and
-cross-scope imports fail. Checksums detect drift, not backup-author identity.
+cross-scope imports fail. Restore captures caller options before awaiting inspection
+and requires the inspected database digest at installation. Validation reads the
+captured database bytes, so a changed snapshot refuses before creating a target.
+Checksums detect drift, not backup-author identity.
 
 After interruption, reread and retry the same mutation/key to establish whether
 it committed. Do not invent a new key for an unknown outcome. A rolled-back
 archive can leave an unreferenced blob; no destructive cleanup is installed.
 An interrupted restore's partial destination is refused on retry; use a new root
-with the same verified backup. Complete projections/snapshot files are bounded
-to 16 MiB by this adapter; exceedance refuses instead of returning partial history.
+with the same verified backup. Mutation metadata is limited to 1 MiB of UTF-8 JSON;
+archive binary bytes have their separate 1 MiB limit. Before committing, the
+adapter checks proposed database pages against 16 MiB and complete projections
+against the 16 MiB transport budget, reserving space for restore inspection.
+Exceedance rolls back, preserving read, exact retry and backup access to accepted
+history across all scopes.
 
 ## Qualification and removal
 
 `npm test` runs `test/acceptance/design-journal.test.mjs` against actual SQLite and
 files for synthetic task/catalog scopes: all labels, cleanup/restart/restore,
 rejected experiments, provenance omissions, substitution, generated-origin
-promotion, conflicts, isolation and private-path failures.
+promotion, conflicts, isolation and private-path failures. It also covers size
+budgets, lock-wait/path replacement, database loss, process-death archive recovery,
+restore input/snapshot mutation, scope acceptance/decline, dependency reassessment,
+interview versions, evidence binding and inspection dates. A strict TypeScript
+consumer compilation checks accepted and rejected command shapes in this suite.
 
 Every state exposes this tested blocker: **Joe must choose the persistent factory
 host and authorize cost; laptop-off qualification remains required**. Local restore

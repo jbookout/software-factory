@@ -104,7 +104,7 @@ after surface qualification; they never become a runtime prerequisite.
 **Store decision:** a small embedded SQLite database under the factory's private
 state root, partitioned by user/project/version, plus immutable artifact files.
 Proposed root: `~/.local/share/software-factory/design-manager/` on the persistent
-factory host, containing `journal.sqlite` and `artifacts/`; this is private factory
+factory host, containing `journal.sqlite`, its database identity seal and `artifacts/`; this is private factory
 state outside the source checkout. The same layout serves every app project.
 Events, decisions, gates, evidence, worker receipts and provenance are structured
 records, never Markdown journals. Transactions, uniqueness constraints, migrations

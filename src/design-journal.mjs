@@ -153,9 +153,12 @@ export async function openDesignJournal(options) {
 
 /** Administrative restore is separate from project commands and never overwrites a store. */
 export async function restoreDesignJournal(options) {
+  options = structuredClone(options)
   exact(options, ['root', 'backupRoot', 'userId', 'projectId', 'version'])
   const scope = scopeOf(options)
-  checkedState(await store({ op: 'inspect-backup', backupRoot: options.backupRoot, scope }), scope)
-  await store({ op: 'restore', root: options.root, backupRoot: options.backupRoot, scope })
+  const inspected = await store({ op: 'inspect-backup', backupRoot: options.backupRoot, scope })
+  checkedState(inspected.snapshot, scope)
+  await store({ op: 'restore', root: options.root, backupRoot: options.backupRoot, scope,
+    databaseDigest: inspected.databaseDigest })
   return openDesignJournal({ root: options.root, ...scope })
 }

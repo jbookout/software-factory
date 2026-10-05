@@ -13,6 +13,12 @@ from pathlib import Path
 import sqlite3
 import stat
 import sys
+import tempfile
+from urllib.parse import quote
+
+MAX_DATABASE_BYTES = 16 * 1024 * 1024
+MAX_OUTPUT_BYTES = 16 * 1024 * 1024 - 1  # newline belongs to the transport budget
+MAX_REQUEST_BYTES = 1024 * 1024
 
 SCHEMA = """
 CREATE TABLE scopes (scope TEXT PRIMARY KEY, identity TEXT NOT NULL,
@@ -59,20 +65,38 @@ def private_path(raw, create=False, new=False):
     if create:
         target.mkdir(mode=0o700, parents=True, exist_ok=not new)
     info = target.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
-        raise ValueError("directory must be private, user-owned and mode 700")
+    check_directory(info)
     return target
 
 
-def regular_bytes(path, mode, max_bytes=16 * 1024 * 1024):
+def check_file(info, mode):
+    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) != mode):
+        raise ValueError("private regular file required; links refused")
+
+
+def regular_file(path, mode):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         info = os.fstat(fd)
-        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid()
-                or stat.S_IMODE(info.st_mode) != mode or info.st_size > max_bytes):
-            raise ValueError("private regular file required; links and oversized files refused")
+        check_file(info, mode)
+        return info
+    finally:
+        os.close(fd)
+
+
+def regular_bytes(path, mode, max_bytes=MAX_DATABASE_BYTES):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        check_file(info, mode)
+        if info.st_size > max_bytes:
+            raise ValueError("file size budget exceeded")
         with os.fdopen(fd, "rb", closefd=False) as file:
-            return file.read(max_bytes + 1)
+            data = file.read(max_bytes + 1)
+        if len(data) > max_bytes:
+            raise ValueError("file size budget exceeded")
+        return data
     finally:
         os.close(fd)
 
@@ -96,18 +120,18 @@ def sync_directory(root):
         os.close(fd)
 
 
-def connect(root):
+def connect(root, initialize=False):
     path = root / "journal.sqlite"
-    if path.exists() or path.is_symlink():
-        regular_bytes(path, 0o600)
-    else:
+    if initialize:
         write_new(path, b"", 0o600)
-    db = sqlite3.connect(path, timeout=10)
+    regular_file(path, 0o600)
+    # rw cannot fabricate a database if the named file disappears.
+    db = sqlite3.connect(f"file:{quote(str(path))}?mode=rw", uri=True, timeout=10)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys=ON")
     db.execute("PRAGMA synchronous=FULL")
     version = db.execute("PRAGMA user_version").fetchone()[0]
-    if version == 0:
+    if version == 0 and initialize:
         # Only a genuinely empty database may acquire the first migration.
         if db.execute("SELECT count(*) FROM sqlite_master").fetchone()[0]:
             raise ValueError("unversioned nonempty journal refused")
@@ -117,6 +141,19 @@ def connect(root):
     return db
 
 
+def database_identity(root):
+    try:
+        info = regular_file(root / "journal.sqlite", 0o600)
+    except FileNotFoundError as error:
+        raise ValueError("journal database missing; restore accepted history into a new root") from error
+    return {"device": info.st_dev, "inode": info.st_ino}
+
+
+def seal_database(root):
+    write_new(root / "database-identity.json", encoded(database_identity(root)).encode())
+    sync_directory(root)
+
+
 def checked_json(text, expected):
     if digest(text) != expected:
         raise ValueError("stored record digest mismatch")
@@ -124,10 +161,70 @@ def checked_json(text, expected):
 
 
 def read_blob(root, value):
-    data = regular_bytes(root / "artifacts" / value, 0o400, 1024 * 1024)
+    if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+        raise ValueError("invalid artifact digest")
+    # Pin this subdirectory too: neither root nor artifacts pathname replacement
+    # may redirect an operation after its checks. cwd is private to this process.
+    fd = os.open(root / "artifacts", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    parent = os.open(".", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        check_directory(os.fstat(fd))
+        os.fchdir(fd)
+        data = regular_bytes(value, 0o400, 1024 * 1024)
+    finally:
+        os.fchdir(parent)
+        os.close(parent)
+        os.close(fd)
     if digest(data) != value:
         raise ValueError("artifact digest mismatch")
     return data
+
+
+def publish_blob(root, value, data):
+    fd = os.open(root / "artifacts", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    parent = os.open(".", os.O_RDONLY | os.O_DIRECTORY)
+    temporary = None
+    try:
+        check_directory(os.fstat(fd))
+        os.fchdir(fd)
+        if Path(value).exists() or Path(value).is_symlink():
+            stored = regular_bytes(value, 0o400, 1024 * 1024)
+            if digest(stored) != value or stored != data:
+                raise ValueError("artifact digest mismatch")
+            return
+        temp_fd, temporary = tempfile.mkstemp(prefix=".archive-", dir=".")
+        try:
+            os.fchmod(temp_fd, 0o400)
+            with os.fdopen(temp_fd, "wb", closefd=False) as file:
+                file.write(data)
+                file.flush()
+                os.fsync(temp_fd)
+        finally:
+            os.close(temp_fd)
+        if digest(regular_bytes(temporary, 0o400, 1024 * 1024)) != value:
+            raise ValueError("artifact digest mismatch")
+        # Root lock serializes publishers; only complete durable bytes get the
+        # final name. Process-death temporary files are ignored by reads/backups.
+        os.rename(temporary, value)
+        temporary = None
+        os.fsync(fd)
+    finally:
+        if temporary is not None:
+            os.unlink(temporary)
+        os.fchdir(parent)
+        os.close(parent)
+        os.close(fd)
+
+
+def check_directory(info):
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        raise ValueError("directory must be private, user-owned and mode 700")
+
+
+def bounded(value, reserve=0):
+    if len(encoded(value).encode()) > MAX_OUTPUT_BYTES - reserve:
+        raise ValueError("journal projection/output size budget exceeded")
+    return value
 
 
 def scope_key(scope):
@@ -184,9 +281,10 @@ def state(db, scope):
     actual_artifacts = dict(db.execute("SELECT digest,origin FROM artifacts WHERE scope=?", (scope,)))
     if actual_artifacts != expected_artifacts:
         raise ValueError("incomplete artifact history")
-    return {"revision": revision, "records": records, "events": events, "view": view,
+    return bounded({"revision": revision, "records": records, "events": events, "view": view,
             "authority": "reported-only", "hostQualification": {"status": "blocked",
-                "reason": "Joe must choose the persistent factory host and authorize cost; laptop-off qualification remains required"}}
+                "reason": "Joe must choose the persistent factory host and authorize cost; laptop-off qualification remains required"}},
+        reserve=1024)  # restore inspection wraps the state with its database digest
 
 
 def commit(db, root, scope, identity, request):
@@ -197,6 +295,8 @@ def commit(db, root, scope, identity, request):
         if prior is not None:
             db.rollback()
             return prior
+        if len(request["requestText"].encode()) > MAX_REQUEST_BYTES:
+            raise ValueError("journal request size budget exceeds 1 MiB")
         current = state(db, scope)
         if command["expectedRevision"] != current["revision"]:
             raise ValueError("revision conflict: reread the project")
@@ -218,13 +318,7 @@ def commit(db, root, scope, identity, request):
         if command["command"] == "archive":
             data = base64.b64decode(command["bytes"], validate=True)
             value = digest(data)
-            file = root / "artifacts" / value
-            if file.exists() or file.is_symlink():
-                if read_blob(root, value) != data:
-                    raise ValueError("artifact digest mismatch")
-            else:
-                write_new(file, data)
-                sync_directory(root / "artifacts")
+            publish_blob(root, value, data)
             prior_origin = db.execute("SELECT origin FROM artifacts WHERE scope=? AND digest=?", (scope, value)).fetchone()
             if prior_origin and prior_origin[0] != command["origin"]:
                 raise ValueError("immutable artifact origin conflicts with archived provenance")
@@ -245,6 +339,12 @@ def commit(db, root, scope, identity, request):
         result_text = encoded(result)
         db.execute("INSERT INTO events VALUES(?,?,?,?,?,?,?,?)", (scope, revision, command["idempotencyKey"],
                    request["requestText"], request["requestDigest"], digest(request["requestText"]), result_text, digest(result_text)))
+        # Measure proposed logical pages and the complete externally readable
+        # projection inside the transaction. Rollback preserves accepted history.
+        if db.execute("PRAGMA page_count").fetchone()[0] * db.execute("PRAGMA page_size").fetchone()[0] > MAX_DATABASE_BYTES:
+            raise ValueError("journal database size budget exceeded")
+        state(db, scope)
+        bounded(result)
         db.commit()
         return result
     except Exception:
@@ -260,7 +360,7 @@ def backup(db, root, scope, identity, destination):
         "SELECT digest FROM artifacts WHERE scope=?", (scope,))}
     destination = private_path(destination, create=True, new=True)
     private_path(str(destination / "artifacts"), create=True)
-    copy = connect(destination)
+    copy = connect(destination, initialize=True)
     try:
         with copy:
             for table in ("scopes", "events", "records", "artifacts"):
@@ -291,7 +391,10 @@ def restore(request):
         raise ValueError("backup database digest mismatch")
     private_path(str(backup_root / "artifacts"))
     blobs = {value: read_blob(backup_root, value) for value in manifest["artifacts"]}
-    source = sqlite3.connect(f"{(backup_root / 'journal.sqlite').as_uri()}?mode=ro", uri=True)
+    # Inspection and installation use the same captured bytes, never a second
+    # pathname read of the database after its checksum was checked.
+    source = sqlite3.connect(":memory:")
+    source.deserialize(database)
     source.row_factory = sqlite3.Row
     try:
         if source.execute("PRAGMA user_version").fetchone()[0] != 1 or source.execute("PRAGMA quick_check").fetchone()[0] != "ok":
@@ -306,10 +409,13 @@ def restore(request):
     finally:
         source.close()
     if request["op"] == "inspect-backup":
-        return snapshot
+        return bounded({"snapshot": snapshot, "databaseDigest": digest(database)})
+    if digest(database) != request["databaseDigest"]:
+        raise ValueError("backup changed after semantic inspection")
     root = private_path(request["root"], create=True, new=True)
     private_path(str(root / "artifacts"), create=True)
     write_new(root / "journal.sqlite", database, 0o600)
+    seal_database(root)
     for value, data in blobs.items():
         write_new(root / "artifacts" / value, data)
     sync_directory(root / "artifacts")
@@ -319,6 +425,8 @@ def restore(request):
 
 def run(request):
     os.umask(0o077)
+    if not hasattr(sqlite3.Connection, "deserialize"):
+        raise ValueError("Python 3.11+ with SQLite deserialization support is required")
     if request["op"] in ("restore", "inspect-backup"):
         return restore(request)
     root = private_path(request["root"], create=request["op"] == "open")
@@ -327,11 +435,29 @@ def run(request):
     try:
         fcntl.flock(lock, fcntl.LOCK_EX)
         info = os.fstat(lock)
+        check_directory(info)
+        named = root.lstat()
+        if root.is_symlink() or (named.st_dev, named.st_ino) != (info.st_dev, info.st_ino):
+            raise ValueError("private journal directory identity changed while waiting for lock")
+        private_path(str(root))
         identity = {"root": str(root), "device": info.st_dev, "inode": info.st_ino}
         if request.get("identity") and request["identity"] != identity:
             raise ValueError("private journal directory identity changed")
-        private_path(str(root / "artifacts"), create=request["op"] == "open")
-        db = connect(root)
+        # Resolve subsequent files relative to the locked directory, so renaming
+        # its old pathname cannot switch our storage to a different directory.
+        os.fchdir(lock)
+        root = Path(".")
+        # Decide initialization only under the lock. An existing, genuinely
+        # empty private root is fresh; any persisted contents require its seal.
+        initialize = request["op"] == "open" and not any(root.iterdir())
+        private_path(str(root / "artifacts"), create=initialize)
+        if not initialize:
+            expected = json.loads(regular_bytes(root / "database-identity.json", 0o400))
+            if database_identity(root) != expected:
+                raise ValueError("journal database identity changed")
+        db = connect(root, initialize=initialize)
+        if initialize:
+            seal_database(root)
         scope = scope_key(request["scope"])
         op = request["op"]
         if op == "open":
@@ -361,7 +487,7 @@ def run(request):
 
 if __name__ == "__main__":
     try:
-        print(json.dumps(run(json.load(sys.stdin)), ensure_ascii=False))
+        print(encoded(bounded(run(json.load(sys.stdin)))))
     except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as error:
         print(json.dumps({"error": str(error)}))
         sys.exit(1)
