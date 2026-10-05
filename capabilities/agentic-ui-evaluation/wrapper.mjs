@@ -100,11 +100,6 @@ export function normalizeE2eReport({ report, candidate, manifest, test }) {
   const findings = reruns.filter(run => run.outcome !== 'passed').map(run => ({
     id: run.id, explanation: null, repro: run,
   }))
-  for (const trap of manifest.traps) {
-    const run = trapRuns.find(run => run.id === trap.id)
-    if (run.outcome === 'passed') findings.push({ id: trap.id, repro: run,
-      explanation: { expectation: trap.expectation, observation: 'deterministic trap assertions passed' } })
-  }
   return { candidate, findings, reruns, trapRuns }
 }
 
@@ -138,9 +133,10 @@ export async function qualifyAgenticEvaluation({ manifest, broken, repaired, rep
   }
   // Traps sit on the routes they guard: only a finding that catches no planted defect flags one.
   const unplanted = triage.confirmed.filter(finding => !manifest.defects.some(defect => catches(finding, defect)))
-  if (unplanted.length) reasons.push('unexpected assertion-failing finding outside the frozen defect manifest')
-  for (const trap of manifest.traps) {
-    if (unplanted.some(finding => finding.repro.route === trap.route)) reasons.push(`trap ${trap.id} flagged`)
+  for (const finding of unplanted) {
+    const traps = manifest.traps.filter(trap => finding.repro.route === trap.route)
+    reasons.push(`unexpected assertion-failing finding ${finding.id} on ${finding.repro.route} outside the frozen defect manifest` +
+      traps.map(trap => `; trap ${trap.id} flagged`).join(''))
   }
   if (sameBuild(repaired.candidate, broken.candidate)) reasons.push('repaired build must differ from the broken build')
   for (const [id, repro] of repros) {

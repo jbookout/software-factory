@@ -164,7 +164,11 @@ test('published report normalization distinguishes assertions from tool failures
   assert.equal(normalized.reruns[0].test.ref, 'journeys.e2e.mts#save')
   assert.equal(normalized.trapRuns[0].outcome, 'passed')
   assert.equal(e2e.triageFindings(normalized).confirmed.length, 1)
-  assert.equal(e2e.triageFindings(normalized).rejected.length, 1)
+  assert.deepEqual(normalized.findings.map(f => f.id), ['save'])
+  assert.equal(e2e.triageFindings(normalized).rejected.length, 0)
+  const passing = structuredClone(report)
+  passing.run.results[0] = result('save', 'passed')
+  assert.deepEqual(normalize(passing).findings, [])
   for (const code of ['LOGIN_REQUIRED', 'ENGINE_FAILURE', 'ERROR', 'OPERATION_TIMEOUT']) {
     const changed = structuredClone(report)
     changed.run.results[0].attempts[0].error.code = code
@@ -182,7 +186,7 @@ test('published report normalization distinguishes assertions from tool failures
   }
 })
 
-test('qualification network guard counts rejected fetch, HTTP and HTTPS provider attempts', async () => {
+test('qualification guard counts rejected fetch, HTTP(S), HTTP/2, TLS and TCP attempts', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'e2e-provider-counter-'))
   const log = path.join(root, 'calls.log')
   await fs.writeFile(log, 'counter-start\n')
@@ -190,11 +194,84 @@ test('qualification network guard counts rejected fetch, HTTP and HTTPS provider
   await promisify(execFile)(process.execPath, ['--import', guard, '--input-type=module', '-e', `
     import assert from 'node:assert/strict';
     import http from 'node:http'; import https from 'node:https';
-    assert.throws(() => fetch('https://example.invalid/model'), /forbidden/);
+    import http2 from 'node:http2'; import tls from 'node:tls'; import net from 'node:net';
+    await assert.rejects(fetch('https://example.invalid/model'), /forbidden/);
     assert.throws(() => http.get('http://example.invalid/model'), /forbidden/);
     assert.throws(() => https.request('https://example.invalid/model'), /forbidden/);
+    assert.throws(() => http.request('http://127.0.0.1:9/', { hostname: 'example.invalid', port: 80 }), /forbidden/);
+    assert.throws(() => http2.connect('https://example.invalid'), /forbidden/);
+    assert.throws(() => tls.connect(443, 'example.invalid'), /forbidden/);
+    assert.throws(() => net.connect(80, 'example.invalid'), /forbidden/);
+    assert.throws(() => new net.Socket().connect({ port: 80, host: 'example.invalid' }), /forbidden/);
+    await assert.rejects(fetch(new Request('https://example.invalid/model')), /forbidden/);
   `], { env: { PATH: process.env.PATH, PROVIDER_CALL_LOG: log } })
-  assert.equal((await fs.readFile(log, 'utf8')).split('\n').filter(line => line === 'external-invocation').length, 3)
+  assert.equal((await fs.readFile(log, 'utf8')).split('\n').filter(line => line === 'external-invocation').length, 9)
+})
+
+test('qualification network guard permits actual IPv4 and IPv6 loopback targets', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'e2e-loopback-counter-'))
+  const log = path.join(root, 'calls.log')
+  await fs.writeFile(log, 'counter-start\n')
+  const guard = fileURLToPath(new URL('../../capabilities/agentic-ui-evaluation/no-provider.mjs', import.meta.url))
+  await promisify(execFile)(process.execPath, ['--import', guard, '--input-type=module', '-e', `
+    import assert from 'node:assert/strict'; import http from 'node:http';
+    for (const hostname of ['::1', '127.0.0.1']) {
+      const server = http.createServer((req, res) => res.end('fixture'));
+      await new Promise(resolve => server.listen(0, hostname, resolve));
+      try {
+        const port = server.address().port;
+        await new Promise((resolve, reject) => {
+          http.get({ hostname, port }, response => { response.resume(); response.on('end', resolve) }).on('error', reject);
+        });
+        const urlHost = hostname === '::1' ? '[::1]' : hostname;
+        assert.equal(await (await fetch('http://' + urlHost + ':' + port)).text(), 'fixture');
+        await new Promise((resolve, reject) => {
+          http.get('http://example.invalid:9/', { hostname, port }, response => {
+            response.resume(); response.on('end', resolve);
+          }).on('error', reject);
+        });
+      } finally { await new Promise(resolve => server.close(resolve)) }
+    }
+  `], { env: { PATH: process.env.PATH, PROVIDER_CALL_LOG: log } })
+  assert.equal(await fs.readFile(log, 'utf8'), 'counter-start\n')
+})
+
+test('qualification guard rejects a localhost lookup that resolves outside loopback', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'e2e-lookup-counter-'))
+  const log = path.join(root, 'calls.log')
+  await fs.writeFile(log, 'counter-start\n')
+  const guard = fileURLToPath(new URL('../../capabilities/agentic-ui-evaluation/no-provider.mjs', import.meta.url))
+  await promisify(execFile)(process.execPath, ['--import', guard, '--input-type=module', '-e', `
+    import assert from 'node:assert/strict'; import net from 'node:net';
+    await assert.rejects(new Promise((resolve, reject) => {
+      const socket = net.connect({ host: 'localhost', port: 80, lookup(host, options, callback) {
+        const address = '203.0.113.1';
+        callback(null, options.all ? [{ address, family: 4 }] : address, 4);
+      } });
+      socket.on('error', reject); socket.on('connect', () => { socket.destroy(); resolve() });
+      socket.setTimeout(100, () => socket.destroy(new Error('connection escaped the guard')));
+    }), /forbidden/);
+  `], { env: { PATH: process.env.PATH, PROVIDER_CALL_LOG: log } })
+  assert.equal(await fs.readFile(log, 'utf8'), 'counter-start\nexternal-invocation\n')
+})
+
+test('each unplanted finding produces one disqualification reason naming its route and traps', async () => {
+  for (const [route, trapText] of [['/admin', 'trap denied-admin flagged'], ['/unknown', null]]) {
+    const result = await qualification(input => ({ ...input, broken: { ...input.broken,
+      findings: [...input.broken.findings, { id: 'unexpected', repro: repro({ id: 'unexpected', route, assertion: 'unexpected assertion' }) }] } }))
+    assert.equal(result.status, 'disqualified')
+    assert.equal(result.reasons.length, 1)
+    assert.ok(result.reasons[0].includes(route))
+    if (trapText) assert.ok(result.reasons[0].includes(trapText))
+  }
+})
+
+test('pstack public provenance is pinned and contains no machine-local or future port paths', async () => {
+  for (const name of ['parked.md', 'plan.md']) {
+    const text = await fs.readFile(new URL('../../docs/design-manager/' + name, import.meta.url), 'utf8')
+    assert.match(text, /https:\/\/github\.com\/cursor\/plugins\/(?:tree|blob)\/[0-9a-f]{40}\/pstack/)
+    assert.doesNotMatch(text, /\/Users\/[^\s`]+\/[^\s`]*pstack|vendored after merge|vendor location after merge/)
+  }
 })
 
 test('qualification refuses an empty defect manifest, an empty trap list and an empty archive', async () => {

@@ -11,6 +11,9 @@ has the criterion evidence gate (`software-factory/design-verify`, tested by AW-
 a sample-app VERIFY skill/runner and the [e2e wrapper](../../capabilities/agentic-ui-evaluation/README.md)
 with qualified deterministic web execution on e2e 0.16.0. It remains non-blocking.
 Model-backed exploration with Joe's attended ChatGPT login remains incomplete.
+Slice 5 supplies the [private SQLite journal, reference records
+and scoped backup/restore commands](journal.md), tested against actual files by
+AW-5. Persistent-host choice/cost and laptop-off qualification remain blocked.
 Later slices remain planned; none is qualified by this text or pure replay.
 
 ## Purpose and ownership
@@ -102,7 +105,7 @@ after surface qualification; they never become a runtime prerequisite.
 **Store decision:** a small embedded SQLite database under the factory's private
 state root, partitioned by user/project/version, plus immutable artifact files.
 Proposed root: `~/.local/share/software-factory/design-manager/` on the persistent
-factory host, containing `journal.sqlite` and `artifacts/`; this is private factory
+factory host, containing `journal.sqlite`, its database identity seal and `artifacts/`; this is private factory
 state outside the source checkout. The same layout serves every app project.
 Events, decisions, gates, evidence, worker receipts and provenance are structured
 records, never Markdown journals. Transactions, uniqueness constraints, migrations
@@ -399,11 +402,8 @@ against [e2e mobile](https://github.com/tester-army/e2e/blob/a0ee3e9061b666fa3dd
 and [argent](https://github.com/software-mansion/argent/blob/a824fcba90f7ebc7ecdb00b4abf4c00d3fba9e42/README.md).
 
 Each product owns a **VERIFY SKILL** and feature map, adapting pstack's pattern
-to the product's supported skill directory. Joe adopted pstack/poteto as the
-engineering framework on 2026-10-04. Native platform mappings preserve the
-per-user vendor-neutral workers and the Codex primary runtime; unsupported
-Cursor automations remain dormant. There is an index and one file per
-user-facing feature. Each feature
+to the product's supported skill directory rather than importing its Cursor
+router. There is an index and one file per user-facing feature. Each feature
 names its entry points, sub-features, user route, driving handles, observable
 end state and gotchas. A convenient entry point cannot stand for all listed
 entry points. Source: [pstack verification generator at the studied revision](https://github.com/cursor/plugins/blob/c47b12849e43f18d5c374c7069c744cc55b0ea00/pstack/skills/create-verification-skill/SKILL.md).
@@ -846,7 +846,9 @@ and Claude Design. Slices 4, 9 and 10 retain their requested numbers.
 AW-2 is implemented in `test/acceptance/design-layer-diagnosis.test.mjs`. AW-4's gate
 rules are implemented in `test/acceptance/design-verify.test.mjs` with synthetic store
 records; the sample-app run is `test/acceptance/verify-sample-app.test.mjs`. AW-4's live
-e2e qualification and the other rows remain future slice acceptance tests. Use
+e2e qualification remains incomplete. AW-5 runs in
+`test/acceptance/design-journal.test.mjs`; the other rows remain future slice
+acceptance tests. Use
 both unrelated synthetic sample projects and the existing mobile trigger when
 applicable. Each row requires its passing case and deliberately failing case;
 retain the actual artifact/observation, expected outcome and source binding.
@@ -897,11 +899,7 @@ reports one practitioner's experience, not measured fitness for this manager.
 Raw upstream files confirm documented capabilities; reliability, relative speed,
 authoring cost and the composed stack need the live qualification below and in
 [parked.md](parked.md). Existing mobile triggers, per-tool qualifications and
-pstack vendor-neutral worker, product ownership and runtime constraints remain
-in force after Joe's 2026-10-04 framework adoption. The native port source is
-`/Users/booko/carr-system/out/orch/pstack/src`; the vendor location after merge is
-`/Users/booko/carr-system-pstack/plugins/pstack`. Adoption does not qualify a
-particular host, provider route or Cursor scheduled automation.
+pstack full-router constraints remain in force.
 
 ### Post applications before slice 2
 
@@ -913,7 +911,7 @@ mobile stack is installed or qualified by this amendment.
 | --- | --- |
 | pstack plus e2e made mobile verification reliable; prior verification was unit-heavy | The plan did not explicitly fail unit-only acceptance. Prove now requires criterion-bound e2e behavior on the exact build; slices 4/10 reject unit-green broken paths and driver-only receipts. Reliability remains unproved until defect/trap fixtures pass. Upstream pstack asks for real-app driving; the reported unit-heavy result describes this practitioner's use, not the skill's documented standard. |
 | agent-device/argent support development, e2e proves the feature | No explicit Build/Prove responsibility split existed. The new inner-loop section assigns direct query/mutate/browser driving to Build and e2e acceptance to Prove, including web as the lateral application. Driver success cannot stand in for acceptance. |
-| pstack handles most work; stim orchestrates/warms sims; agent-device queries; argent queries/mutates faster | The separate parked candidates did not specify this composition or measure its speed. It is now the first mobile configuration to qualify, with matched query/mutate latency and cold/warm pool measurements. Joe adopted pstack/poteto on 2026-10-04. Use its native port within per-user vendor-neutral stations and the Codex primary runtime; every executable route still requires its fixture qualification. |
+| pstack handles most work; stim orchestrates/warms sims; agent-device queries; argent queries/mutates faster | The separate parked candidates did not specify this composition or measure its speed. It is now the first mobile configuration to qualify, with matched query/mutate latency and cold/warm pool measurements. Literal pstack router adoption still fails the existing vendor-neutral/runtime property test unless its return trigger passes. |
 | Hand-built Maestro flows were too costly to be practical | Coverage/reliability alone missed implementation effort. The parked comparison now includes timed authoring and maintenance after a controlled feature change; the report motivates that test without predetermining its winner. |
 | MiniSim is recommended | The recommendation's provenance was missing. It is now cited in the parked row. Unattended adoption remains declined: a menu-bar GUI launcher fails the headless background runtime property test; optional human tooling retains its exact trigger. |
 | The workflow looks promising while efficiency remains unsettled | This plan cannot claim an efficient composed stack today. Qualification records latency, startup and authoring/maintenance cost alongside detection, clean-code acceptance and cleanup; promising is not a passing receipt. |

@@ -63,6 +63,7 @@ results, accepts only runner 0.16.0, and distinguishes body `ASSERTION_FAILED`
 from login, engine, timeout and other tool failures. The harness validates the
 report against the installed upstream schema. Every trap must be exercised
 passing on broken, repaired and replay builds. Skips and retries cannot pass.
+Passing traps remain in `trapRuns`; only failed or blocked results become findings.
 
 Run all four steps in order; all are required:
 
@@ -82,9 +83,12 @@ removing disposable output, with a bounded 60-second aggregate archive deadline.
 Replay here executes the recorded deterministic repro suite again on the broken
 build. It proves scripted assertion replay, not agent cache effectiveness.
 No AI SDK or model is configured. An inherited preload counts and rejects
-external fetch/HTTP requests in the CLI and workers; provider invocations must
-be zero. The fixture server and browser use only loopback requests. Each test
-gets its own browser context and the three runs use separate servers/state.
+external fetch attempts and TCP socket connections in the CLI and workers,
+including HTTP(S), HTTP/2, TLS and undici. The socket guard checks the effective
+target after HTTP option merging and validates resolved loopback addresses;
+provider invocations must be zero. The fixture server and browser use only
+loopback requests. Each test gets its own browser context and the three runs
+use separate servers/state.
 
 Still unverified: attended ChatGPT login, account model/usage, expiry alarm and
 recovery, agent-generated repros, explore/bug-bash, live MCP transport, and
