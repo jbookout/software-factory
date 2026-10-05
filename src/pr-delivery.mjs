@@ -1,6 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { Deadline, DeadlineError, waitForCondition, validDuration } from "./deadline.mjs"
 import fs from "node:fs/promises"
+import { createReadStream } from "node:fs"
+import { createInterface } from "node:readline"
+import { fileURLToPath } from "node:url"
 import path from "node:path"
 import { createHash, randomUUID } from "node:crypto"
 import { reserveCompute } from "./process-capacity.mjs"
@@ -32,7 +35,8 @@ export async function loadDeliveryConfig(file) {
     if (typeof p !== "string" || !p.trim()) throw new DeliveryError("config path is required", 9)
     return path.resolve(base, p)
   }
-  const config = { ...value, stateDir: absolute(value.stateDir),
+  const config = { ...value, configPath: path.resolve(file), stateDir: absolute(value.stateDir),
+    installationReceipt: value.installationReceipt ? absolute(value.installationReceipt) : null,
     repos: Object.fromEntries(Object.entries(value.repos).map(([repo, local]) => {
       if (!REPO.test(repo)) throw new DeliveryError("invalid repository in config", 9)
       if (!validRequiredChecks(local.requiredChecks)) throw new DeliveryError("config repo requiredChecks must name the expected checks", 9)
@@ -636,6 +640,56 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     for (const entry of pending) await enqueue(entry.repo, entry.pr, entry.head, entry.note, "import")
     return { message: `IMPORTED pending queue and recent usage; source unchanged` }
   }
+  async function installationStatus() {
+    const sourceRoot = fileURLToPath(new URL("../", import.meta.url))
+    const entrypoint = path.join(sourceRoot, "bin/pr-delivery.mjs")
+    const sourceRevision = await git(sourceRoot, "rev-parse", "HEAD")
+    const receipt = config.installationReceipt
+    const bytes = receipt ? await fs.readFile(receipt).catch(e => { if (e.code === "ENOENT") return null; throw e }) : null
+    return { schema: "factory-delivery-navigation/v1", sourceRevision, entrypoint,
+      sourceModified: Boolean((await command(["git", "--no-optional-locks", "status", "--porcelain", "--untracked-files=no"], sourceRoot,
+        { mutation: false })).stdout.trim()),
+      policySource: path.join(sourceRoot, "docs/pr-delivery-cutover.md"), configPath: config.configPath,
+      checkPolicy: Object.fromEntries(Object.entries(config.repos).map(([repo, local]) => [repo, local.requiredChecks])),
+      installation: { status: "unverified", receipt, receiptDigest: bytes ? digestOf(bytes) : null,
+        nextAction: "Read the installed-orchestration manifest through its owning deployment check; this command identifies the invoked implementation only." },
+      paths: { stateDir: config.stateDir, deliveryLog: path.join(config.stateDir, "delivery.jsonl"),
+        queue: queueFile, waits: path.join(config.stateDir, "waits"), reviews: path.join(config.stateDir, "reviews") } }
+  }
+  async function jobStatus(repo, pr) {
+    getRepo(repo)
+    const navigation = await installationStatus(), key = keyFor(repo, pr)
+    const waitReceipt = path.join(navigation.paths.waits, `${key}.json`)
+    const wait = await readJson(waitReceipt, null)
+    if (wait && (wait.schema !== "factory-delivery-wait/v1" || wait.repo !== repo || wait.pr !== pr))
+      throw new DeliveryError("job wait receipt binding mismatch", 9)
+    const queue = (await readJson(queueFile, [])).filter(row => row.repo === repo && row.pr === pr)
+      .map(row => ({ id: row.id, head: row.head, attempts: row.attempts,
+        status: row.outcome?.status ?? "queued", availableAt: row.availableAt ?? null }))
+    const reviews = []
+    const names = await fs.readdir(navigation.paths.reviews).catch(e => { if (e.code === "ENOENT") return []; throw e })
+    for (const name of names.filter(name => name.endsWith(".json"))) {
+      const receipt = path.join(navigation.paths.reviews, name), row = await readJson(receipt)
+      if (row?.schema === "factory-review/v1" && row.repo === repo && row.pr === pr)
+        reviews.push({ receipt, head: row.head, verdict: row.verdict, output: row.output })
+    }
+    let lastEvent = null
+    try {
+      for await (const line of createInterface({ input: createReadStream(navigation.paths.deliveryLog), crlfDelay: Infinity })) {
+        budget().check()
+        if (!line.trim()) continue
+        const row = JSON.parse(line)
+        if (row.repo === repo && row.pr === pr && row.status)
+          lastEvent = { at: row.at, step: row.step, status: row.status, code: row.code,
+            evidence: "recorded, not process liveness" }
+      }
+    } catch (error) { if (error.code !== "ENOENT") throw error }
+    return { ...navigation, repo, pr, status: wait?.status === "suspended" ? "suspended"
+      : queue.some(row => row.status === "queued") ? "queued"
+      : lastEvent ? `recorded_${lastEvent.status}` : "unobserved", lastEvent, queue, reviews,
+      wait: wait ? { status: wait.status, head: wait.head, cause: wait.cause, code: wait.code, resetAt: wait.resetAt ?? null } : null,
+      paths: { ...navigation.paths, waitReceipt } }
+  }
   return {
     config,
     async recoveryCandidates() {
@@ -663,6 +717,8 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       return inAttempt(async () => {
         const { repo, pr, head, worktree, note } = request
         try {
+          if (step === "installation-status") return pass(await installationStatus())
+          if (step === "job-status") return pass(await jobStatus(repo, pr))
           if (repo) getRepo(repo)
           let data
           switch (step) {
@@ -713,6 +769,8 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
           }
           return pass(data)
         } catch (error) {
+          if (["installation-status", "job-status"].includes(step))
+            return fail(new DeliveryError("Delivery navigation unavailable: check the private config, installation receipt and job evidence files", 9))
           if (!error.wait) await log({ step, repo, pr, status: "failed", code: error.code ?? 1, message: error.message })
           return fail(error)
         }

@@ -26,6 +26,8 @@ placement contract is CARR doctrine section
 
 ## Working rules
 
+Before operating a development job, read [PR delivery cutover](docs/pr-delivery-cutover.md#job-evidence-navigation) and run the existing PR-delivery command's `installation-status`, then `job-status` for its repository and PR. Read the installation receipt it names before selecting a review implementation.
+
 - Prefer the smallest dependable solution. Complexity must buy measured value.
 - Give agents bounded specialist roles, explicit inputs and outputs, falsifiable
   completion criteria, and stop conditions.
