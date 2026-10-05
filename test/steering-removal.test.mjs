@@ -6,6 +6,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createPinnedBuildContext, replaySteeringRemoval } from '../src/model-room.mjs'
+import { canonicalDigest } from '../src/canonical.mjs'
 
 const sha = text => createHash('sha256').update(text).digest('hex')
 const line = 'Prefer the smallest dependable solution.'
@@ -113,6 +114,17 @@ test('a failed invocation is recorded without retry and cannot produce a no-op f
   assert.equal(result.failures.length, 1)
 })
 
+test('a single-pair failure preserves dispatch identity and returns insufficient evidence', async () => {
+  const w = world()
+  const result = await replaySteeringRemoval({ ...w.options, tasks: [tasks[0]], repetitions: 1,
+    execute: async () => { throw Error('unavailable') } })
+  assert.equal(result.decision, 'insufficient_evidence')
+  assert.equal(result.pairs[0].baseline.status, 'failed')
+  assert.ok(result.pairs[0].baseline.trialId)
+  assert.equal(result.pairs[0].removed, null)
+  assert.equal(result.failures.length, 1)
+})
+
 test('a timed-out trial aborts and stops the experiment without starting another model call', async () => {
   const w = world()
   let calls = 0, signal
@@ -138,6 +150,58 @@ test('the trial deadline also bounds a stalled independent evaluator', async () 
   assert.equal(result.failures[0].reason, 'trial_timeout_observe_before_retry')
   assert.equal(w.requests.length, 1)
 })
+
+for (const stage of ['execute', 'readArtifact', 'judge']) {
+  test(`synchronous ${stage} cannot pass an expired shared trial budget`, async () => {
+    const w = world()
+    const original = w.options[stage]
+    w.options[stage] = (...args) => {
+      if (stage !== 'readArtifact' || args[0].endsWith('-baseline.json')) {
+        const end = performance.now() + 40
+        while (performance.now() < end) {}
+      }
+      return original(...args)
+    }
+    const result = await replaySteeringRemoval({ ...w.options, timeoutMs: 10 })
+    assert.equal(w.requests.length, 1)
+    assert.equal(result.failures[0]?.reason, 'trial_timeout_observe_before_retry')
+    assert.equal(result.decision, 'insufficient_evidence')
+  })
+}
+
+for (const mutation of ['context', 'tasks']) {
+  test(`source reads cannot mutate reported ${mutation} identity or completion`, async () => {
+    const w = world()
+    w.options.context = structuredClone(context)
+    w.options.tasks = structuredClone(tasks)
+    const reader = w.options.readArtifact
+    w.options.readArtifact = async ref => {
+      if (ref === 'launch.json') {
+        if (mutation === 'context') w.options.context.digest = 'changed-during-source-read'
+        else w.options.tasks.pop()
+      }
+      return reader(ref)
+    }
+    const result = await replaySteeringRemoval(w.options)
+    assert.equal(result.baselineContextDigest, context.digest)
+    assert.equal(result.pairs.length, tasks.length * 2)
+    assert.equal(result.decision, 'propose_removal')
+    assert.ok(w.requests.every(r => r.arm !== 'baseline' || r.context.digest === context.digest))
+  })
+}
+
+for (const id of [1, null, undefined]) {
+  test(`task ID ${String(id)} is rejected before source reads or execution`, async () => {
+    const w = world()
+    let reads = 0
+    await assert.rejects(replaySteeringRemoval({ ...w.options,
+      tasks: [{ ...tasks[0], id }, { ...tasks[1], id: String(id) }],
+      readArtifact: async ref => { reads++; return w.options.readArtifact(ref) }
+    }), /invalid recorded task id/)
+    assert.equal(reads, 0)
+    assert.equal(w.requests.length, 0)
+  })
+}
 
 test('a reused adapter descriptor cannot rewrite the earlier arm artifact binding', async () => {
   const w = world()
@@ -166,7 +230,7 @@ test('the evaluator identity is required and changes experiment and trial identi
   await assert.rejects(replaySteeringRemoval({ ...w.options, evaluatorDigest: undefined }))
 })
 
-test('replay CLI loads pinned steering and writes a comparison without editing it', () => {
+function cliFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'steering-cli-'))
   execFileSync('git', ['init', '-q', root])
   fs.writeFileSync(path.join(root, 'AGENTS.md'), text)
@@ -189,10 +253,56 @@ test('replay CLI loads pinned steering and writes a comparison without editing i
   `)
   const args = ['scripts/steering-removal.mjs', path.join(root, 'plan.json'),
     path.join(root, 'adapter.mjs'), path.join(root, 'report.json')]
+  return { root, args }
+}
+
+test('replay CLI loads pinned steering and writes a comparison without editing it', () => {
+  const { root, args } = cliFixture()
   const summary = JSON.parse(execFileSync(process.execPath, args, { encoding: 'utf8' }))
   assert.equal(summary.decision, 'propose_removal')
   const report = JSON.parse(fs.readFileSync(path.join(root, 'report.json')))
   assert.equal(report.pairs.length, 2)
   assert.equal(fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8'), text)
   assert.throws(() => execFileSync(process.execPath, args, { stdio: 'pipe' }), /Command failed/)
+})
+
+test('an existing report prevents all evaluator initialization', () => {
+  const { root, args } = cliFixture()
+  const pending = JSON.stringify({ status: 'pending', runId: 'existing' })
+  fs.writeFileSync(args[3], pending)
+  fs.appendFileSync(args[2], `\nawait fs.appendFile(new URL('initialized', import.meta.url), 'initialized');\n`)
+  assert.throws(() => execFileSync(process.execPath, args, { stdio: 'pipe' }))
+  assert.equal(fs.existsSync(path.join(root, 'initialized')), false)
+  assert.equal(fs.readFileSync(args[3], 'utf8'), pending)
+})
+
+test('interrupted CLI retains generated identity, dispatches and completed receipts for observation', () => {
+  const { root, args } = cliFixture()
+  const adapter = fs.readFileSync(args[2], 'utf8').replace('const bytes =', `
+    await fs.appendFile(new URL('dispatches', import.meta.url), r.trialId + '\\n');
+    if (r.arm === 'removed') process.exit(23);
+    const bytes =`)
+  fs.writeFileSync(args[2], adapter)
+  assert.throws(() => execFileSync(process.execPath, args, { stdio: 'pipe' }), e => e.status === 23)
+  const report = JSON.parse(fs.readFileSync(args[3], 'utf8'))
+  assert.equal(report.status, 'pending')
+  assert.ok(report.runId)
+  assert.match(report.experimentDigest, /^[0-9a-f]{64}$/)
+  const pair = report.pairs[0]
+  assert.equal(pair.baseline.status, 'completed')
+  assert.deepEqual(pair.baseline.metrics, metrics)
+  assert.equal(pair.removed.status, 'dispatched')
+  const dispatches = fs.readFileSync(path.join(root, 'dispatches'), 'utf8')
+  assert.deepEqual(dispatches.trim().split('\n'), [pair.baseline.trialId, pair.removed.trialId])
+  assert.ok(pair.baseline.trialId.startsWith(report.experimentDigest))
+  const bytes = fs.readFileSync(path.join(root, pair.baseline.artifact.ref))
+  assert.equal(sha(bytes), pair.baseline.artifact.digest)
+  assert.equal(JSON.parse(bytes).requestDigest, pair.baseline.requestDigest)
+  assert.equal(report.baselineContextDigest, createPinnedBuildContext([
+    { ...context.contracts[0], source_revision: JSON.parse(fs.readFileSync(args[1])).steering.sourceRevision }
+  ]).digest)
+  const before = canonicalDigest(report)
+  assert.throws(() => execFileSync(process.execPath, args, { stdio: 'pipe' }))
+  assert.equal(canonicalDigest(JSON.parse(fs.readFileSync(args[3], 'utf8'))), before)
+  assert.equal(fs.readFileSync(path.join(root, 'dispatches'), 'utf8'), dispatches)
 })

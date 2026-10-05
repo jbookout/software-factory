@@ -232,7 +232,12 @@ module as `evaluatorDigest` and binds it to the experiment and every trial.
 Direct callers supply that digest; record dependency revisions with the trial
 evidence. Invocation failure or timeout stops further trials;
 observe the desk before any retry. A pending report is preserved and cannot be
-overwritten by this command.
+overwritten by this command. The command acquires this guard before loading the
+evaluator. It saves the generated run and experiment identity before dispatch,
+then atomically saves each dispatched arm, received artifact and completed
+observation. Inspect those identities and digest-bound receipts after an
+interruption; retrying the command does not reexecute them. Direct callers can
+supply an awaited `onProgress(report)` callback to persist the same snapshots.
 
 The report is a bounded, model-relative proposal. Equal failures and missing
 observations are `insufficient_evidence`; successful equal pairs may yield
