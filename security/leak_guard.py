@@ -38,7 +38,7 @@ def tokens(text):
     if not text.isascii():
         text = unicodedata.normalize('NFKD', text)
         text = ''.join(c for c in text if not unicodedata.combining(c))
-    return re.findall(r'[a-z0-9]+', text.lower())
+    return re.findall(r'[^\W_]+', text.lower())
 
 
 def decode_source(text):

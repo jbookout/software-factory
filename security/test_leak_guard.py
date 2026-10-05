@@ -105,6 +105,20 @@ class LeakGuardTest(unittest.TestCase):
         for value in values:
             self.assertNotIn(value, result.stdout)
 
+    def test_non_latin_name_export_and_detection_preserve_letters(self):
+        value = chr(0x6f22) + chr(0x5b57)
+        export = subprocess.run(['python3', str(SCRIPT.with_name('hash_export.py'))],
+                                input=json.dumps({'values': [value]}), capture_output=True, text=True)
+        self.assertEqual(export.returncode, 0, export.stderr)
+        corpus = self.root / 'corpus.json'
+        corpus.write_text(export.stdout)
+        (self.root / 'sample.txt').write_text(value + '\n')
+        subprocess.run(['git', '-C', str(self.root), 'add', 'sample.txt'], check=True)
+        result = self.run_guard('--staged', '--corpus', str(corpus))
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('sample.txt:1 client-data', result.stdout)
+        self.assertTrue(value not in result.stdout + result.stderr, 'Matched value escaped diagnostics')
+
     def test_export_indexes_only_possible_lengths_for_each_hashed_start(self):
         exporter = SCRIPT.with_name('hash_export.py')
         result = subprocess.run(['python3', str(exporter)], input=json.dumps({'values': ['Fictional', 'Imaginary' + ' Customer']}), capture_output=True, text=True)
