@@ -12,9 +12,9 @@ const invoke=(...args)=>execFileSync(process.execPath,[cli,...args],{encoding:'u
 async function commitCandidateSource(source) {
  execFileSync('git',['clone','--quiet','--no-hardlinks',root,source])
  // Installation fixtures must commit the candidate bytes, including pending changes.
- for(const dir of ['src','bin','deploy/orch']) await fs.cp(path.join(root,dir),path.join(source,dir),{recursive:true})
+ for(const dir of ['src','bin','deploy/orch','config']) await fs.cp(path.join(root,dir),path.join(source,dir),{recursive:true})
  const git=(...args)=>execFileSync('git',['-C',source,...args],{encoding:'utf8'}).trim()
- git('add','src','bin','deploy/orch')
+ git('add','src','bin','deploy/orch','config')
  git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--allow-empty','-qm','Delivered candidate')
 }
 test('retro 3: installed entrypoints bind source, route to factory and detect drift',async t=>{

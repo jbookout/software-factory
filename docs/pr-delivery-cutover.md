@@ -1,12 +1,56 @@
 # PR delivery cutover
 
+## Orchestrator switchover: tiered delivery
+
+`deliver R N [W] [rounds]` is the one per-PR entrypoint: admission, tiered
+review, fix rounds, then a head-bound enqueue. It never merges. `deliver R` is
+the repository lane: approved-head enqueue scan plus the serial merge queue.
+`pr-loop.sh` and the new `deliver.sh` wrappers both route to it.
+
+Review depth comes from a `repository-review-decision/v1` record computed with
+carr-system's `review-tiers.v1` schema (`src/review-tiers.mjs`, digest-equal to
+`lib/review_tiers.py`) over the PR's own change (merge-base..head). Each repo's
+`reviewPolicy` names a `repositoryPath` read at the base revision (carr-system:
+`ops/config/review-tiers.v1.json`) or a `file` (factory maps under
+`config/review-tiers/`). Dispatch tier: carr's bounded tunable-scalar lane and
+change sets whose every path matches a rule keep the decision's tier; an
+unclassified path, empty change, missing or invalid policy is tier 3.
+
+- Tier 1: no model. Required hosted checks green on the exact head produce
+  `APPROVE` / `Reviewed-SHA: <head>` / blank line, a statement that it is a
+  tier-1 deterministic approval, the policy and diff digests and
+  `Review-Decision: sha256:<decision digest>`; red checks produce a
+  deterministic `REVIEW: BLOCKED` that starts a fix round. An earlier blocking
+  verdict always gets a model confirmation instead. The receipt is the stored
+  decision record.
+- Tier 2: one focused review of the changed files and their direct callers.
+- Tier 3: the legacy `review-pr.sh` full checklist, verbatim.
+
+Every posted verdict ends with `Review-Tier`, `Review-Decision` and
+`Factory-Review` lines and carries no second `Reviewed-SHA` line, as
+`ops/release-pipeline.py` requires (tested against its extracted parser in
+`test/fixtures/release-pipeline/`).
+
+A `merge-holds.txt` line keeps matching PRs out of the queue. A line whose
+reason starts with `FREEZE` also stops merges: the queued entry stays untouched
+and the lane retries (exit 75). An unreadable line stops merges too.
+
+Shadow mode, `shadow R`, runs beside the legacy scripts, makes no GitHub write,
+and appends one `factory-delivery-shadow/v1` record per PR per pass to
+`stateDir/shadow.jsonl` (tier, would-review, would-approve, would-merge, and
+the old path's verdict and merge). `bin/delivery-shadow-compare.mjs` reports
+agreement. `scripts/orch/delivery-cutover.sh shadow|flip|rollback|status` moves
+between modes; it only moves files, into `$OLD/_to_delete/`.
+
 The orchestrator performs this cutover after merge. Node 20.19+, Git with
 `merge-tree --write-tree`, `gh`, and `codex` must be on PATH. Authentication
 stays in the caller's environment/tool configuration; never put credentials in
 JSON. Copy [the example](../config/pr-delivery.example.json) to a private local
-config. It is the only repo registry: set each `checkout`, `worktreeRoot`, the
-shared `stateDir`, model, effort, limits, and holds (`repo`, `titlePattern`,
-`reason`). Include `jbookout/software-factory` with its own checkout; the example
+config. It is the only repo registry: set each `checkout`, `worktreeRoot`,
+`reviewPolicy`, the shared `stateDir`, limits, and `holdsFile` (the
+orchestrator's `merge-holds.txt`, read on every enqueue and merge decision).
+Models per role come from [delivery-models.v1.json](../config/delivery-models.v1.json)
+unless `modelsFile` names another; `codex.command` may name the executable. Include `jbookout/software-factory` with its own checkout; the example
 registry lists all three code homes. Set `trustedReviewers` to the verified
 GitHub logins used by the review poster (case-insensitive). This allowlist
 identifies whose verdicts count; approvals still need the private independent
@@ -43,7 +87,7 @@ empty source; missing inputs fail before destination queue or usage writes.
 Imported approval comments never authorize delivery. Trusted blocking comments
 remain blocking; an untrusted author cannot approve or impersonate a blocker. Run a fresh factory review
 for imported pending work so the private review evidence exists before merging.
-Move old hold patterns into the JSON before starting producers. Do not run both queues.
+Holds stay in `merge-holds.txt`; point `holdsFile` at it. Do not run both queues.
 The factory does not install a scheduler or take product deployment authority.
 
 Use `R=owner/repository`, `N=<pr>`, `W=<worktree-or-dash>`, `H=<approved-full-sha>`,
@@ -51,13 +95,13 @@ Use `R=owner/repository`, `N=<pr>`, `W=<worktree-or-dash>`, `H=<approved-full-sh
 
 | Old script | Exact factory command |
 | --- | --- |
-| `pr-loop.sh R N W [rounds]` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" pr-loop "$R" "$N" "$W" 3` |
+| `pr-loop.sh R N W [rounds]` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" deliver "$R" "$N" "$W" 3` |
 | `review-pr.sh R N` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" review-pr "$R" "$N"` |
 | `fix-pr.sh R N W` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" fix-pr "$R" "$N" "$W"` |
 | `ci-fix.sh R N` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" ci-fix "$R" "$N"` |
 | `codex-guard.sh R N kind command...` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" codex-guard "$R" "$N" "$KIND" "${COMMAND[@]}"` |
 | `branch-wt.sh repo-dir B F` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" branch-wt "$R" "$B" "$F"` |
-| `merge-queue.sh` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" merge-queue "$R"` (one consumer per repository) |
+| `merge-queue.sh` + `auto-enqueue.sh` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" deliver "$R"` (the repository lane; one per repository) |
 | `merge-one-core.sh R N H note` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" merge-one-core "$R" "$N" "$H" "$NOTE"` |
 | `merge-enqueue.sh R N H note` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" merge-enqueue "$R" "$N" "$H" "$NOTE"` |
 | `auto-enqueue.sh` | `node "$FACTORY/bin/pr-delivery.mjs" "$CONFIG" auto-enqueue` |

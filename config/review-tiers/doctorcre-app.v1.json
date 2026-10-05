@@ -1,0 +1,40 @@
+{
+  "schema_version": "review-tiers.v1",
+  "purpose": "Review-depth map for jbookout/doctorcre-app, read by the factory delivery router. Same schema and semantics as carr-system ops/config/review-tiers.v1.json; a path no rule names is routed to tier 3. Move it into the app repository when the app adopts its own reader.",
+  "provenance": "Factory starting configuration written with the orchestrator switchover (2026-10-05) from the app tree at origin/main. Deploy, contracts, privacy scripts and dependencies are tier 3.",
+  "default_tier": 1,
+  "rules": [
+    {"id": "test-artifacts", "tier": 1, "class": "adversarial", "match": "prefix", "pattern": "test-artifacts/", "why": "Captured screenshots and reports; no executed code."},
+    {"id": "markdown", "tier": 1, "class": "adversarial", "match": "suffix", "pattern": ".md", "why": "Prose; AGENTS.md is raised to tier 3 below."},
+    {"id": "slices", "tier": 2, "class": "adversarial", "match": "prefix", "pattern": "js/", "why": "Client screens and slices."},
+    {"id": "styles", "tier": 2, "class": "adversarial", "match": "prefix", "pattern": "css/", "why": "Styles."},
+    {"id": "pages", "tier": 2, "class": "adversarial", "match": "suffix", "pattern": ".html", "why": "Pages."},
+    {"id": "tours", "tier": 2, "class": "adversarial", "match": "prefix", "pattern": "tours/", "why": "Tour planner."},
+    {"id": "reports", "tier": 2, "class": "adversarial", "match": "prefix", "pattern": "reports/", "why": "Report views."},
+    {"id": "source", "tier": 2, "class": "adversarial", "match": "prefix", "pattern": "src/", "why": "App modules."},
+    {"id": "public-shell", "tier": 2, "class": "adversarial", "match": "prefix", "pattern": "public-shell/", "why": "Public shell assets."},
+    {"id": "tests", "tier": 2, "class": "adversarial", "match": "prefix", "pattern": "test/", "why": "A test change can hide a regression; one focused look."},
+    {"id": "journeys", "tier": 2, "class": "adversarial", "match": "prefix", "pattern": "tests/", "why": "Journey and agent tests."},
+    {"id": "contracts", "tier": 3, "class": "protected", "match": "prefix", "pattern": "contracts/", "why": "Route and slice ownership contracts."},
+    {"id": "scripts", "tier": 3, "class": "protected", "match": "prefix", "pattern": "scripts/", "why": "Release, privacy and build scripts."},
+    {"id": "data", "tier": 3, "class": "security_sensitive", "match": "prefix", "pattern": "data/", "why": "Record data shipped with the app."},
+    {"id": "workflows", "tier": 3, "class": "protected", "match": "prefix", "pattern": ".github/", "why": "CI and its trust."},
+    {"id": "wrangler", "tier": 3, "class": "security_sensitive", "match": "basename", "pattern": "wrangler.jsonc", "why": "Deploy routes and bindings."},
+    {"id": "e2e-config", "tier": 3, "class": "protected", "match": "path", "pattern": "e2e.config.ts", "why": "Release browser gate configuration."},
+    {"id": "manifest", "tier": 3, "class": "protected", "match": "path", "pattern": "manifest.webmanifest", "why": "Installed app identity."},
+    {"id": "package", "tier": 3, "class": "protected", "match": "basename", "pattern": "package.json", "why": "Dependencies."},
+    {"id": "lock", "tier": 3, "class": "protected", "match": "basename", "pattern": "package-lock.json", "why": "Dependency lock."},
+    {"id": "agents-md", "tier": 3, "class": "protected", "match": "basename", "pattern": "AGENTS.md", "why": "Agent instructions."},
+    {"id": "name-auth", "tier": 3, "class": "security_sensitive", "match": "contains", "pattern": "auth", "case_insensitive": true, "why": "Authentication by name."},
+    {"id": "name-login", "tier": 3, "class": "security_sensitive", "match": "contains", "pattern": "login", "case_insensitive": true, "why": "Sign-in paths."},
+    {"id": "name-secret", "tier": 3, "class": "security_sensitive", "match": "contains", "pattern": "secret", "case_insensitive": true, "why": "Credential handling."},
+    {"id": "name-privacy", "tier": 3, "class": "security_sensitive", "match": "contains", "pattern": "privacy", "case_insensitive": true, "why": "Client data exposure checks."}
+  ],
+  "noise_exclusions": [
+    {"id": "lock-npm", "match": "basename", "pattern": "package-lock.json", "why": "Lockfile."},
+    {"id": "vendored", "match": "contains", "pattern": "/vendor/", "why": "Vendored code."}
+  ],
+  "never_exclude": [
+    {"id": "workflows", "match": "prefix", "pattern": ".github/", "why": "CI is never noise."}
+  ]
+}

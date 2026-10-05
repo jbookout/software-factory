@@ -1,0 +1,39 @@
+{
+  "schema_version": "review-tiers.v1",
+  "purpose": "Review-depth map for jbookout/software-factory, read by the factory delivery router. Same schema and semantics as carr-system ops/config/review-tiers.v1.json; a path no rule names is routed to tier 3.",
+  "provenance": "Factory starting configuration written with the orchestrator switchover (2026-10-05). Delivery, GitHub observation, review and wrapper code is tier 3 because it decides what merges.",
+  "default_tier": 1,
+  "rules": [
+    {"id": "docs", "tier": 1, "class": "adversarial", "match": "prefix", "pattern": "docs/", "why": "Prose; hosted CI still gates."},
+    {"id": "markdown", "tier": 1, "class": "adversarial", "match": "suffix", "pattern": ".md", "why": "Prose; AGENTS.md and CLAUDE.md are raised to tier 3 below."},
+    {"id": "source", "tier": 2, "class": "adversarial", "match": "prefix", "pattern": "src/", "why": "Factory library code."},
+    {"id": "entrypoints", "tier": 2, "class": "adversarial", "match": "prefix", "pattern": "bin/", "why": "CLI entrypoints."},
+    {"id": "capabilities", "tier": 2, "class": "adversarial", "match": "prefix", "pattern": "capabilities/", "why": "Reusable capabilities."},
+    {"id": "scripts", "tier": 2, "class": "adversarial", "match": "prefix", "pattern": "scripts/", "why": "Audit and measurement scripts."},
+    {"id": "tests", "tier": 2, "class": "adversarial", "match": "prefix", "pattern": "test/", "why": "A test change can hide a regression; one focused look."},
+    {"id": "typecheck", "tier": 2, "class": "adversarial", "match": "prefix", "pattern": "typecheck/", "why": "Type contracts."},
+    {"id": "delivery", "tier": 3, "class": "protected", "match": "prefix", "pattern": "src/pr-delivery", "why": "Review, fix and merge controller."},
+    {"id": "github", "tier": 3, "class": "protected", "match": "prefix", "pattern": "src/github-", "why": "Trusted verdict reader and provider writes."},
+    {"id": "review", "tier": 3, "class": "protected", "match": "prefix", "pattern": "src/review-", "why": "Review evidence and this map's reader."},
+    {"id": "process", "tier": 3, "class": "protected", "match": "prefix", "pattern": "src/process-", "why": "Job supervision, budgets and deadlines."},
+    {"id": "orch-install", "tier": 3, "class": "protected", "match": "prefix", "pattern": "src/orch-installation", "why": "Installs live orchestrator wrappers."},
+    {"id": "deploy", "tier": 3, "class": "protected", "match": "prefix", "pattern": "deploy/", "why": "Installed orchestrator wrappers."},
+    {"id": "config", "tier": 3, "class": "protected", "match": "prefix", "pattern": "config/", "why": "Review maps, model roles and delivery examples."},
+    {"id": "schemas", "tier": 3, "class": "protected", "match": "prefix", "pattern": "schemas/", "why": "Contracts other tools read."},
+    {"id": "workflows", "tier": 3, "class": "protected", "match": "prefix", "pattern": ".github/", "why": "CI and its trust."},
+    {"id": "package", "tier": 3, "class": "protected", "match": "basename", "pattern": "package.json", "why": "Dependencies."},
+    {"id": "lock", "tier": 3, "class": "protected", "match": "basename", "pattern": "package-lock.json", "why": "Dependency lock."},
+    {"id": "scope", "tier": 3, "class": "protected", "match": "path", "pattern": "factory.scope.json", "why": "Factory boundary declaration."},
+    {"id": "agents-md", "tier": 3, "class": "protected", "match": "basename", "pattern": "AGENTS.md", "why": "Agent instructions."},
+    {"id": "claude-md", "tier": 3, "class": "protected", "match": "basename", "pattern": "CLAUDE.md", "why": "Session instructions."},
+    {"id": "name-secret", "tier": 3, "class": "security_sensitive", "match": "contains", "pattern": "secret", "case_insensitive": true, "why": "Credential handling."},
+    {"id": "name-credential", "tier": 3, "class": "security_sensitive", "match": "contains", "pattern": "credential", "case_insensitive": true, "why": "Credential handling."},
+    {"id": "name-auth", "tier": 3, "class": "security_sensitive", "match": "contains", "pattern": "auth", "case_insensitive": true, "why": "Authentication by name."}
+  ],
+  "noise_exclusions": [
+    {"id": "lock-npm", "match": "basename", "pattern": "package-lock.json", "why": "Lockfile."}
+  ],
+  "never_exclude": [
+    {"id": "workflows", "match": "prefix", "pattern": ".github/", "why": "CI is never noise."}
+  ]
+}
