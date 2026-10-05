@@ -81,3 +81,17 @@ Before opening or updating any pull request, apply both skills to the diff:
 2. `zero-tech-debt`: rework the change from its intended end state; delete dead compatibility paths and duplicated rules.
 
 Both are installed at `~/.agents/skills/` (sources: github.com/mattpocock/skills `skills/engineering/codebase-design`, github.com/jnsahaj/skills `skills/zero-tech-debt`). The PR reviewer checks both, so all two are required.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live in GitHub Issues for `jbookout/software-factory` (the `gh` CLI). PRs are not a triage surface. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). Only `wontfix` exists as a GitHub label today; the other four are not yet created. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: a root `GLOSSARY.md` and `docs/adr/`, both created lazily. See `docs/agents/domain.md`.
