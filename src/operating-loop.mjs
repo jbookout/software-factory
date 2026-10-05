@@ -38,10 +38,6 @@ export function verifyFactoryReceipt(receipt, trustedDigest) {
   }
 }
 
-function findingKey(findings) {
-  return hash(findings ?? [])
-}
-
 function assertJob(job) {
   if (!job || typeof job !== "object") throw new Error("job is required")
   for (const field of ["outcome", "sourceRevision"]) {
@@ -158,7 +154,7 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
             stopped = "verify:missing"
             return false
           }
-          const current = findingKey(result.findings)
+          const current = hash(result.findings ?? [])
           if (current === previous) {
             stopped = "verify:stalled"
             return false
@@ -244,7 +240,7 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
               return result.findings.length ? result.findings : [{ role: reviewRoles[index], reason: "review did not pass" }]
             })
             if (!failed.length) break
-            const current = findingKey(failed)
+            const current = hash(failed)
             if (current === previous) {
               stopped = "review:stalled"
               break
