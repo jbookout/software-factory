@@ -891,6 +891,18 @@ for(const fault of [502,429,"no-response"]) test(`transient update-branch ${faul
  ok(await f.run("merge-enqueue",repo,"7",f.head)); ok(await f.run("merge-queue",repo,"--once"))
  const [entry]=await queueOf(f)
  assert.equal(entry.attempts,1); assert.equal(entry.outcome,undefined,JSON.stringify(entry)); assert.equal(remoteTopic(f),f.head)
+ if(fault === 429) {
+  const githubFile=path.join(f.stateDir,"github.json")
+  const observation=JSON.parse(await fs.readFile(githubFile))
+  assert.equal(observation.hold.state,"quota_hold")
+  assert.equal(entry.availableAt,observation.hold.retryAt)
+  const requests=(await f.read()).ghCalls.length
+  ok(await f.run("merge-queue",repo,"--once"))
+  assert.equal((await queueOf(f))[0].attempts,1)
+  assert.equal((await f.read()).ghCalls.length,requests,"restart cannot request before the provider retry time")
+  observation.hold.retryAt=0;await fs.writeFile(githubFile,JSON.stringify(observation))
+  entry.availableAt=0;await fs.writeFile(path.join(f.stateDir,"queue.json"),JSON.stringify([entry]))
+ }
  ok(await f.run("merge-queue",repo,"--once"))
  const [done]=await queueOf(f)
  assert.equal(done.outcome.data.code,2); assert.match(done.outcome.data.message,/fresh review/); assert.notEqual(remoteTopic(f),f.head)

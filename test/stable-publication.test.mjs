@@ -8,7 +8,8 @@ for (const kind of ["fix", "ci-fix"]) test(`${kind}: publishes a stable locally 
   assert.match(prompt, /Publish once per verified candidate/);
   assert.match(prompt, /Do not push speculative intermediate fixes/);
   assert.match(prompt, /Run every test and CI command in the foreground/);
-  assert.match(prompt, /confirm hosted CI starts/);
+  assert.match(prompt, /the factory observes the remote head and hosted CI/);
+  assert.match(prompt, /Never invoke gh directly/);
   assert.match(prompt, /Never merge/);
 });
 test("review remains read-only and never publishes a candidate", () => {
