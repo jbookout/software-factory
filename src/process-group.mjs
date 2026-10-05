@@ -17,11 +17,14 @@ function liveMembers(pid) {
   if (!rows.length || !rows.every(row => row && Number(row[2]) === pid)) return null
   return rows.some(row => !row[3].startsWith('Z'))
 }
+// A killed group can still be retiring at the first readback. Both probes are
+// bounded; a live group or two inconclusive observations remain a refusal.
+const retiredGroup = pid => liveMembers(pid) === false || liveMembers(pid) === false
 export function ownedGroupAlive(pid) {
   try { process.kill(process.platform === 'win32' ? pid : -pid, 0); return true }
   catch (error) {
     if (error.code === 'ESRCH') return false
-    if (error.code === 'EPERM' && process.platform === 'darwin' && liveMembers(pid) === false) return false
+    if (error.code === 'EPERM' && process.platform === 'darwin' && retiredGroup(pid)) return false
     return true
   }
 }
@@ -29,7 +32,7 @@ export function killOwnedGroup(pid, signal) {
   try { process.kill(process.platform === 'win32' ? pid : -pid, signal) }
   catch (error) {
     if (error.code === 'ESRCH') return
-    if (error.code === 'EPERM' && process.platform === 'darwin' && liveMembers(pid) === false) return
+    if (error.code === 'EPERM' && process.platform === 'darwin' && retiredGroup(pid)) return
     throw error
   }
 }

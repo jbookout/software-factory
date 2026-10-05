@@ -13,6 +13,11 @@ const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8",
 const fake = `#!/usr/bin/env node
 const fs = require('node:fs'), cp = require('node:child_process');
 const args = process.argv.slice(2), file = process.env.FAKE_PR;
+const diagnostic = value => fs.appendFileSync(file+'.transport.jsonl',JSON.stringify(value)+'\\n');
+if(require('node:path').basename(process.argv[1])==='gh') {
+ process.on('exit',code=>diagnostic({args,code}));
+ process.on('uncaughtException',error=>{diagnostic({args,error:{code:error.code,message:error.message,status:error.status,signal:error.signal}});process.exit(1)});
+}
 if(require('node:path').basename(process.argv[1])==='gh' && process.env.FAKE_WORKER_GH_TLS==='1'){console.log(JSON.stringify({credentialPresent:Boolean(process.env.GH_TOKEN||process.env.GITHUB_TOKEN)}));console.error('tls: failed to verify certificate: x509: OSStatus -26276');process.exit(1);}
 const s = JSON.parse(fs.readFileSync(file));
 // Concurrent fake calls and the test read this file; replace it atomically.
@@ -170,7 +175,13 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
  const read=async()=>JSON.parse(await fs.readFile(env.FAKE_PR,"utf8"))
  const launch=(command,args,workerEnv=env)=>new Promise((resolve,reject)=>{
   const child=spawn(command,args,{env:workerEnv,stdio:["ignore","pipe","pipe"]});let stdout="",stderr=""
-  child.stdout.on("data",b=>stdout+=b);child.stderr.on("data",b=>stderr+=b);child.on("error",reject);child.on("close",code=>resolve({code,stdout,stderr}))
+  child.stdout.on("data",b=>stdout+=b);child.stderr.on("data",b=>stderr+=b);child.on("error",reject);child.on("close",async code=>{
+   if(code) {
+    const diagnostics=await fs.readFile(env.FAKE_PR+'.transport.jsonl','utf8').catch(()=>"")
+    stderr+='\nFixture transport diagnostics:\n'+diagnostics.split('\n').slice(-5).join('\n')
+   }
+   resolve({code,stdout,stderr})
+  })
  })
  const run=(...args)=>launch(process.execPath,[cli,config,...args])
  const wrapper=(name,...args)=>launch("sh",[fileURLToPath(new URL(`../deploy/orch/${name}.sh`,import.meta.url)),...args],
