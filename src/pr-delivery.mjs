@@ -353,6 +353,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
         description:current.description,diff:await git(dir,"diff","--no-ext-diff",binding.base,head),
         checks:{head,ci:current.ci,inventory:current.inventory,observedAt:current.fetchedAt},
         ...(prior?{fixDiff:await git(dir,"diff","--no-ext-diff",prior.sha,head)}:{})})
+      const inputDigest=digestOf(await fs.readFile(manifest,"utf8"))
       const evidence=await readReviewEvidence(manifest,binding)
       const prompt = deliveryPrompt("review", { repo, pr, head, prior, evidence })
       await fs.rm(output, { force: true })
@@ -361,6 +362,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       const execution = await guarded(repo, pr, "review", argv, dir, prompt, head)
       if (!(await unchanged()))
         throw new DeliveryError("reviewer changed pinned source; refusing approval, worktree retained")
+      if(digestOf(await fs.readFile(manifest,"utf8"))!==inputDigest)throw new DeliveryError("review input manifest changed")
       await readReviewEvidence(manifest,binding)
       const body = await fs.readFile(output, "utf8")
       const parsed = parseReview(body)
@@ -375,7 +377,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       await fs.writeFile(`${artifacts}.prompt`, prompt, { mode: 0o600 })
       await writeJson(`${artifacts}.json`, { schema: "factory-review/v1", repo, pr, head, tree,
         verdict: parsed.verdict, sourceVerified: true, cwd: dir, argv, execution,
-        input:{manifest,binding,digest:digestOf(await fs.readFile(manifest,"utf8"))},
+        input:{manifest,binding,digest:inputDigest},
         promptDigest: digestOf(prompt), output, outputDigest: digestOf(body), commentDigest: digestOf(comment) })
       await postComment(repo, pr, comment)
       return { head, verdict: parsed.verdict }

@@ -33,6 +33,7 @@ if(tool === 'codex') {
  s.workerInput={binding:manifest.binding,description:fs.readFileSync(manifest.files.description.path,'utf8'),diff:fs.readFileSync(manifest.files.diff.path,'utf8'),checks:JSON.parse(fs.readFileSync(manifest.files.checks.path)),probe:{client:'gh',route:'repos/'+s.repo+'/pulls/7',code:probe.status,error:probe.stderr}};save();
  if(s.inputTamper==='digest'){fs.chmodSync(manifest.files.diff.path,0o600);fs.appendFileSync(manifest.files.diff.path,'altered');}
  if(s.inputTamper==='omit'){fs.chmodSync(match[1],0o600);delete manifest.files.diff;fs.writeFileSync(match[1],JSON.stringify(manifest));}
+ if(s.inputTamper==='rebless'){fs.chmodSync(manifest.files.diff.path,0o600);fs.appendFileSync(manifest.files.diff.path,'altered');manifest.files.diff.digest=require('node:crypto').createHash('sha256').update(fs.readFileSync(manifest.files.diff.path)).digest('hex');fs.chmodSync(match[1],0o600);fs.writeFileSync(match[1],JSON.stringify(manifest));}
  if(s.inputTamper==='head'){git('-C',s.checkout,'checkout','-q','topic');fs.writeFileSync(s.checkout+'/moved.txt','moved');git('-C',s.checkout,'add','moved.txt');git('-C',s.checkout,'commit','-qm','Move review input');git('-C',s.checkout,'push','-q','origin','topic');git('-C',s.checkout,'checkout','-q','main');}
  }
  if(s.reviewerCommit) { fs.writeFileSync('feature.txt','prohibited');git('add','feature.txt');git('commit','-qm','Prohibited reviewer edit'); }
@@ -1553,7 +1554,7 @@ test('owner input lets a TLS-refused worker review without a network credential'
  assert.equal(s.workerInput.checks.ci.state,'success');assert.match(s.workerInput.probe.error,/OSStatus -26276/)
  assert.equal(s.comments.length,1)
 })
-for(const inputTamper of ['digest','omit','head'])test(`review refuses owner input tampering: ${inputTamper}`,async t=>{
+for(const inputTamper of ['digest','omit','head','rebless'])test(`review refuses owner input tampering: ${inputTamper}`,async t=>{
  const f=await fixture(t,{inputTamper,repo})
  assert.notEqual((await f.run('review-pr',repo,'7')).code,0)
  const state=await f.read();assert.ok(state.workerInput);assert.equal(state.comments.length,0)
