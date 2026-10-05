@@ -622,7 +622,7 @@ for(const [status,conclusion] of [["success",null],["failure",null],["in_progres
  })
 
 test("slot timeout resumes the identical guard when the occupied slot is released",async t=>{
- const f=await fixture(t,{}, {limits:{runsPer24h:8,slots:1,timeoutMs:500}})
+ const f=await fixture(t,{}, {limits:{runsPer24h:8,slots:1,timeoutMs:500},queueTimeoutMs:15000})
  const release=await acquireLease(path.join(f.stateDir,"locks"),"codex-slot-0")
  const marker=path.join(f.root,"guard-started")
  const args=["codex-guard",repo,"7","fix",process.execPath,"-e",`require('fs').writeFileSync(${JSON.stringify(marker)},'started')`]
