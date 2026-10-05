@@ -1,0 +1,1815 @@
+{
+ "schema_version": "review-tier-vectors.v1",
+ "generated_by": "ops/sync-review-tiers.py",
+ "source": "ops/config/review-tiers.v1.json",
+ "map_digest": "sha256:56f7a66c332b4649f8162fac1c261ac27d919bec1b66b7460c81069d569b1756",
+ "vectors": [
+  {
+   "path": ".github/CODEOWNERS",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": ".github/workflows/ci.yml",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": ".github/workflows/source-merge-controller.yml",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": ".github/actions/setup/action.yml",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": ".github/dependabot.yml",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": ".nvmrc",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": ".python-version",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "AGENTS.md",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "CLAUDE.md",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "README.md",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "docs/AGENTS.md",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "tools/room-bridge/CLAUDE.md",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "control-room/package.json",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "db/schema.sql",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/package-lock.json",
+   "tier": 3,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "mcp-server/package.json",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/bin/run-source-merge.mjs",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/bin/other-tool.mjs",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/engineering-runtime.js",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/identity.js",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/index.js",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/mcp.js",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/sha256.js",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/source-merge-policy.js",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/tools.js",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/work-request-intake.js",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/tour-map-route-state.js",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/partner-authority.js",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/session-identity.js",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/scac-mutation-registry.generated.js",
+   "tier": 2,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/rule-boot-classes.js",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/mutation-registry.js",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/wrangler.toml",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/test/source-merge-policy.test.mjs",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "mcp-server/test/oauth-door.test.mjs",
+   "tier": 3,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "mcp-server/local-client-auth.mjs",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "requirements.lock",
+   "tier": 3,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "requirements.txt",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "tools/migrate.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "tools/migrate-prod-support.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "tools/next-migration.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "workspace/package.json",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "ops/ci.sh",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "ops/config/gate-baseline.json",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "ops/config/review-tiers.v1.json",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "ops/githooks/pre-push",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "ops/jev_done_checks.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "ops/pr-size-check.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "migrations/0471_source_merge_catalog_registry_successor.sql",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "migrations/0001_init.sql",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "hooks/gate-integrity.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "hooks/guard-unattended.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "hooks/lint-gate.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "bin/migrate-dell.sh",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "bin/staging-secrets.sh",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "bin/nightly.sh",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "bin/council.sh",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "lib/secret_redaction.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "lib/record_sources.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "lib/review_tiers.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "lib/Payments.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "lib/crypto_box.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "lib/SecurityModel.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "lib/Authz.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "tools/room-bridge/engineering_dispatch_adapter.py",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "tools/room-bridge/worktree_runtime_isolation.py",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "control-room/contracts/tenant-workflow-maintenance.v1.json",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "control-room/fixtures/tenant-boundary.v1.json",
+   "tier": 3,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "workspace/contracts/tenant-workflow-governance.v1.json",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "dealroom/index.html",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "fill-engine/fill.py",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "docs/security-review.md",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "secrets-inventory.md",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "audits/guidance-migration-manifest.v1.tsv",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "pipelines/run_codex_review.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "pipelines/staging-isolation-proof.sql",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "evals/surfaces.json",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": ".claude/settings.json",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "claude-tree/settings/user.settings.json",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "corpus/notes.md",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "video/cut.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "shared/x.js",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "some/dir/db/thing.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mongodb/x.js",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "node_modules/pkg/index.js",
+   "tier": 1,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "mcp-server/node_modules/pg/lib/index.js",
+   "tier": 1,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "tools/vendor/lib.js",
+   "tier": 1,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "vendor/top.js",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "vendor-patches/a.js",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "static/app.min.js",
+   "tier": 1,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "static/app.min.json",
+   "tier": 1,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/review-tiers.generated.js",
+   "tier": 3,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/review-tiers.js",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "skills-lock.json",
+   "tier": 1,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "tools/foo/yarn.lock",
+   "tier": 1,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "migrations/node_modules/x.js",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "./ops/ci.sh",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "OPS/ci.sh",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "Migrations/0001.sql",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "hooks",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "ops",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "hooks/probe.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/hooks/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "ops/probe.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/ops/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": ".github/workflows/probe.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/.github/workflows/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": ".github/actions/probe.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/.github/actions/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": ".github/CODEOWNERS.bak",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/.github/CODEOWNERS",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": ".claude/settingsprobe.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/.claude/settingsprobe.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "claude-tree/settings/probe.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/claude-tree/settings/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/CLAUDE.md",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/xCLAUDE.md",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/AGENTS.md",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/xAGENTS.md",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/tools.js.bak",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/mcp-server/src/tools.js",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/engineering-runtime.js.bak",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/mcp-server/src/engineering-runtime.js",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/mcp.js.bak",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/mcp-server/src/mcp.js",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/sha256.js.bak",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/mcp-server/src/sha256.js",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/source-merge-policy.js.bak",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/mcp-server/src/source-merge-policy.js",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/work-request-intake.js.bak",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/mcp-server/src/work-request-intake.js",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/mutation-registry.js.bak",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/mcp-server/src/mutation-registry.js",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/bin/run-source-merge.mjs.bak",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/mcp-server/bin/run-source-merge.mjs",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/review-tiers.probe.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/mcp-server/src/review-tiers.probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "lib/review_tiers.py.bak",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/lib/review_tiers.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": ".nvmrc.bak",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/.nvmrc",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "requirements.txt.bak",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/requirements.txt",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "requirements.lock.bak",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/requirements.lock",
+   "tier": 1,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "mcp-server/package.json.bak",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/mcp-server/package.json",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/package-lock.json.bak",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/mcp-server/package-lock.json",
+   "tier": 1,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "control-room/package.json.bak",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/control-room/package.json",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "workspace/package.json.bak",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/workspace/package.json",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "db/schema.sql.bak",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/db/schema.sql",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "migrations/probe.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/migrations/probe.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "tools/migrate.py.bak",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/tools/migrate.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/index.js.bak",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/mcp-server/src/index.js",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/wrangler.toml.bak",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/mcp-server/wrangler.toml",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/identity.js.bak",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/mcp-server/src/identity.js",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/session-identity.js.bak",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/mcp-server/src/session-identity.js",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/partner-authority.js.bak",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/mcp-server/src/partner-authority.js",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "hooks/guard-unattended.py.bak",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/hooks/guard-unattended.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/auth/x.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/AUTH/x.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/security/x.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/SECURITY/x.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/migrat/x.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/MIGRAT/x.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/db//x.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/DB//x.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/payment/x.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/PAYMENT/x.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/crypto/x.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/CRYPTO/x.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/secret/x.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/SECRET/x.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/credential/x.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/CREDENTIAL/x.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/tenant/x.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/TENANT/x.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/outbound/x.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/OUTBOUND/x.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/egress/x.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/EGRESS/x.py",
+   "tier": 3,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "mcp-server/src/probe.py",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/mcp-server/src/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "bin/probe.py",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/bin/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "tools/room-bridge/probe.py",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/tools/room-bridge/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "control-room/contracts/probe.py",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/control-room/contracts/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "workspace/contracts/probe.py",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/workspace/contracts/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/x.schema.json",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/x.schema.json.txt",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "dealroom/probe.py",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/dealroom/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "fill-engine/probe.py",
+   "tier": 2,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "x/fill-engine/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/node_modules//x.py",
+   "tier": 1,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "probe/NODE_MODULES//x.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe//vendor//x.py",
+   "tier": 1,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "probe//VENDOR//x.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/.min.js/x.py",
+   "tier": 1,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "probe/.MIN.JS/x.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/x.generated.js",
+   "tier": 1,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "probe/x.generated.js.txt",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/package-lock.json",
+   "tier": 1,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "probe/xpackage-lock.json",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/requirements.lock",
+   "tier": 1,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "probe/xrequirements.lock",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/skills-lock.json",
+   "tier": 1,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "probe/xskills-lock.json",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/yarn.lock",
+   "tier": 1,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "probe/xyarn.lock",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/pnpm-lock.yaml",
+   "tier": 1,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "probe/xpnpm-lock.yaml",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/uv.lock",
+   "tier": 1,
+   "noise": true,
+   "test": false
+  },
+  {
+   "path": "probe/xuv.lock",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "test/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "x/test/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe//test//x.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe//TEST//x.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "tests/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "x/tests/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe//tests//x.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe//TESTS//x.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "__tests__/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "x/__tests__/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe//__tests__//x.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe//__TESTS__//x.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "__snapshots__/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "x/__snapshots__/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe//__snapshots__//x.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe//__SNAPSHOTS__//x.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "e2e/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "x/e2e/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe//e2e//x.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe//E2E//x.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "journeys/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "x/journeys/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe//journeys//x.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe//JOURNEYS//x.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "fixtures/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "x/fixtures/probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe//fixtures//x.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe//FIXTURES//x.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "test_probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "x/test_probe.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe//test_/x.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe//TEST_/x.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/x-selftest.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe/x-selftest.py.txt",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/x_test.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe/x_test.py.txt",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/x.test.js",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe/x.test.js.txt",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/x.test.mjs",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe/x.test.mjs.txt",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/x.test.cjs",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe/x.test.cjs.txt",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/x.test.ts",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe/x.test.ts.txt",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/x.test.tsx",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe/x.test.tsx.txt",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/x.test.jsx",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe/x.test.jsx.txt",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  },
+  {
+   "path": "probe/.spec./x.py",
+   "tier": 1,
+   "noise": false,
+   "test": true
+  },
+  {
+   "path": "probe/.SPEC./x.py",
+   "tier": 1,
+   "noise": false,
+   "test": false
+  }
+ ],
+ "change_vectors": [
+  {
+   "changes": [
+    {
+     "path": "lib/example.py",
+     "additions": 2,
+     "deletions": 1
+    },
+    {
+     "path": "tests/test_example.py",
+     "additions": 400
+    }
+   ],
+   "summary": {
+    "code_lines": 3,
+    "test_lines": 400,
+    "change_size": "small",
+    "code_paths": [
+     "lib/example.py"
+    ],
+    "test_paths": [
+     "tests/test_example.py"
+    ]
+   },
+   "path_tier": 1,
+   "decision": {
+    "schema": "repository-review-decision/v1",
+    "base": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "policy_revision": "cccccccccccccccccccccccccccccccccccccccc",
+    "diff_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "policy_digest": "sha256:aba1ad25ea933c6d843344bcea47f19b7752bb0ef0c938dc9031350962d6c96a",
+    "changed_paths": [
+     "lib/example.py",
+     "tests/test_example.py"
+    ],
+    "code_lines": 3,
+    "test_lines": 400,
+    "change_size": "small",
+    "code_paths": [
+     "lib/example.py"
+    ],
+    "test_paths": [
+     "tests/test_example.py"
+    ],
+    "lane": "review",
+    "tier": 2,
+    "validated_fields": [],
+    "required_ci": true
+   }
+  },
+  {
+   "changes": [
+    {
+     "path": "tests/test_example.py",
+     "additions": 400
+    }
+   ],
+   "summary": {
+    "code_lines": 0,
+    "test_lines": 400,
+    "change_size": "small",
+    "code_paths": [],
+    "test_paths": [
+     "tests/test_example.py"
+    ]
+   },
+   "path_tier": 1,
+   "decision": {
+    "schema": "repository-review-decision/v1",
+    "base": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "policy_revision": "cccccccccccccccccccccccccccccccccccccccc",
+    "diff_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "policy_digest": "sha256:aba1ad25ea933c6d843344bcea47f19b7752bb0ef0c938dc9031350962d6c96a",
+    "changed_paths": [
+     "tests/test_example.py"
+    ],
+    "code_lines": 0,
+    "test_lines": 400,
+    "change_size": "small",
+    "code_paths": [],
+    "test_paths": [
+     "tests/test_example.py"
+    ],
+    "lane": "review",
+    "tier": 2,
+    "validated_fields": [],
+    "required_ci": true
+   }
+  },
+  {
+   "changes": [
+    {
+     "path": "ops/example-selftest.py",
+     "additions": 400
+    }
+   ],
+   "summary": {
+    "code_lines": 0,
+    "test_lines": 400,
+    "change_size": "small",
+    "code_paths": [],
+    "test_paths": [
+     "ops/example-selftest.py"
+    ]
+   },
+   "path_tier": 3,
+   "decision": {
+    "schema": "repository-review-decision/v1",
+    "base": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "policy_revision": "cccccccccccccccccccccccccccccccccccccccc",
+    "diff_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "policy_digest": "sha256:aba1ad25ea933c6d843344bcea47f19b7752bb0ef0c938dc9031350962d6c96a",
+    "changed_paths": [
+     "ops/example-selftest.py"
+    ],
+    "code_lines": 0,
+    "test_lines": 400,
+    "change_size": "small",
+    "code_paths": [],
+    "test_paths": [
+     "ops/example-selftest.py"
+    ],
+    "lane": "review",
+    "tier": 3,
+    "validated_fields": [],
+    "required_ci": true
+   }
+  }
+ ],
+ "policy_digest": "sha256:aba1ad25ea933c6d843344bcea47f19b7752bb0ef0c938dc9031350962d6c96a"
+}

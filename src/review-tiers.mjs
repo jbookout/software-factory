@@ -32,6 +32,13 @@ function validate(doc) {
     }
   }
   rows("rules", true); rows("noise_exclusions", false); rows("never_exclude", false)
+  if ("test_files" in doc) rows("test_files", false)
+  if ("change_size" in doc) {
+    const size = doc.change_size
+    if (!size || typeof size !== "object" || Object.keys(size).sort().join() !== "medium_max_code_lines,small_max_code_lines" ||
+        !Object.values(size).every(v => Number.isSafeInteger(v) && v >= 0) || size.small_max_code_lines > size.medium_max_code_lines)
+      problems.push("change_size: expected ordered nonnegative integer limits")
+  }
   const tunables = doc.tunable_scalars ?? []
   if (!Array.isArray(tunables) || tunables.some(r => !r || Object.keys(r).sort().join() !== "field,maximum,minimum,path" ||
       typeof r.path !== "string" || !r.path || typeof r.field !== "string" || !r.field ||
@@ -74,16 +81,39 @@ function pythonJson(value) {
 const sameJson = (a, b) => pythonJson(a) === pythonJson(b)
 const sha256 = bytes => "sha256:" + createHash("sha256").update(bytes).digest("hex")
 
+export function isTestFile(path, doc) {
+  const normal = normalize(path)
+  return normal !== null && (doc.test_files ?? []).some(row => matches(row, normal))
+}
+
+function changeSummary(changes, doc) {
+  const code_paths = [], test_paths = []
+  let code_lines = 0, test_lines = 0
+  for (const change of changes) {
+    const test = isTestFile(change.path, doc)
+    ;(test ? test_paths : code_paths).push(change.path)
+    const counts = [change.additions === undefined ? 0 : change.additions, change.deletions === undefined ? 0 : change.deletions]
+    const known = counts.every(v => Number.isSafeInteger(v) && v >= 0)
+    if (test) test_lines = known && test_lines !== null ? test_lines + counts[0] + counts[1] : null
+    else code_lines = known && code_lines !== null ? code_lines + counts[0] + counts[1] : null
+  }
+  const limits = doc.change_size
+  const change_size = code_lines === null || !limits ? "unknown" : code_lines <= limits.small_max_code_lines ? "small"
+    : code_lines <= limits.medium_max_code_lines ? "medium" : "large"
+  return {code_lines, test_lines, change_size, code_paths, test_paths}
+}
+
 export function reviewDecision(changes, { base, head, policyRevision, diffDigest, doc }) {
   const problems = validate(doc)
   if (problems.length) throw new Error(`invalid review policy: ${problems.slice(0, 3).join("; ")}`)
-  let bounded = changes.length > 0
+  const summary = changeSummary(changes, doc)
+  let bounded = changes.length > 0 && !summary.test_paths.length
   const fields = []
   for (const change of changes) {
     if (change.mode_changed) bounded = false
     const { before, after } = change
     const object = v => v && typeof v === "object" && !Array.isArray(v)
-    if (!object(before) || !object(after) || !sameJson(Object.keys(before), Object.keys(after))) { bounded = false; continue }
+    if (!object(before) || !object(after) || !sameJson(Object.keys(before).sort(), Object.keys(after).sort())) { bounded = false; continue }
     const changed = Object.keys(before).filter(key => !sameJson(before[key], after[key]))
     if (!changed.length) bounded = false
     for (const field of changed) {
@@ -93,9 +123,9 @@ export function reviewDecision(changes, { base, head, policyRevision, diffDigest
     }
   }
   return { schema: "repository-review-decision/v1", base, head, policy_revision: policyRevision, diff_digest: diffDigest,
-    policy_digest: sha256(pythonJson(doc)), changed_paths: changes.map(c => c.path),
+    policy_digest: sha256(pythonJson(doc)), changed_paths: changes.map(c => c.path), ...summary,
     lane: bounded ? "tunable_scalar" : "review",
-    tier: bounded ? 1 : Math.max(...changes.map(c => tierForPath(c.path, doc)), doc.default_tier),
+    tier: bounded ? 1 : Math.max(...changes.map(c => tierForPath(c.path, doc)), doc.default_tier, summary.test_paths.length ? 2 : 1),
     validated_fields: bounded ? fields : [], required_ci: true }
 }
 
@@ -134,13 +164,25 @@ export async function decideReview({ git, cwd, base, head, policy }) {
       try { return strictJson(await git(cwd, "show", `${revision}:${file}`)) } catch { return null }
     }
     const mode = async (revision, file) => (await git(cwd, "ls-tree", revision, "--", file)).slice(0, 6)
+    const counts = new Map((await git(cwd, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--numstat", "-z", base, head)).split("\0").filter(Boolean).map(entry => {
+      const first = entry.indexOf("\t"), second = entry.indexOf("\t", first + 1)
+      const added = entry.slice(0, first), deleted = entry.slice(first + 1, second), path = entry.slice(second + 1)
+      return [path, {additions: added === "-" ? null : Number(added), deletions: deleted === "-" ? null : Number(deleted)}]
+    }))
     const changes = []
-    for (const file of paths) changes.push({ path: file, before: await content(base, file), after: await content(head, file),
+    for (const file of paths) changes.push({ path: file, ...counts.get(file), before: await content(base, file), after: await content(head, file),
       mode_changed: await mode(base, file) !== await mode(head, file) })
-    const diffDigest = sha256(await git(cwd, "diff", "--binary", "--no-ext-diff", "--no-textconv", base, head))
+    const diffDigest = sha256(await git(cwd, "diff", "--binary", "--no-ext-diff", "--no-textconv", "--no-renames", base, head))
     const decision = reviewDecision(changes, { base, head, policyRevision, diffDigest, doc })
     return { ...routeTier(decision, doc), decision, digest: sha256(pythonJson(decision)) }
   } catch (error) {
     return { tier: TOP_TIER, reason: `review policy unreadable: ${error.message.split("\n")[0].slice(0, 120)}`, decision: null, digest: null }
   }
+}
+
+export async function assembleReviewDiff({git, cwd, base, head, decision}) {
+  const diff = paths => paths.length ? git(cwd, "--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv", "--no-renames", base, head, "--", ...paths) : "(none)\n"
+  if (!decision) return "Code changes (classification unavailable; review the full diff)\n" +
+    await git(cwd, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", base, head) + "\nTests (evidence)\nClassification unavailable; tests remain in the full diff above.\n"
+  return "Code changes\n" + await diff(decision.code_paths) + "\nTests (evidence)\n" + await diff(decision.test_paths)
 }

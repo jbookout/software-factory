@@ -14,7 +14,7 @@ import { deliveryPrompt } from "./pr-delivery-prompts.mjs"
 import { validRequiredChecks } from "./pr-readiness.mjs"
 import { createGithubProvider, parseReview, latestTrustedReview } from "./github-snapshot.mjs"
 import { DeliveryError, keyFor, readJson, writeJson, withLease, reserveCodex, deliveryWait, completeDeliveryWait } from "./pr-delivery-state.mjs"
-import { decideReview } from "./review-tiers.mjs"
+import { decideReview, assembleReviewDiff } from "./review-tiers.mjs"
 import { readHolds, holdFor, freezeFor } from "./merge-holds.mjs"
 
 const DEFAULT_MODELS = fileURLToPath(new URL("../config/delivery-models.v1.json", import.meta.url))
@@ -409,14 +409,15 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       let body
       if (tier === 1) body = tierOneVerdict(head, mergeBase, route, current.ci)
       else {
+        const fixRoute = prior ? await routeReview(repo, dir, prior.sha, head) : null
         const binding={repo,pr,base:current.baseRefOid,mergeBase,head,tree,observedAt:current.fetchedAt}
         const manifest=await writeReviewEvidence(path.join(config.stateDir,"reviews",`${attempt}-input`),binding,{
-          description:current.body,diff:await git(dir,"diff","--no-ext-diff","--no-textconv",binding.mergeBase,head),
+          description:current.body,diff:await assembleReviewDiff({git:rawGit,cwd:dir,base:binding.mergeBase,head,decision:route.decision}),
           checks:{head,ci:current.ci,inventory:current.inventory,availability:current.availability,observedAt:current.fetchedAt},
-          ...(prior?{fixDiff:await git(dir,"diff","--no-ext-diff","--no-textconv",prior.sha,head)}:{})})
+          ...(prior?{fixDiff:await assembleReviewDiff({git:rawGit,cwd:dir,base:prior.sha,head,decision:fixRoute.decision})}:{})})
         const inputDigest=digestOf(await fs.readFile(manifest,"utf8"))
         const evidence=await readReviewEvidence(manifest,binding)
-        const prompt = deliveryPrompt("review", { repo, pr, head, prior, evidence, tier, changedPaths: route.decision?.changed_paths ?? [] })
+        const prompt = deliveryPrompt("review", { repo, pr, head, prior, evidence, tier, decision: route.decision, changedPaths: route.decision?.changed_paths ?? [] })
         await fs.rm(output, { force: true })
         const role = `review-tier${tier}`, argv = codexArgv(role, "--sandbox", "danger-full-access", "--output-last-message", output, "-")
         const execution = await guarded(repo, pr, "review", argv, dir, prompt, head, undefined, undefined, config.models[role])

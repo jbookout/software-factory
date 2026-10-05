@@ -35,5 +35,33 @@
   ],
   "never_exclude": [
     {"id": "workflows", "match": "prefix", "pattern": ".github/", "why": "CI is never noise."}
-  ]
+  ],
+  "test_files": [
+    {"id": "test-root", "match": "prefix", "pattern": "test/", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "test-nested", "match": "contains", "pattern": "/test/", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "tests-root", "match": "prefix", "pattern": "tests/", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "tests-nested", "match": "contains", "pattern": "/tests/", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "__tests__-root", "match": "prefix", "pattern": "__tests__/", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "__tests__-nested", "match": "contains", "pattern": "/__tests__/", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "__snapshots__-root", "match": "prefix", "pattern": "__snapshots__/", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "__snapshots__-nested", "match": "contains", "pattern": "/__snapshots__/", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "e2e-root", "match": "prefix", "pattern": "e2e/", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "e2e-nested", "match": "contains", "pattern": "/e2e/", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "journeys-root", "match": "prefix", "pattern": "journeys/", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "journeys-nested", "match": "contains", "pattern": "/journeys/", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "fixtures-root", "match": "prefix", "pattern": "fixtures/", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "fixtures-nested", "match": "contains", "pattern": "/fixtures/", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "python-test-root", "match": "prefix", "pattern": "test_", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "python-test-nested", "match": "contains", "pattern": "/test_", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "python-selftest", "match": "suffix", "pattern": "-selftest.py", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "python-test-suffix", "match": "suffix", "pattern": "_test.py", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "test-js", "match": "suffix", "pattern": ".test.js", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "test-mjs", "match": "suffix", "pattern": ".test.mjs", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "test-cjs", "match": "suffix", "pattern": ".test.cjs", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "test-ts", "match": "suffix", "pattern": ".test.ts", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "test-tsx", "match": "suffix", "pattern": ".test.tsx", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "test-jsx", "match": "suffix", "pattern": ".test.jsx", "why": "Test evidence is reviewed after code and retains its path tier."},
+    {"id": "spec-files", "match": "contains", "pattern": ".spec.", "why": "Test evidence is reviewed after code and retains its path tier."}
+  ],
+  "change_size": {"small_max_code_lines": 50, "medium_max_code_lines": 200}
 }

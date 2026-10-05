@@ -4,7 +4,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { execFileSync } from "node:child_process"
-import { decideReview, reviewDecision, routeTier } from "../src/review-tiers.mjs"
+import { decideReview, reviewDecision, routeTier, isTestFile } from "../src/review-tiers.mjs"
 
 const fixtures = new URL("./fixtures/review-tiers/", import.meta.url)
 const carr = JSON.parse(await fs.readFile(new URL("carr-system.v1.json", fixtures), "utf8"))
@@ -12,15 +12,14 @@ const factoryMap = name => new URL(`../config/review-tiers/${name}.v1.json`, imp
 const bind = { base: "a".repeat(40), head: "b".repeat(40), policyRevision: "c".repeat(40), diffDigest: "sha256:" + "d".repeat(64) }
 const route = (paths, doc = carr) => routeTier(reviewDecision(paths.map(path => ({ path })), { ...bind, doc }), doc)
 
-// carr-system 8d5f00b6 lib/review_tiers.py review_decision() output for the vendored map.
-const CARR_POLICY_DIGEST = "sha256:d7fbb6102ff3ab0e005e885614d70ad1f80e39319752c56e6ad4a4d9ff0ffc3c"
+const CARR_POLICY_DIGEST = "sha256:aba1ad25ea933c6d843344bcea47f19b7752bb0ef0c938dc9031350962d6c96a"
 
 test("decision matches carr-system's Python review_decision byte for byte", () => {
   const tunable = { path: "ops/config/jev-cost-guard.v1.json", before: { daily_paid_call_cap: 10, x: 1 }, after: { daily_paid_call_cap: 20, x: 1 }, mode_changed: false }
   const decision = reviewDecision([tunable], { ...bind, doc: carr })
   assert.deepEqual(decision, { schema: "repository-review-decision/v1", base: bind.base, head: bind.head,
     policy_revision: bind.policyRevision, diff_digest: bind.diffDigest, policy_digest: CARR_POLICY_DIGEST,
-    changed_paths: [tunable.path], lane: "tunable_scalar", tier: 1,
+    changed_paths: [tunable.path], code_lines: 0, test_lines: 0, change_size: "small", code_paths: [tunable.path], test_paths: [], lane: "tunable_scalar", tier: 1,
     validated_fields: [{ path: tunable.path, field: "daily_paid_call_cap", before: 10, after: 20 }], required_ci: true })
   assert.equal(reviewDecision([{ path: "ops/release-pipeline.py" }], { ...bind, doc: carr }).tier, 3)
   assert.equal(reviewDecision([{ path: "mcp-server/src/deals.js" }], { ...bind, doc: carr }).tier, 2)
@@ -99,4 +98,30 @@ test("decideReview binds base, head, policy and diff digests from git", async t 
   assert.equal((await decideReview({ git, cwd: root, base, head: code, policy: { repositoryPath: "missing.json" } })).tier, 3)
   await fs.writeFile(path.join(root, "bad.json"), "{not json")
   assert.equal((await decideReview({ git, cwd: root, base, head: code, policy: { file: path.join(root, "bad.json") } })).tier, 3)
+})
+
+test("code-only size, test review floor and ops tier are preserved", () => {
+  const decision = reviewDecision([{path:"lib/example.py",additions:2,deletions:1},
+    {path:"tests/test_example.py",additions:400,deletions:0}], {...bind,doc:carr})
+  assert.deepEqual([decision.code_lines,decision.test_lines,decision.change_size],[3,400,"small"])
+  assert.deepEqual(decision.test_paths,["tests/test_example.py"])
+  const tests = reviewDecision([{path:"tests/test_example.py",additions:400}],{...bind,doc:carr})
+  assert.equal(tests.tier,2)
+  assert.equal(reviewDecision([{path:"ops/example-selftest.py",additions:400}],{...bind,doc:carr}).tier,3)
+})
+
+test("review diff orders code before test evidence without dropping a file", async () => {
+  const {assembleReviewDiff} = await import("../src/review-tiers.mjs")
+  const decision=reviewDecision([{path:"a.test.ts",additions:400},{path:"z.ts",additions:3}],{...bind,doc:carr})
+  const git=async(cwd,...args)=>args.slice(args.indexOf("--")+1).map(p=>`diff --git a/${p} b/${p}\n+changed\n`).join("")
+  const diff=await assembleReviewDiff({git,cwd:"fixture",base:bind.base,head:bind.head,decision})
+  assert.equal(diff,"Code changes\ndiff --git a/z.ts b/z.ts\n+changed\n\nTests (evidence)\ndiff --git a/a.test.ts b/a.test.ts\n+changed\n")
+})
+
+test("factory decisions match generated Python decisions and the policy digest pin", async () => {
+  const vectors=JSON.parse(await fs.readFile(new URL("tier-vectors.v1.json",fixtures),"utf8"))
+  assert.equal(vectors.policy_digest,CARR_POLICY_DIGEST)
+  for(const row of vectors.change_vectors)
+    assert.deepEqual(reviewDecision(row.changes,{...bind,doc:carr}),row.decision)
+  for(const row of vectors.vectors) assert.equal(isTestFile(row.path,carr),row.test,row.path)
 })

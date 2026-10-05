@@ -1822,7 +1822,7 @@ test("PR52 finding 1: full review captures only topic changes when main diverges
  const {state, manifest, diff} = await capturedReviewInput(f)
  assert.match(diff, /feature.txt/)
  assert.doesNotMatch(diff, /main-only.txt/)
- assert.equal(diff, f.g("diff", "--no-ext-diff", "--no-textconv", mergeBase, f.head))
+ assert.equal(diff, "Code changes (classification unavailable; review the full diff)\n" + f.g("diff", "--no-ext-diff", "--no-textconv", "--no-renames", mergeBase, f.head) + "\n\nTests (evidence)\nClassification unavailable; tests remain in the full diff above.\n")
  assert.equal(manifest.binding.base, target)
  assert.equal(manifest.binding.mergeBase, mergeBase)
  assert.equal(state.comments.length, 1)
@@ -1846,7 +1846,7 @@ for (const mode of ["full", "confirm"]) test(`PR52 finding 2: ${mode} review cap
   assert.match(state.calls.at(-1).prompt, /REVIEW MODE: confirm/)
   const fixDiff = await fs.readFile(manifest.files.fixDiff.path, "utf8")
   assert.match(fixDiff, /-base\n\+changed source/)
-  assert.equal(fixDiff, f.g("diff", "--no-ext-diff", "--no-textconv", f.head, head))
+  assert.equal(fixDiff, "Code changes (classification unavailable; review the full diff)\n" + f.g("diff", "--no-ext-diff", "--no-textconv", "--no-renames", f.head, head) + "\n\nTests (evidence)\nClassification unavailable; tests remain in the full diff above.\n")
  }
  assert.match(diff, /diff --git a\/base.txt b\/base.txt/)
  assert.match(diff, /-base\n\+changed source/)
@@ -1964,4 +1964,39 @@ test("a tier-1 deterministic block (red checks) clears deterministically once ch
  const f=await tiered(t,{"feature.txt":1});await f.approve("REVIEW: BLOCKED\nReviewed-SHA: "+f.g("rev-parse","main")+"\n\n1. Tier-1 deterministic review: hosted checks are not green\nReview-Tier: 1")
  ok(await f.run("review-pr",repo,"7"));const s=await f.read()
  assert.equal(s.calls.length,0);assert.match(s.comments.at(-1).body,/^APPROVE\nReviewed-SHA: [0-9a-f]{40}\n\nTier-1 deterministic approval/)
+})
+
+test("review input puts code first and uses code lines for depth",async t=>{
+ const f=await tiered(t,{"feature.txt":2,"a.test.ts":2},{workerTlsFailure:true,repo})
+ const policy=JSON.parse(await fs.readFile(path.join(f.root,"tiers.json"),"utf8"))
+ policy.test_files=[{id:"test-ts",match:"suffix",pattern:".test.ts",why:"Test evidence."}]
+ policy.change_size={small_max_code_lines:50,medium_max_code_lines:200}
+ await fs.writeFile(path.join(f.root,"tiers.json"),JSON.stringify(policy))
+ f.g("checkout","topic")
+ await fs.writeFile(path.join(f.checkout,"a.test.ts"),Array.from({length:400},(_,i)=>`assert(${i})\n`).join(""))
+ f.g("add","a.test.ts");f.g("commit","-qm","Test evidence");f.g("push","-q","origin","topic")
+ const head=f.g("rev-parse","HEAD"), state=await f.read();state.headRefOid=head
+ await fs.writeFile(f.env.FAKE_PR,JSON.stringify(state))
+ ok(await f.run("review-pr",repo,"7"))
+ const reviewed=await f.read()
+ const diff=reviewed.workerInput.diff
+ assert.ok(diff.indexOf("diff --git a/feature.txt")<diff.indexOf("Tests (evidence)"))
+ assert.ok(diff.indexOf("Tests (evidence)")<diff.indexOf("diff --git a/a.test.ts"))
+ assert.match(reviewed.calls[0].prompt,/Judge the code change first/)
+ assert.match(reviewed.calls[0].prompt,/1 code lines; 400 test lines/)
+ assert.match(reviewed.calls[0].prompt,/small change/)
+})
+
+test("test-only tier-1 paths get a model review with their evidence intact",async t=>{
+ const f=await tiered(t,{"feature.txt":1},{workerTlsFailure:true,repo})
+ const policy=JSON.parse(await fs.readFile(path.join(f.root,"tiers.json"),"utf8"))
+ policy.test_files=[{id:"test-file",match:"path",pattern:"feature.txt",why:"Test fixture."}]
+ policy.change_size={small_max_code_lines:50,medium_max_code_lines:200}
+ await fs.writeFile(path.join(f.root,"tiers.json"),JSON.stringify(policy))
+ ok(await f.run("review-pr",repo,"7"))
+ const reviewed=await f.read()
+ assert.equal(reviewed.calls.length,1)
+ assert.match(reviewed.calls[0].prompt,/0 code lines; 1 test lines/)
+ assert.match(reviewed.workerInput.diff,/Code changes\n\(none\)\n\nTests \(evidence\)\ndiff --git a\/feature.txt/)
+ assert.match(reviewed.comments[0].body,/^Review-Tier: 2$/m)
 })
