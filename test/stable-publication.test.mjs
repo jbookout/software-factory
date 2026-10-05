@@ -9,6 +9,7 @@ for (const kind of ["fix", "ci-fix"]) test(`${kind}: returns a committed candida
   assert.match(prompt, /Run focused tests in the foreground/);
   assert.match(prompt, /commit by named paths/);
   assert.match(prompt, /runner executes repository-owned full checks, pushes the tested commit, and reads the remote head back/);
+  assert.match(prompt, /Never invoke gh directly/);
   assert.match(prompt, /Never merge/);
 });
 test("review remains read-only and never publishes a candidate", () => {

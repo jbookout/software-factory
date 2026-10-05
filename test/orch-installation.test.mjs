@@ -9,18 +9,19 @@ import {installOrchestration,checkOrchestration} from '../src/orch-installation.
 const root=fileURLToPath(new URL('../',import.meta.url))
 const cli=path.join(root,'bin/orch-install.mjs')
 const invoke=(...args)=>execFileSync(process.execPath,[cli,...args],{encoding:'utf8',stdio:['ignore','pipe','pipe']})
+async function commitCandidateSource(source) {
+ execFileSync('git',['clone','--quiet','--no-hardlinks',root,source])
+ // Installation fixtures must commit the candidate bytes, including pending changes.
+ for(const dir of ['src','bin','deploy/orch']) await fs.cp(path.join(root,dir),path.join(source,dir),{recursive:true})
+ const git=(...args)=>execFileSync('git',['-C',source,...args],{encoding:'utf8'}).trim()
+ git('add','src','bin','deploy/orch')
+ git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--allow-empty','-qm','Delivered candidate')
+}
 test('retro 3: installed entrypoints bind source, route to factory and detect drift',async t=>{
  const privateRoot=await fs.mkdtemp(path.join(os.tmpdir(),'factory-installed-'))
  t.after(()=>fs.rm(privateRoot,{recursive:true,force:true}))
  const source=path.join(privateRoot,'source'), installed=path.join(privateRoot,'installed'),stateDir=path.join(privateRoot,'state')
- execFileSync('git',['clone','--quiet','--no-hardlinks',root,source])
- // Deliver candidate files into a fixture commit before installing them.
- for(const name of ['src/orch-installation.mjs','bin/orch-install.mjs','deploy/orch/factory-verify.mjs','deploy/orch/factory-entry.sh','deploy/orch/test-browser.sh','deploy/orch/branch-wt.sh','deploy/orch/merge-enqueue.sh']){
-   await fs.mkdir(path.dirname(path.join(source,name)),{recursive:true})
-   await fs.copyFile(path.join(root,name),path.join(source,name))
- }
- execFileSync('git',['-C',source,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','add','src/orch-installation.mjs','bin/orch-install.mjs','deploy/orch/factory-verify.mjs','deploy/orch/factory-entry.sh','deploy/orch/test-browser.sh','deploy/orch/branch-wt.sh','deploy/orch/merge-enqueue.sh'])
- execFileSync('git',['-C',source,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--allow-empty','-qm','Delivered fixture'])
+ await commitCandidateSource(source)
  const config=path.join(privateRoot,'config.json')
  await fs.writeFile(config,JSON.stringify({stateDir}))
  const receipt=JSON.parse(invoke('install',source,installed,config))
@@ -42,7 +43,7 @@ for(const target of ['source','installed']) test(`retro 3: private state cannot 
  const base=await fs.mkdtemp(path.join(os.tmpdir(),'factory-alias-'))
  t.after(()=>fs.rm(base,{recursive:true,force:true}))
  const source=path.join(base,'source'),installed=path.join(base,'installed'),alias=path.join(base,'private')
- execFileSync('git',['clone','--quiet','--no-hardlinks',root,source])
+ await commitCandidateSource(source)
  await fs.mkdir(installed)
  await fs.symlink(target==='source'?source:installed,alias,'dir')
  const config=path.join(base,'config.json')
@@ -53,7 +54,7 @@ test('retro 3: readback detects private state symlink retargeting',async t=>{
  const base=await fs.mkdtemp(path.join(os.tmpdir(),'factory-alias-'))
  t.after(()=>fs.rm(base,{recursive:true,force:true}))
  const source=path.join(base,'source'),installed=path.join(base,'installed'),alias=path.join(base,'private'),state=path.join(base,'state')
- execFileSync('git',['clone','--quiet','--no-hardlinks',root,source])
+ await commitCandidateSource(source)
  await fs.mkdir(state);await fs.symlink(state,alias,'dir')
  const config=path.join(base,'config.json')
  await fs.writeFile(config,JSON.stringify({stateDir:alias}))
@@ -66,10 +67,8 @@ async function installedCandidate(t, suffix='installed') {
  const base=await fs.mkdtemp(path.join(os.tmpdir(),'factory-binding-'))
  t.after(()=>fs.rm(base,{recursive:true,force:true}))
  const source=path.join(base,'source'),installed=path.join(base,suffix),config=path.join(base,'config.json')
- execFileSync('git',['clone','--quiet','--no-hardlinks',root,source])
- for(const dir of ['src','bin','deploy/orch']) await fs.cp(path.join(root,dir),path.join(source,dir),{recursive:true})
+ await commitCandidateSource(source)
  const git=(...a)=>execFileSync('git',['-C',source,...a],{encoding:'utf8'}).trim()
- git('add','src','bin','deploy/orch');git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--allow-empty','-qm','Candidate')
  await fs.writeFile(config,JSON.stringify({stateDir:path.join(base,'state')}))
  const receipt=await installOrchestration(source,installed,config)
  const wrapper=()=>execFileSync('sh',[path.join(installed,'review-pr.sh'),'--factory-binding'],{env:{...process.env,FACTORY_ROOT:path.dirname(path.dirname(installed)),FACTORY_PR_CONFIG:config},encoding:'utf8',stdio:['ignore','pipe','pipe']})

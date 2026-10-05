@@ -1,8 +1,10 @@
 import {writeReviewEvidence,readReviewEvidence} from "./review-evidence.mjs"
+import { createGitHubObservation } from "./github-observation.mjs"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { Deadline, DeadlineError, waitForCondition, validDuration } from "./deadline.mjs"
 import fs from "node:fs/promises"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 import { createHash, randomUUID } from "node:crypto"
 import { reserveCompute } from "./process-capacity.mjs"
 import { runProcess, validateProcessRequest, observeProcessJob } from "./process-runner.mjs"
@@ -20,6 +22,7 @@ const pass = data => normalizeResult({ status: "pass", data }, "delivery")
 const fail = error => normalizeResult({ status: "fail",
   data: { code: Number.isInteger(error.code) ? error.code : 1, message: error.message, transient: error.transient ?? false,
     ...(error.observation ?? {}),
+    ...(error.state ? { state: error.state, pool: error.pool, retryAt: error.retryAt, queryErrors: error.queryErrors, terminal: error.terminal, nextAction: "wait-for-provider-observation" } : {}),
     ...(error.pendingUpdate ? { pendingUpdate: true } : {}),
     ...(error.phase ? { phase: error.phase, nextAction: error.nextAction } : {}),
     ...(error.uncertain ? { uncertain: true, nextAction: "readback-before-retry" } : {}),
@@ -34,7 +37,7 @@ export async function loadDeliveryConfig(file) {
     if (typeof p !== "string" || !p.trim()) throw new DeliveryError("config path is required", 9)
     return path.resolve(base, p)
   }
-  const config = { ...value, stateDir: absolute(value.stateDir),
+  const config = { ...value, configFile: path.resolve(file), stateDir: absolute(value.stateDir),
     repos: Object.fromEntries(Object.entries(value.repos).map(([repo, local]) => {
       if (!REPO.test(repo)) throw new DeliveryError("invalid repository in config", 9)
       if (!Array.isArray(local.trustedReviewers) || !local.trustedReviewers.length || local.trustedReviewers.some(login => typeof login !== "string" || !/^[A-Za-z0-9-]+(?:\[bot\])?$/.test(login)))
@@ -55,6 +58,9 @@ export async function loadDeliveryConfig(file) {
     pollMs: value.pollMs ?? 30_000, commandTimeoutMs: value.commandTimeoutMs ?? 120_000,
     checksTimeoutMs: value.checksTimeoutMs ?? 3600_000, retryMs: value.retryMs ?? 120_000,
     autoPollMs: value.autoPollMs ?? 300_000, queueRunsPer24h: value.queueRunsPer24h ?? 4 }
+  config.github = { requestsPerHour: 1000, cacheMs: 60_000, ...value.github }
+  if (!Number.isSafeInteger(config.github.requestsPerHour) || config.github.requestsPerHour <= 0 ||
+      !validDuration(config.github.cacheMs, 0)) throw new DeliveryError("invalid GitHub request budget/cache configuration", 9)
   config.queueTimeoutMs = value.queueTimeoutMs ?? config.limits.timeoutMs
   config.apiTimeoutMs = value.apiTimeoutMs ?? config.commandTimeoutMs
   config.attemptTimeoutMs = value.attemptTimeoutMs ?? config.checksTimeoutMs + config.queueTimeoutMs + config.limits.timeoutMs + 600_000
@@ -82,6 +88,7 @@ export async function loadDeliveryConfig(file) {
 
 export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
   const locks = path.join(config.stateDir, "locks"), queueFile = path.join(config.stateDir, "queue.json")
+  const github = createGitHubObservation(config)
   const prLeases = new Map()
   const deadlines = new AsyncLocalStorage()
   const inAttempt = fn => deadlines.getStore() ? fn() : deadlines.run(new Deadline(config.attemptTimeoutMs), fn)
@@ -103,7 +110,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     const boundedMs = Math.max(1, Math.floor(Math.min(timeoutMs, budget()?.remaining() ?? timeoutMs)))
     const mutation = streamOptions.mutation ?? (argv[0] === "gh" && argv[1] !== "api" ||
       argv[0] === "git" && !["rev-parse", "status", "show", "show-ref", "merge-base", "merge-tree", "check-ref-format", "symbolic-ref"].includes(argv[1]) && !(argv[1] === "worktree" && argv[2] === "list") && !(argv[1] === "remote" && argv[2] === "get-url"))
-    const result = await runProcess(argv, { cwd, env: { ...env, ...(config.resources ? {
+    const result = await runProcess(argv, { cwd, env: { ...env, FACTORY_PR_CONFIG: config.configFile, ...(config.resources ? {
       FACTORY_BROWSER_CONCURRENCY: String(config.resources.browserConcurrency) } : {}) }, timeoutMs: boundedMs, input, signal: budget()?.signal, ...streamOptions, mutation })
     if (result.timedOut || result.cancelled || result.uncertain) {
       const error = result.cancelled ? new DeliveryError("ATTEMPT-CANCELLED", 130)
@@ -120,10 +127,10 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     return result
   }
   const git = async (cwd, ...args) => (await command(["git", ...args], cwd)).stdout.trim()
-  const provider = createGithubProvider(config, { command, getRepo, authenticate: authenticateReview,
+  const provider = createGithubProvider(config, { command, getRepo, authenticate: authenticateReview, observer: github, budget,
     withRead: (repo, fn) => {
       const phase = budget().phaseBudget("api", config.apiTimeoutMs)
-      return measured("api", repo, undefined, () => deadlines.run(phase, () => fn(ms => phase.sleep(ms))))
+      return measured("api", repo, undefined, () => deadlines.run(phase, fn))
     } })
   async function observe(repo, pr, options) {
     const snapshot = await provider.snapshot(repo, pr, options)
@@ -136,6 +143,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     const issue = snapshot.errors[0]
     const error = new DeliveryError(issue.message, issue.code ?? 1, issue.transient)
     if (issue.phase) { error.phase = issue.phase; error.nextAction = issue.nextAction }
+    Object.assign(error, issue)
     error.observation = { state: "provider-unknown", errors: snapshot.errors, ...snapshot.metrics }
     return error
   }
@@ -160,7 +168,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       throw new DeliveryError("GitHub comment acknowledgement missing", 1)
   }
   function requireKnownCi(ci) {
-    if (ci.state === "provider-unknown") throw new DeliveryError("invalid hosted checks response", 1)
+    if (ci.state === "provider-unknown") throw Object.assign(new DeliveryError("invalid hosted checks response", 1), { state: "unknown" })
     if (ci.state === "superseded") throw new DeliveryError("SUPERSEDED: HEAD MOVED during checks; observe current head", 1)
   }
   function supportedBase(pr) {
@@ -305,6 +313,10 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       const outputDigest = digest.digest("hex")
       await log({ repo, pr, step: kind, status: result.code ? "failed" : "complete", code: result.code,
         outputDigest })
+      if (result.code) {
+        const hold = await github.activeHold()
+        if (hold) throw hold
+      }
       if (result.code) throw new DeliveryError(`${kind} exited ${result.code}`, result.code)
       const completed = afterExecution ? await afterExecution(compute) : { ...result, outputDigest }
       if (mutationPending) { await completeDeliveryWait(config, repo, pr, budget()); mutationPending = false }
@@ -316,7 +328,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
         error.wait = await suspend(repo, pr, head, { cause: "slot-wait", code: 142, message: error.message, resetAt: null })
       if (budget().remaining() && error.uncertain)
         error.wait = await suspend(repo, pr, head, { cause: "mutation-uncertain", code: error.code, message: "MUTATION UNCERTAIN: readback required before retry", resetAt: null })
-      if (budget().remaining() && error.code === 75 && !error.message.startsWith("BUSY:"))
+      if (budget().remaining() && error.code === 75 && !error.state && !error.message.startsWith("BUSY:"))
         error.wait = await suspend(repo, pr, head, { cause: error.cause ?? "capacity-refused", code: 75, message: error.message, resetAt: error.resetAt ?? null })
       throw error
     } finally {
@@ -335,7 +347,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     requireKnownCi(current.ci)
     if (current.ci.state === "pending") throw new DeliveryError("CI changed before review; wait for checks", 75)
     const local = getRepo(repo), head = current.headRefOid
-    await git(local.checkout, "fetch", "-q", "origin", head)
+    await git(local.checkout, "fetch", "-q", "origin", "main", head)
     const attempt = randomUUID()
     const dir = path.join(local.worktreeRoot, `review-${pr}-${head}-${attempt}`)
     await fs.mkdir(local.worktreeRoot, { recursive: true })
@@ -350,7 +362,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       await git(dir,"fetch","-q","origin",current.baseRefOid)
       const binding={repo,pr,base:current.baseRefOid,head,tree,observedAt:current.fetchedAt}
       const manifest=await writeReviewEvidence(path.join(config.stateDir,"reviews",`${attempt}-input`),binding,{
-        description:current.description,diff:await git(dir,"diff","--no-ext-diff",binding.base,head),
+        description:current.body,diff:await git(dir,"diff","--no-ext-diff",binding.base,head),
         checks:{head,ci:current.ci,inventory:current.inventory,availability:current.availability,observedAt:current.fetchedAt},
         ...(prior?{fixDiff:await git(dir,"diff","--no-ext-diff",prior.sha,head)}:{})})
       const inputDigest=digestOf(await fs.readFile(manifest,"utf8"))
@@ -571,6 +583,10 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       await retainRepair(prior)
       await completeDeliveryWait(config,repo,pr,budget())
     }
+    if (kind === "ci-fix" && !corrective) {
+      requireKnownCi(current.ci)
+      if (!current.ci.repairable) throw new DeliveryError("CI FIX REFUSED: no observed failed required check", 3)
+    }
     const fallback=worktree && worktree!=="-"?path.resolve(worktree):path.join(local.worktreeRoot,`fix-${pr}`)
     const cwd=corrective?prior.worktree:await branchWorktree(repo,current.headRefName,fallback,current.headRefOid)
     await git(cwd,"fetch","-q","origin")
@@ -580,7 +596,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     let record={schema:"factory-repair-delivery/v1",id:randomUUID(),repo,pr,branch:current.headRefName,
       baseHead:current.headRefOid,base:current.base,inputHead,head:inputHead,tree:await git(cwd,"rev-parse","HEAD^{tree}"),
       worktree:cwd,status:"building",checks:[],...(corrective?{corrects:prior.id}:{})}
-    const prompt=deliveryPrompt(kind,{repo,pr,head:inputHead,branch:current.headRefName})+
+    const prompt=deliveryPrompt(kind,{repo,pr,head:inputHead,branch:current.headRefName,prior:current.review,ci:current.ci,reader:{root:fileURLToPath(new URL("../",import.meta.url))}})+
       (corrective?`\nCorrective repair of ${prior.id} on retained local candidate ${inputHead}. Prior status: ${prior.status}. Check outcomes: ${JSON.stringify(prior.checks)}. Builder receipt: ${prior.builderJob?.receipt ?? "none"}. Confirm and finish this candidate; never repeat an uncertain external action.`:"")
     return guarded(repo,pr,kind,[config.codex.command ?? "codex",...createCodexExecArgs(config.codex),"--sandbox","danger-full-access","-"],cwd,
       prompt,current.headRefOid,async compute=>{
@@ -616,7 +632,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
           throw new DeliveryError("enqueue preconditions not satisfied", 4)
       }
       const prior = queue.filter(e => e.repo === repo && e.pr === pr && e.head === head)
-      if (mode !== "manual" && (prior.some(e => mode === "import" || !e.outcome || e.outcome.status === "pass") ||
+      if (mode !== "manual" && (prior.some(e => mode === "import" || mode === "event" || !e.outcome || e.outcome.status === "pass") ||
           prior.filter(e => (e.createdAt ?? 0) >= Date.now() - 86400_000).length >= config.queueRunsPer24h))
         return { message: `ALREADY QUEUED or RETRY LIMIT ${repo}#${pr} ${head}`, enqueued: false }
       queue.push({ id: randomUUID(), repo, pr, head, note: note.replaceAll("\n", " "), attempts: 0,
@@ -741,6 +757,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       // reconcile this intent, including after a controller restart.
       await writeJson(updateRecord(repo, pr, old), pending)
       const update = await provider.mutate(repo, "PUT", `pulls/${pr}/update-branch`, { expected_head_sha: current.headRefOid }, owners).catch(async error => {
+        if (error.uncertain === false) await fs.unlink(updateRecord(repo, pr, old))
         if (!error.uncertain) throw error
         await log({ step: "update", repo, pr, status: "uncertain", code: error.code ?? 1, message: error.message })
         throw branchUpdatePending()
@@ -809,22 +826,39 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     if (!entry) return { message: "QUEUE IDLE", idle: true }
     let outcome
     try { outcome = pass(await prWriter(entry.repo, entry.pr, writer => mergeOne(entry.repo, entry.pr, entry.head, entry.note, [lane, writer]))) }
-    catch (e) { if (e.code === 75) throw e; outcome = fail(e) }
+    catch (e) { if (e.code === 75 && !e.state) throw e; outcome = fail(e) }
     // The outcome is already decided; an expired attempt budget must not
     // discard it, so bookkeeping runs under its own bound.
     await deadlines.run(new Deadline(config.commandTimeoutMs), () => queueState(queue => {
       const index = queue.findIndex(e => e.id === entry.id), stored = queue[index]
       stored.attempts++
-      if (outcome.data.pendingUpdate || outcome.data.transient && stored.attempts < 4) {
-        stored.availableAt = Date.now() + config.retryMs
+      if (outcome.data.pendingUpdate || (outcome.data.state ? !outcome.data.terminal : outcome.data.transient && stored.attempts < 4)) {
+        stored.availableAt = outcome.data.retryAt ?? Date.now() + config.retryMs
         queue.splice(index, 1)
         queue.push(stored)
       } else stored.outcome = outcome
     }))
     await log({ step: "merge", repo: entry.repo, pr: entry.pr, head: entry.head, ...outcome.data })
+    if (outcome.data.state) return {...outcome, data: {...outcome.data, processed:true}}
     return { message: outcome.data.message, processed: true, outcome, code: 0 }
   }
+  const enqueueOwner = fn => withLease(locks, "enqueue-owner", fn, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget: budget() })
+  async function enqueueObserved(repo, current, eventHead, mode = "automatic") {
+    if (eventHead && eventHead !== current.headRefOid) return { enqueued: false }
+    if (config.holds.some(h => h.repo === repo && h.regex.test(current.title))) return { enqueued: false }
+    const approval = current.review
+    if (current.state !== "OPEN" || approval?.verdict !== "APPROVE" || approval.sha !== current.headRefOid || current.mergeable !== "MERGEABLE") return { enqueued: false }
+    const ci = current.ci
+    requireKnownCi(ci)
+    if (ci.state !== "success") return { enqueued: false }
+    return enqueue(repo, current.number, current.headRefOid, "auto-enqueued: approved head + green", mode)
+  }
   async function autoEnqueue() {
+    const file = path.join(config.stateDir, "reconciliation.json")
+    const previous = await readJson(file, null)
+    if (previous?.retryAt > Date.now()) return { message: "RECONCILIATION WAIT", retryAt: previous.retryAt }
+    // Persist before scanning: a restart cannot spend another scan immediately.
+    await writeJson(file, { retryAt: Date.now() + Math.max(300_000, config.autoPollMs) })
     let count = 0
     for (const repo of Object.keys(config.repos)) {
       const prs = await provider.pages(repo, "pulls?state=open")
@@ -928,18 +962,20 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
               const ci = current.ci
               if (ci.state === "success" && current.mergeable === "UNKNOWN") throw new DeliveryError("MERGEABILITY UNKNOWN: wait for provider observation", 75)
               const ready = approved && current.mergeable === "MERGEABLE" && ci.state === "success"
-              data = { head: current.headRefOid, approved, ready, blocked: review?.sha === current.headRefOid && ["BLOCK", "REVIEW: BLOCKED", "CHANGES REQUESTED"].includes(review?.verdict) }
+              data = { head: current.headRefOid, approved, ready, state: ci.state === "success" ? "green" : ci.state === "failure" ? "red" : ci.state, repairable: ci.repairable === true, mergeable: current.mergeable, blocked: review?.sha === current.headRefOid && ["BLOCK", "REVIEW: BLOCKED", "CHANGES REQUESTED"].includes(review?.verdict) }
 
               break
             }
             case "review": data = await review(repo, pr); break
+            case "github-logs": data = {body: (await provider.request(repo, `actions/jobs/${request.job}/logs`, {format:"text"})).value}; break
+            case "github-read": data = { body: (await provider.request(repo, request.route)).value }; break
             case "repair-status": data = await readJson(repairFile(repo,pr),{status:"absent"});
               if(data.checkJob) data = {...data,job:await observeProcessJob(data.checkJob.receipt)}; break
             case "readiness": {
               const current = await view(repo, pr, { head })
               requireOpen(current)
               const ci = current.ci
-              data = { head: current.headRefOid, state: ci.state, missing: ci.missing ?? [], nextAction: ci.nextAction }
+              data = { head: current.headRefOid, state: ({success:"green",failure:"red"})[ci.state] ?? ci.state, missing: ci.missing ?? [], nextAction: ci.nextAction }
               break
             }
             case "pr:suspend": data = await suspend(repo, pr, head, request.stop); break
@@ -948,7 +984,12 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
             case "branch-wt": data = { worktree: await branchWorktree(repo, request.branch, request.fallback) }; break
             case "codex-guard": data = await guarded(repo, pr, request.kind, request.argv, getRepo(repo).checkout, ""); break
             case "enqueue": data = await enqueue(repo, pr, head, note); break
-            case "auto-enqueue": data = await autoEnqueue(); break
+            case "enqueue-event": data = await enqueueOwner(async () => {
+              const current = await view(repo, pr, {observeChecks:false})
+              if (head && head !== current.headRefOid) return {enqueued:false}
+              return enqueueObserved(repo, await view(repo, pr), head, "event")
+            }); break
+            case "auto-enqueue": data = await enqueueOwner(autoEnqueue); break
             case "import-legacy": data = await importLegacy(request.root); break
             case "merge-one-core":
               data = await integrationLane(repo, lane => prWriter(repo, pr, writer => mergeOne(repo, pr, head, note ?? "", [lane, writer]))); break
@@ -964,6 +1005,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
             }
             default: throw new DeliveryError(`unknown delivery step: ${step}`)
           }
+          if (data.status) return data
           return pass(data)
         } catch (error) {
           if (!error.wait) await log({ step, repo, pr, status: "failed", code: error.code ?? 1, message: error.message })
