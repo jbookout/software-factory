@@ -20,6 +20,11 @@ const built = { status: "pass", data: { candidateRevision: "def456", buildDigest
 const fixedClock = () => "2026-09-15T00:00:00.000Z"
 const fixedId = () => "job-1"
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+
+test("review findings do not retain a nullish fallback after flatMap", async () => {
+  const source = await fs.readFile(path.join(root, "src/operating-loop.mjs"), "utf8")
+  assert.equal(/hash\(failed\s*\?\?/.test(source), false, "flatMap always supplies an array")
+})
 const required = {
   "environment:prepare": { status: "pass", data: { isolated: true, environmentId: "test-tree" } },
   "environment:dispose": pass,

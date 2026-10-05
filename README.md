@@ -192,6 +192,59 @@ answer. Receipts record each choice and source digest, while the excerpt text
 stays only in the build request. This trims build context without treating Jev
 as an authority over required contracts or model qualification.
 
+### Steering removal replay
+
+`replaySteeringRemoval` extends the pinned-context evaluation path with paired,
+bounded trials. It removes exactly one sentence from one committed excerpt;
+the task, role, evidence contract, checks, model and effort stay identical.
+Repeated pairs alternate arm order. An evaluator reads each response artifact
+through the existing digest-bound reader and grades task success, false
+running/done claims, rule violations and required source discovery. The model
+does not grade itself. Missing evidence, model readback or source discovery
+prevents a removal proposal. Any measured behavioral change keeps the line.
+Authority, credential and evidence-integrity boundaries always stay.
+
+The [replay command](scripts/steering-removal.mjs) takes a private
+plan, a local evaluator module and a new private report path:
+
+```bash
+node scripts/steering-removal.mjs /absolute/plan.json /absolute/evaluator.mjs /absolute/report.json
+```
+
+The plan supplies `steering` (`root`, exact `sourceRevision`, `path`, inclusive
+`startLine`/`endLine`), `line`, evaluator-owned `boundary`, `route`
+(`provider`/`model`/`effort`), `artifactRoot`, and `tasks`. Each task names `id`,
+`recordedSource` (`ref`/SHA-256 `digest`), `role`, `input`, `evidenceContract`
+and `checks`. `repetitions` defaults to two and is capped at ten; at most eight
+tasks run. `timeoutMs` defaults to 60 seconds and is capped at 120 seconds.
+An optional `runId` binds a reproducible experiment; otherwise a fresh ID is
+generated. Keep recorded transcripts, adapted inputs and receipts private.
+
+The evaluator exports `execute(request, {signal, timeoutMs})` and
+`judge({request, response})`. Execution uses the caller's sanctioned Model Room
+desk and writes an artifact under `artifactRoot`, returning `{ref, digest}`.
+The artifact contains the exact `requestDigest`, verified `routeReadback` and
+nonempty `result` text. The independent judge returns `taskSuccess` and
+`requiredSourceDiscovery` booleans plus nonnegative `falseClaims` and
+`ruleViolations` counts, derived from evidence it actually reads. Agent claims
+of having read a source do not prove discovery. The command hashes the evaluator
+module as `evaluatorDigest` and binds it to the experiment and every trial.
+Direct callers supply that digest; record dependency revisions with the trial
+evidence. Invocation failure or timeout stops further trials;
+observe the desk before any retry. A pending report is preserved and cannot be
+overwritten by this command. The command acquires this guard before loading the
+evaluator. It saves the generated run and experiment identity before dispatch,
+then atomically saves each dispatched arm, received artifact and completed
+observation. Inspect those identities and digest-bound receipts after an
+interruption; retrying the command does not reexecute them. Direct callers can
+supply an awaited `onProgress(report)` callback to persist the same snapshots.
+
+The report is a bounded, model-relative proposal. Equal failures and missing
+observations are `insufficient_evidence`; successful equal pairs may yield
+`propose_removal`. The command never edits steering or replaces mechanical
+policy with pointers. Broader removal and pointer replacement require their
+own representative trials and check/repair route tests.
+
 ## PR delivery
 
 The [PR delivery CLI and cutover note](docs/pr-delivery-cutover.md) port the
