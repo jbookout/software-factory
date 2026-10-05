@@ -116,8 +116,10 @@ certify acceptance or grant production authority.
 with one-question interview snapshots, explicit tier and workflow assurance,
 entry-specific artifact inputs, lowest unsupported layer diagnosis, revision-bound
 dependency reassessment, pending required work and visible scope expansion.
-Initialization is pure bookkeeping; durable journals and execution remain later
-slices.
+Initialization is pure bookkeeping. The [Factory Design Journal](docs/design-manager/journal.md)
+adds private SQLite persistence, immutable reference provenance, revision/idempotency
+checks and scoped backup/restore. Execution, the MCP transport and persistent-host
+qualification remain later work.
 
 [User settings and cloud qualification](docs/design-manager/settings-cloud.md)
 add editable station workers/modes, frozen version/digest bindings and a bounded
