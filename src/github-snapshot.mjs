@@ -3,6 +3,17 @@ import { DeliveryError, pause } from "./pr-delivery-state.mjs"
 import { DeadlineError } from "./deadline.mjs"
 import { randomUUID } from "node:crypto"
 
+export function readProbe(client,route,result) {
+ const tls=/x509: OSStatus -?\d+/.exec(result.stderr??'')?.[0]
+ return {client,route,ok:result.code===0,kind:result.code===0?'success':tls?'tls':'transport',
+  ...result.code===0?{}:{error:tls??`transport exit ${result.code}`}}
+}
+export function probeAvailability(probes) {
+ const route=probes[0]?.route
+ return {route,availability:probes.some(p=>p.route===route && p.ok)?'reachable':'unproven',probes}
+}
+
+
 const SHA = /^[0-9a-f]{40}$/
 const PAGE_SIZE = 25
 const MAX_ROWS = 10_000
@@ -43,14 +54,14 @@ export async function latestTrustedReview(comments, trustedReviewers, authentica
 
 function prValue(value, repo, pr) {
   if (!value || value.number !== pr || !["open", "closed"].includes(value.state) ||
-      typeof value.merged !== "boolean" || typeof value.draft !== "boolean" || typeof value.title !== "string" ||
+      typeof value.merged !== "boolean" || typeof value.draft !== "boolean" || typeof value.title !== "string" || (value.body != null && typeof value.body !== "string") ||
       !SHA.test(value.head?.sha ?? "") || !SHA.test(value.base?.sha ?? "") ||
       typeof value.head.ref !== "string" || !value.head.ref || typeof value.base.ref !== "string" || !value.base.ref ||
       value.base.repo?.full_name !== repo || typeof value.head.repo?.full_name !== "string" ||
       !Number.isSafeInteger(value.comments) || value.comments < 0 ||
       ![true, false, null].includes(value.mergeable) || typeof value.mergeable_state !== "string" ||
       (value.merged && !SHA.test(value.merge_commit_sha ?? ""))) fail("invalid GitHub PR response")
-  return { number: pr, title: value.title, state: value.merged ? "MERGED" : value.state.toUpperCase(),
+  return { number: pr, title: value.title, description: value.body ?? "", state: value.merged ? "MERGED" : value.state.toUpperCase(),
     baseRefName: value.base.ref, baseRefOid: value.base.sha, recordedBaseOid: value.base.sha, headRefName: value.head.ref, headRefOid: value.head.sha,
     head: { sha: value.head.sha, ref: value.head.ref, repo: value.head.repo.full_name },
     base: { sha: value.base.sha, ref: value.base.ref, repo: value.base.repo.full_name },
@@ -85,7 +96,12 @@ export function createGithubProvider(config, { command, getRepo, authenticate, n
         if (value === undefined) fail("invalid GitHub REST JSON")
         return { value, headers }
       }
-      if (!transient || attempt >= 2) fail("GitHub REST observation unavailable", transient)
+      if (!transient || attempt >= 2) {
+        const probe=readProbe("gh",`repos/${repo}/${route}`,response)
+        const error=new DeliveryError(`GitHub REST observation unavailable: ${probe.kind}; client=${probe.client}; route=${probe.route}; probe=${probe.error}; service availability unproven`,1,transient)
+        error.probe=probe
+        throw error
+      }
       const guidance = /^retry-after: ([^\r\n]+)/im.exec(headers)?.[1]
       const retryAfter = guidance === undefined ? NaN : /^\d+$/.test(guidance) ? Number(guidance) * 1000 : Date.parse(guidance) - now()
       const reset = Number(/^x-ratelimit-reset: (\d+)/im.exec(headers)?.[1]) * 1000 - now()
@@ -171,7 +187,7 @@ export function createGithubProvider(config, { command, getRepo, authenticate, n
     } catch (error) {
       return freeze({ ...base, state: "unknown", fetchedAt: new Date(now()).toISOString(),
         ci: { state: "provider-unknown", nextAction: "retry-provider-observation" }, review: null,
-        errors: [{ message: error instanceof DeliveryError || error instanceof DeadlineError ? error.message : "GitHub snapshot unavailable", transient: error.transient ?? false,
+        errors: [{ message: error instanceof DeliveryError || error instanceof DeadlineError ? error.message : "GitHub snapshot unavailable", transient: error.transient ?? false, ...(error.probe ? {probe:error.probe} : {}),
           ...(error instanceof DeadlineError ? { code: error.code, phase: error.phase, nextAction: error.nextAction } : {}) }] })
     }
   }
