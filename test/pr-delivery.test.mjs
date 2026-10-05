@@ -13,7 +13,7 @@ const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8",
 const fake = `#!/usr/bin/env node
 const fs = require('node:fs'), cp = require('node:child_process');
 const args = process.argv.slice(2), file = process.env.FAKE_PR;
-if(require('node:path').basename(process.argv[1])==='gh' && process.env.FAKE_WORKER_GH_TLS==='1'){console.error('tls: failed to verify certificate: x509: OSStatus -26276');process.exit(1);}
+if(require('node:path').basename(process.argv[1])==='gh' && process.env.FAKE_WORKER_GH_TLS==='1'){console.log(JSON.stringify({credentialPresent:Boolean(process.env.GH_TOKEN||process.env.GITHUB_TOKEN)}));console.error('tls: failed to verify certificate: x509: OSStatus -26276');process.exit(1);}
 const s = JSON.parse(fs.readFileSync(file));
 // Concurrent fake calls and the test read this file; replace it atomically.
 const save = () => { const temp = file + '.' + process.pid + '.tmp'; fs.writeFileSync(temp, JSON.stringify(s)); fs.renameSync(temp, file); };
@@ -32,7 +32,7 @@ if(tool === 'codex') {
  const match=/^OWNER-CAPTURED INPUT: (.+)$/m.exec(prompt);
  if(!match){console.error(probe.stderr);process.exit(1);}
  const manifest=JSON.parse(fs.readFileSync(match[1]));
- s.workerInput={binding:manifest.binding,description:fs.readFileSync(manifest.files.description.path,'utf8'),diff:fs.readFileSync(manifest.files.diff.path,'utf8'),checks:JSON.parse(fs.readFileSync(manifest.files.checks.path)),probe:{client:'gh',route:'repos/'+s.repo+'/pulls/7',code:probe.status,error:probe.stderr,argv:probeArgs,credentialPresent:false}};save();
+ s.workerInput={binding:manifest.binding,description:fs.readFileSync(manifest.files.description.path,'utf8'),diff:fs.readFileSync(manifest.files.diff.path,'utf8'),checks:JSON.parse(fs.readFileSync(manifest.files.checks.path)),probe:{client:'gh',route:'repos/'+s.repo+'/pulls/7',code:probe.status,error:probe.stderr,argv:probeArgs,credentialPresent:JSON.parse(probe.stdout).credentialPresent}};save();
  if(s.inputTamper==='digest'){fs.chmodSync(manifest.files.diff.path,0o600);fs.appendFileSync(manifest.files.diff.path,'altered');}
  if(s.inputTamper==='omit'){fs.chmodSync(match[1],0o600);delete manifest.files.diff;fs.writeFileSync(match[1],JSON.stringify(manifest));}
  if(s.inputTamper==='rebless'){fs.chmodSync(manifest.files.diff.path,0o600);fs.appendFileSync(manifest.files.diff.path,'altered');manifest.files.diff.digest=require('node:crypto').createHash('sha256').update(fs.readFileSync(manifest.files.diff.path)).digest('hex');fs.chmodSync(match[1],0o600);fs.writeFileSync(match[1],JSON.stringify(manifest));}
@@ -1553,7 +1553,7 @@ test('owner input lets a TLS-refused worker review without a network credential'
  ok(await f.run('review-pr',repo,'7'))
  const s=await f.read();assert.equal(s.workerInput.description,'Fixture review description')
  assert.equal(s.workerInput.binding.head,f.head);assert.match(s.workerInput.diff,/feature.txt/)
- assert.equal(s.workerInput.checks.ci.state,'success');assert.match(s.workerInput.probe.error,/OSStatus -26276/)
+ assert.equal(s.workerInput.checks.ci.state,'success');assert.equal(s.workerInput.checks.availability.availability,'reachable');assert.match(s.workerInput.probe.error,/OSStatus -26276/)
  assert.equal(s.workerInput.probe.credentialPresent,false);assert.equal(s.workerInput.probe.argv[0],'gh')
  assert.equal(s.comments.length,1)
 })
@@ -1561,4 +1561,17 @@ for(const inputTamper of ['digest','omit','head','rebless'])test(`review refuses
  const f=await fixture(t,{inputTamper,repo})
  assert.notEqual((await f.run('review-pr',repo,'7')).code,0)
  const state=await f.read();assert.ok(state.workerInput);assert.equal(state.comments.length,0)
+})
+test('fixture worker client measures credential presence without printing its value',async t=>{
+ const f=await fixture(t)
+ for(const value of ['', 'fixture-sentinel']) {
+  const result=await new Promise((resolve,reject)=>{
+   const child=spawn('gh',['api',`repos/${repo}/pulls/7`],{env:{...f.env,FAKE_WORKER_GH_TLS:'1',GH_TOKEN:value,GITHUB_TOKEN:''},stdio:['ignore','pipe','pipe']})
+   let stdout='',stderr='';child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b)
+   child.on('error',reject);child.on('close',code=>resolve({code,stdout,stderr}))
+  })
+  assert.equal(result.code,1);assert.match(result.stderr,/OSStatus -26276/)
+  assert.equal(JSON.parse(result.stdout).credentialPresent,Boolean(value))
+  assert.doesNotMatch(result.stdout+result.stderr,/fixture-sentinel/)
+ }
 })

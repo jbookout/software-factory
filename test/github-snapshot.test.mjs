@@ -129,3 +129,17 @@ test("live target movement invalidates an unchanged PR envelope", async () => {
  const value = await fixture({ move: "live-base" }).provider.snapshot(repo, 7)
  assert.equal(value.state, "unknown"); assert.equal(value.metrics.staleActions, 1)
 })
+
+test('owner snapshot retains successful same-endpoint probes for worker diagnostics',async()=>{
+ const value=await fixture().provider.snapshot(repo,7)
+ assert.equal(value.availability.availability,'reachable')
+ assert.equal(value.availability.probes.length,2)
+ assert.ok(value.availability.probes.every(p=>p.client==='gh' && p.route===`repos/${repo}/pulls/7` && p.ok))
+})
+test('TLS observation preserves its probe and leaves service availability unproven',async()=>{
+ const provider=createGithubProvider({retryMs:0,commandTimeoutMs:100},{getRepo:()=>({checkout:'/synthetic/factory',requiredChecks:[],trustedReviewers:[]}),authenticate:async()=>true,
+  command:async()=>({code:1,stdout:'',stderr:'tls: failed to verify certificate: x509: OSStatus -26276'})})
+ const value=await provider.snapshot(repo,7)
+ assert.equal(value.state,'unknown');assert.equal(value.availability.availability,'unproven')
+ assert.equal(value.errors[0].probe.kind,'tls');assert.equal(value.errors[0].probe.route,`repos/${repo}/pulls/7`)
+})

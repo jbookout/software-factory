@@ -351,7 +351,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
       const binding={repo,pr,base:current.baseRefOid,head,tree,observedAt:current.fetchedAt}
       const manifest=await writeReviewEvidence(path.join(config.stateDir,"reviews",`${attempt}-input`),binding,{
         description:current.description,diff:await git(dir,"diff","--no-ext-diff",binding.base,head),
-        checks:{head,ci:current.ci,inventory:current.inventory,observedAt:current.fetchedAt},
+        checks:{head,ci:current.ci,inventory:current.inventory,availability:current.availability,observedAt:current.fetchedAt},
         ...(prior?{fixDiff:await git(dir,"diff","--no-ext-diff",prior.sha,head)}:{})})
       const inputDigest=digestOf(await fs.readFile(manifest,"utf8"))
       const evidence=await readReviewEvidence(manifest,binding)

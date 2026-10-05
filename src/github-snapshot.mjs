@@ -94,7 +94,7 @@ export function createGithubProvider(config, { command, getRepo, authenticate, n
       if (method !== "GET") return { value, headers, status, ok, transient }
       if (ok) {
         if (value === undefined) fail("invalid GitHub REST JSON")
-        return { value, headers }
+        return { value, headers, probe:readProbe("gh",`repos/${repo}/${route}`,response) }
       }
       if (!transient || attempt >= 2) {
         const probe=readProbe("gh",`repos/${repo}/${route}`,response)
@@ -159,7 +159,8 @@ export function createGithubProvider(config, { command, getRepo, authenticate, n
     try {
       const policy = structuredClone({ requiredChecks: getRepo(repo).requiredChecks, trustedReviewers: getRepo(repo).trustedReviewers })
       if (!Number.isSafeInteger(pr) || pr <= 0 || head !== undefined && !SHA.test(head)) fail("invalid GitHub snapshot request")
-      const initial = await liveTarget(repo, prValue((await request(repo, `pulls/${pr}`, { metrics })).value, repo, pr), metrics)
+      const initialRead=await request(repo, `pulls/${pr}`, { metrics })
+      const initial = await liveTarget(repo, prValue(initialRead.value, repo, pr), metrics)
       const observedHead = head ?? initial.headRefOid
       const comments = await pages(repo, `issues/${pr}/comments`, { expected: initial.commentCount, metrics })
       if (comments.some(c => typeof c.body !== "string" || typeof c.user?.login !== "string" ||
@@ -168,24 +169,26 @@ export function createGithubProvider(config, { command, getRepo, authenticate, n
       const refused = requireApproval && (review?.verdict !== "APPROVE" || review.sha !== initial.headRefOid)
       const checkRuns = refused || !observeChecks ? null : await pages(repo, `commits/${observedHead}/check-runs?filter=all`, { field: "check_runs", metrics })
       const statuses = refused || !observeChecks ? null : (await pages(repo, `commits/${observedHead}/statuses`, { metrics })).map(s => ({ ...s, head_sha: observedHead }))
-      const final = await liveTarget(repo, prValue((await request(repo, `pulls/${pr}`, { metrics })).value, repo, pr), metrics)
+      const finalRead=await request(repo, `pulls/${pr}`, { metrics })
+      const final = await liveTarget(repo, prValue(finalRead.value, repo, pr), metrics)
+      const availability=probeAvailability([initialRead.probe,finalRead.probe])
       if (JSON.stringify(initial) !== JSON.stringify(final) || JSON.stringify(policy) !==
           JSON.stringify({ requiredChecks: getRepo(repo).requiredChecks, trustedReviewers: getRepo(repo).trustedReviewers })) {
         metrics.staleActions++
         fail("GitHub snapshot bindings changed during observation", true)
       }
-      if (refused) return freeze({ ...base, ...final, state: "refused", prState: final.state,
+      if (refused) return freeze({ ...base, ...final, state: "refused", prState: final.state, availability,
         reason: "no-current-trusted-approval", comments, review, ci: { state: "unobserved", nextAction: "await-trusted-review" },
         inventory: { comments, checkRuns: null, statuses: null, requiredChecks: policy.requiredChecks },
         fetchedAt: new Date(now()).toISOString(), errors: [] })
       const ci = observeChecks ? classifyChecks({ head: observedHead, observedHead: final.headRefOid, requiredChecks: policy.requiredChecks, checkRuns, statuses })
         : { state: "unobserved", nextAction: "await-updated-head" }
       if (ci.state === "provider-unknown") fail("invalid hosted checks response")
-      return freeze({ ...base, ...final, state: "known", prState: final.state, comments, ci, review,
+      return freeze({ ...base, ...final, state: "known", prState: final.state, availability, comments, ci, review,
         inventory: { comments, checkRuns, statuses, requiredChecks: policy.requiredChecks },
         fetchedAt: new Date(now()).toISOString(), errors: [] })
     } catch (error) {
-      return freeze({ ...base, state: "unknown", fetchedAt: new Date(now()).toISOString(),
+      return freeze({ ...base, state: "unknown", availability:probeAvailability(error.probe?[error.probe]:[]), fetchedAt: new Date(now()).toISOString(),
         ci: { state: "provider-unknown", nextAction: "retry-provider-observation" }, review: null,
         errors: [{ message: error instanceof DeliveryError || error instanceof DeadlineError ? error.message : "GitHub snapshot unavailable", transient: error.transient ?? false, ...(error.probe ? {probe:error.probe} : {}),
           ...(error instanceof DeadlineError ? { code: error.code, phase: error.phase, nextAction: error.nextAction } : {}) }] })
