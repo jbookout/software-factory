@@ -38,10 +38,14 @@
   },
   "commandTimeoutMs": 120000,
   "checksTimeoutMs": 3600000,
-  "pollMs": 30000,
+  "pollMs": 60000,
   "autoPollMs": 300000,
   "retryMs": 120000,
   "queueRunsPer24h": 4,
+  "github": {
+    "requestsPerHour": 1000,
+    "cacheMs": 60000
+  },
   "holds": [],
   "queueTimeoutMs": 900000,
   "apiTimeoutMs": 120000,

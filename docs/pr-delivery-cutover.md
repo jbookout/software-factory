@@ -91,7 +91,7 @@ Stops are observable in CLI output; process and adapter outcomes also enter
 private `delivery.jsonl`. An unchanged
 repair head exits 2 (`NO-PROGRESS`), exhausted usage/slots exits 75, timeout exits
 142, unknown repo exits 9. Failed merge outcomes remain in `queue.json`;
-transient API errors retry three times after the initial attempt.
+provider failures persist a shared hold; later queue attempts wait until its retry time.
 Automatic scanning can enqueue a recovered failed head again, preserving prior
 outcomes and linking attempts. `queueRunsPer24h` bounds automatic queue entries
 for a head in a rolling day; active and successful entries stay deduplicated.
@@ -169,18 +169,35 @@ Successful delivery-loop completion retires recovery eligibility while keeping
 the prior wait record. Closing a PR refuses work; reopening without changed
 eligibility retains its stop. Queue outcomes and original CI evidence survive.
 
-`readiness R N [H]` exposes the canonical observation: `success`, `pending`,
-`failure`, `provider-unknown` or `superseded`. Required contexts must succeed on
+`readiness R N [H]` exposes the canonical observation: `green`, `red`, `pending`,
+`quota_hold`, `auth_error`, `unknown` or `superseded`. Required contexts must succeed on
 the exact current head; skipped/neutral required jobs, cancellation and absent
 contexts never authorize enqueue or merge. Optional skipped/neutral jobs remain
 accepted. Obsolete heads request observation of the current head and start no
-fixer. Current cancellation requests a check rerun; authenticated assertion
-failure remains repairable. All new provider reads use paginated REST checks,
+fixer. Current cancellation requests a check rerun; observed assertion
+failure in a configured required check remains repairable. All new provider reads use paginated REST checks,
 commit statuses, PRs and comments. Malformed/permission responses stop.
 CheckRun status and conclusion are validated separately: an unfinished run
 must have no conclusion, and only completed success can satisfy a required run.
-Transport timeout, quota-evidenced 403, 429 and temporary 5xx reads retry at most
-twice, respecting bounded provider delay. They never become CI-red.
+All factory GitHub reads and writes reserve from one persistent `github.json`
+request budget under the shared `stateDir`. Configure `github.requestsPerHour`
+and `github.cacheMs`; all consumers must share that directory. REST commit/head
+observations share a cache; PR heads and approvals are reobserved before acting.
+Writes invalidate cached check evidence. REST and GraphQL evidence keep separate
+pool identities, while either pool's quota hold stops requests in both pools.
+Quota refusals persist the later of Retry-After, reset time, and pstack's backoff.
+Unknown query failures back off for 60, 120, 240, then 300 seconds and terminate
+after five query errors. Authentication refusal terminates immediately. Holds
+survive process restart. Terminal holds require operator diagnosis and explicit
+retirement of the hold after the underlying fault is repaired. Keep request
+history when retiring a hold. No provider refusal becomes CI-red.
+
+Use `enqueue-event R N H` for a head-bound event hint. The adapter reobserves
+approval and checks; repeated hints for a head are deduplicated even after a
+failed queue attempt. Event processing and automatic reconciliation take the
+same enqueue-owner lease. Its reconciliation deadline is persisted before each scan, so restart and repeated `--once` invocations cannot scan more often than five minutes.
+A CI fixer, including direct `ci-fix`, requires an observed failed required check;
+a conflict or optional failure cannot start it.
 
 `usage.json` counts reservations, `delivery.jsonl` records dispatched child
 starts separately, and wait events name their cause/reset. Neither count proves
@@ -296,9 +313,9 @@ Before choosing production concurrency or shortening healthy job caps, run
 matched same-source/cache/load browser suites at 1 and 2, retaining test union,
 timeouts, duration, and host load. The committed fixed-load four-file replay
 checks both modes and child peaks; it does not qualify the product's full browser
-suite or establish the audit's weekly savings. Factory CI has a 15-minute outer
-job deadline and a five-minute install deadline; the factory's Node test command
-also limits file concurrency to two. Keep required CI coverage intact.
+suite or establish the audit's weekly savings. [Factory CI](../.github/workflows/ci.yml)
+declares separate install, full-suite and outer job deadlines; the factory's Node
+test command also limits file concurrency to two. Keep required CI coverage intact.
 
 
 ## Process and repair receipts
@@ -309,18 +326,25 @@ service mode. The supervisor binds a unique job ID, assigned worktree, configure
 model and effort, private log, supervisor PID, group PID and deadline. It writes
 `running` only after that command acknowledges startup and its log exists.
 The supervisor writes the terminal receipt even after the caller disconnects.
-Job receipts and logs live under `stateDir/jobs`. Sensitive-output commands keep
+Job receipts and logs live under private directories in `stateDir/attempts`. Sensitive-output commands keep
 raw stdout/stderr out of logs as well as delivery records; their output digest
 remains available. Process scans cannot establish
 startup for another job.
 
 Repairs require repository-owned `checks`, a nonempty list of literal argv
-arrays, and optionally `checkTimeoutMs`. Configure CARR with
-`[["ops/ci.sh", "--strict"]]`. Configure DoctorCRE with its privacy, check, test,
-build and artifact-verification commands. Factory configuration includes `npm test`,
+arrays, and optionally `checkTimeoutMs`. Use native check entrypoints that report their result on stdout/stderr. Direct
+shell launches, shell scripts, and generic launch wrappers are refused because
+the launch validator cannot establish ownership of their redirected outputs.
+Configure DoctorCRE with its privacy, check, test, build and artifact-verification
+commands. Factory configuration includes `npm test`,
 the browser-select Python test and orchestration evidence replay steps from its CI.
 Install required dependencies before admission. Commands execute in the assigned
-worktree, under the existing process supervisor and compute reservations.
+worktree, under the existing process supervisor and compute reservations. Explicit
+`--output` and `--output-last-message` paths resolve from that child working
+directory and must name regular files in the physical attempt directory. Output
+symlinks are refused. Commands receive private `TMPDIR` and
+`FACTORY_ATTEMPT_DIR` paths; this contract does not sandbox arbitrary program
+filesystem access. Repository check code owns its other file writes.
 
 The builder performs focused tests and returns a local commit. The runner owns
 full checks, ordinary push and both remote/PR head readback. A remote change
@@ -362,3 +386,22 @@ remains an audit finding; the YAML audit does not certify installed shell behavi
 Installed-wrapper replays provide that separate evidence. To remove the pilot,
 remove its optional CI step. To roll back orchestration, drain jobs, reconcile
 private queue/usage records and restore retained wrappers as described above.
+
+
+Local checks use `npm run check` to capture stdout/stderr in a private attempt and
+validate the producer, command, outcome, source and log before reporting coverage.
+Use `npm run check -- node test/local-verification.test.mjs` for a focused Node
+run, or select `browser` and `orchestration` classes. With no arguments, all
+classes run.
+
+The source binding fingerprints tracked and non-ignored untracked files from the
+repository root, including when the check runs from a subdirectory. Tracked
+symlinks, Git submodules and non-file source entries fail closed. Ignored build
+outputs and dependencies are outside this source fingerprint. Source is checked
+both immediately before dispatch and when reading the result.
+
+`runVerification` returns a digest of the complete producer receipt, including
+its exit status. `readVerification` requires that digest as its third argument;
+callers retain it from the execution result, never derive it from the receipt
+being validated. Editing the receipt, source or capture log invalidates the
+evidence. The receipt has no self-authenticating success field.

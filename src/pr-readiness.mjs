@@ -39,11 +39,12 @@ export function classifyChecks({ head, observedHead, requiredChecks, checkRuns, 
   const missing = [], selected = [...latest.values()]
   let failed = false, waiting = false, repairable = false
   for (const c of selected) {
-    if (failures.has(c.state)) { failed = true; repairable ||= ["failure", "error"].includes(c.state) }
+    if (failures.has(c.state)) failed = true
     waiting ||= pending.has(c.state)
   }
   for (const required of requiredChecks) {
     const matches = selected.filter(c => c.name === required.name && (required.appId === undefined || c.appId === required.appId))
+    repairable ||= matches.some(c => ["failure", "error"].includes(c.state))
     if (!matches.length) { missing.push(required.name); continue }
     if (matches.some(c => ["skipped", "neutral"].includes(c.state))) failed = true
   }
