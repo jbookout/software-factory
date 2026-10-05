@@ -17,7 +17,7 @@ SCHEMA = 'doc-drift/v1'
 PATH = re.compile(r'(?<![\w/:])(?:\./|\.\./|~/|/)?(?:[\w.@*<>${}-]+/)+[\w.@*<>${}-]*(?:/)?')
 LINK = re.compile(r'\[[^\]]*\]\(<?([^\s)>]+)>?(?:\s+[^)]*)?\)')
 CODE = re.compile(r'`([^`\n]+)`')
-TOOL = re.compile(r'''["']([a-z][a-z0-9-]+)["']\s*:\s*\{\s*(?:write\s*:\s*(?:true|false)\s*,\s*)?description\s*:''')
+TOOL = re.compile(r'''["']([a-z][a-z0-9-]+)["']\s*:\s*\{\s*(?:(?:write|humanOnly)\s*:\s*(?:true|false)\s*,\s*)*description\s*:''')
 IMPORT = re.compile(r'''(?:from\s*|import\s*)["'](\.[^"']+)["']''')
 
 

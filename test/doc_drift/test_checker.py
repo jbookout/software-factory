@@ -51,7 +51,7 @@ class CheckerTest(unittest.TestCase):
 
     def test_checks_commands_verbs_workflows_jobs_config_and_relative_links(self):
         self.write("run.sh", '#!/bin/sh\ncase "$1" in\nhealth) exit 0 ;;\ncall) exit 0 ;;\nesac\n')
-        self.write("mcp-server/src/tools.js", 'import { extraTools } from "./extra.js";\nexport const tools = {"find": {description: "find", handler() {}}};\nregisterTools(extraTools());\n')
+        self.write("mcp-server/src/tools.js", 'import { extraTools } from "./extra.js";\nexport const tools = {"find": {write: true, humanOnly: true, description: "find", handler() {}}};\nregisterTools(extraTools());\n')
         self.write("mcp-server/src/extra.js", 'export const extraTools = () => ({"extra-verb": {description: "extra", handler() {}}});\n')
         self.write("package.json", '{"scripts":{"test":"node --test"}}')
         self.write(".github/workflows/ci.yml", "name: CI\non: pull_request\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps: []\n")
