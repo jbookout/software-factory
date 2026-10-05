@@ -384,6 +384,13 @@ test("48-hour wall-clock driver survives restarts at quota/worker/provider seams
   assert.equal(interrupted.measurements.conservation, "unproven");
   assert.equal(interrupted.measurements.waitingOwnership, "unproven");
   assert.equal(interrupted.nextAction, "inspect-failed-disposable-replay-before-rehearsal");
+  const incompleteWallclock = await rehearse({
+    output: path.join(root, "incomplete-wallclock.json"),
+    wallclock: true,
+    run: async () => ({ code: 142, timedOut: true, stdout: "" }),
+  });
+  assert.equal(incompleteWallclock.status, "failed");
+  assert.equal(incompleteWallclock.pendingWallclockProof, true);
 });
 test("workflow backstop runs full main suites in shadow with preserved gates", async () => {
   const { parse } = await import("yaml");

@@ -73,6 +73,8 @@ export async function rehearse({
       );
   } while (true);
   const verified = cycles.every((c) => c.status === "passed");
+  const elapsed = clock() - started;
+  const complete = verified && (!wallclock || elapsed >= duration);
   const receipt = {
     schema: "recovery-rehearsal.v1",
     mode: "shadow",
@@ -80,13 +82,9 @@ export async function rehearse({
     effects: "disposable-local-git-and-fake-provider",
     exercise: wallclock ? "wall-clock" : "acceptance-replay",
     requiredHours: 48,
-    elapsedHours: (clock() - started) / 3600000,
+    elapsedHours: elapsed / 3600000,
     cycles,
-    status:
-      verified &&
-      (!wallclock || clock() - started >= duration)
-        ? "passed"
-        : "failed",
+    status: complete ? "passed" : "failed",
     owner: "orchestrator",
     nextAction: !verified
       ? "inspect-failed-disposable-replay-before-rehearsal"
@@ -101,7 +99,7 @@ export async function rehearse({
         ? "queue-consumer-with-persisted-availableAt"
         : "unproven",
     },
-    pendingWallclockProof: !wallclock,
+    pendingWallclockProof: !(wallclock && complete),
   };
   await writeJson(output, receipt);
   return receipt;
