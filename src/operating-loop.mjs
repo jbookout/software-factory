@@ -5,7 +5,7 @@ import Ajv2020 from "ajv/dist/2020.js"
 import { acceptEvidence, buildIdentity, evidenceReadLimits } from "./evidence.mjs"
 import { evaluatePerformance } from "./performance-factory.mjs"
 import { classifyRisk, reviewsFor } from "./risk-router.mjs"
-import { verifyPinnedBuildContext } from "./model-room.mjs"
+import { verifyPinnedBuildContext, modelRoomReceipt } from "./model-room.mjs"
 
 const DEFAULT_BUDGETS = { verificationRounds: 3, reviewRounds: 2 }
 const jobSchema = JSON.parse(readFileSync(new URL("../schemas/factory-job.schema.json", import.meta.url)))
@@ -339,7 +339,7 @@ export function createFactory({ now = () => new Date().toISOString(), makeId = r
         evidenceAcceptance,
         findings,
         proposals,
-        modelRoom: modelRoom ? (({ build_context, ...receipt }) => receipt)(modelRoom) : null,
+        modelRoom: modelRoomReceipt(modelRoom),
         startedAt,
         completedAt
       }
