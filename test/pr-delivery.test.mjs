@@ -180,6 +180,24 @@ const repo="fixture/new-repository"
 const ok = r => assert.equal(r.code,0,JSON.stringify(r))
 const merges = a => a.includes("-X") && a.some(v=>v.endsWith("/merge"))
 
+for (const status of ['absent', 'delivered']) test(`repair-status wraps ${status} records in a normalized result`, async t => {
+ const f = await fixture(t)
+ const record = status === 'absent' ? {status} : {
+  schema: 'factory-repair-delivery/v1', id: 'completed-repair', repo, pr: 7,
+  status, head: f.head, worktree: f.checkout
+ }
+ if (status !== 'absent') {
+  await fs.mkdir(path.join(f.stateDir, 'repairs'), {recursive: true})
+  await fs.writeFile(path.join(f.stateDir, 'repairs', `${keyFor(repo, 7)}.json`), JSON.stringify(record))
+ }
+ const adapter = createPrDeliveryAdapter(await loadDeliveryConfig(f.config))
+ const result = await adapter.execute('repair-status', {repo, pr: 7})
+ assert.deepEqual(result, {
+  status: 'pass', evidence: [], findings: [], measurements: {}, proposals: [], data: record
+ })
+ assert.equal((await f.read()).ghCalls.length, 0)
+})
+
 test("review refuses a rejected comment publication", async t => {
  const f = await fixture(t, { writeFaults: { comments: [500] } })
  const result = await f.run("review-pr", repo, "7")

@@ -997,7 +997,7 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
             }
             default: throw new DeliveryError(`unknown delivery step: ${step}`)
           }
-          if (data.status) return data
+          if (step === "merge-queue" && data.status) return normalizeResult(data, "delivery")
           return pass(data)
         } catch (error) {
           if (!error.wait) await log({ step, repo, pr, status: "failed", code: error.code ?? 1, message: error.message })
