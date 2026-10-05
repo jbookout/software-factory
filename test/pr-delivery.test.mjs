@@ -1331,3 +1331,16 @@ test('fix12: close/reopen retains cancellation and stale claimed bindings refuse
  const result=await f.run('merge-queue',repo,'--once');assert.equal(result.code,9);assert.match(result.stderr,/unbound queue claim/)
  assert.equal((await f.read()).ghCalls.filter(merges).length,0)
 })
+
+test('fix12: restoring a checkpoint before a successful publication does not repeat that effect',async t=>{
+ const f=await queueFixture(t);await f.approve(undefined,7,30000);ok(await f.run('merge-enqueue',repo,'7',f.head))
+ const backup=path.join(f.root,'older-checkpoint');await fs.cp(f.stateDir,backup,{recursive:true})
+ const code=`import {loadDeliveryConfig,createPrDeliveryAdapter} from ${JSON.stringify(fileURLToPath(new URL('../src/pr-delivery.mjs',import.meta.url)))};
+ const a=createPrDeliveryAdapter(await loadDeliveryConfig(process.argv[1]),{onTransition:async s=>{if(s==='provider:comment:returned')process.kill(process.pid,'SIGKILL')}});
+ await a.execute('merge-queue',{repo:${JSON.stringify(repo)}});`
+ await new Promise((resolve,reject)=>{const child=spawn(process.execPath,['--input-type=module','-e',code,f.config],{env:f.env,stdio:'ignore'});child.on('error',reject);child.on('exit',(c,signal)=>{assert.equal(signal,'SIGKILL');resolve()})})
+ await fs.rm(f.stateDir,{recursive:true});await fs.cp(backup,f.stateDir,{recursive:true})
+ ok(await f.run('merge-queue',repo,'--once'))
+ const s=await f.read();assert.equal(s.comments.filter(c=>c.body.startsWith('DELIVERY VERIFIED')).length,1)
+ assert.equal(s.ghCalls.filter(merges).length,1);assert.equal((await queueOf(f))[0].state,'acknowledged')
+})

@@ -480,7 +480,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
           record.head !== head || record.action !== action || !Number.isSafeInteger(record.attempt) || record.attempt <= 0 ||
           !/^[0-9a-f-]{36}$/.test(record.attemptId ?? "") || !["effect-requested", "acknowledged", "refused"].includes(record.state)))
         throw new DeliveryError("invalid persisted effect binding", 9)
-      const reconcile = async () => {
+      const observeEffect = async () => {
         const current = await view(repo, pr)
         if (action === "comment") {
           const match = current.comments.find(c => c.body === fields.body && getRepo(repo).trustedReviewers.some(login => login.toLowerCase() === c.user.login.toLowerCase()))
@@ -488,6 +488,11 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
         } else if (action === "merge" && current.state === "MERGED") {
           return { ok: true, status: 200, value: { merged: true, sha: current.mergeCommit.oid } }
         }
+        return null
+      }
+      const reconcile = async () => {
+        const observed = await observeEffect()
+        if (observed) return observed
         const error = new DeliveryError("EFFECT OUTCOME UNKNOWN: reconcile provider before retry", 6, true)
         error.uncertain = true
         throw error
@@ -501,8 +506,12 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       if (record && (record.state !== "refused" || reconcileOnly)) return acknowledge(await reconcile())
       if (reconcileOnly) throw new DeliveryError("missing effect reconciliation intent", 9)
       await requireNotCancelled(repo, pr, head)
+      // A restored checkpoint may predate the intent, while the provider still
+      // retains its effect. Observe even when no local journal row survives.
+      const observed = await observeEffect()
       record = { schema: "factory-effect/v1", id, repo, pr, head, action,
         attemptId: randomUUID(), attempt: (record?.attempt ?? 0) + 1, state: "effect-requested" }
+      if (observed) return acknowledge(observed)
       await writeJson(file, record)
       await onTransition(`provider:${action}:requested`, record)
       const route = action === "comment" ? `issues/${pr}/comments` : `pulls/${pr}/merge`
