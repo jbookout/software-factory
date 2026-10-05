@@ -360,11 +360,12 @@ export function createPrDeliveryAdapter(config, { env = process.env } = {}) {
     try {
       const prior = current.review?.verdict !== "APPROVE" ? current.review : null
       await git(dir,"fetch","-q","origin",current.baseRefOid)
-      const binding={repo,pr,base:current.baseRefOid,head,tree,observedAt:current.fetchedAt}
+      const mergeBase=await git(dir,"merge-base",current.baseRefOid,head)
+      const binding={repo,pr,base:current.baseRefOid,mergeBase,head,tree,observedAt:current.fetchedAt}
       const manifest=await writeReviewEvidence(path.join(config.stateDir,"reviews",`${attempt}-input`),binding,{
-        description:current.body,diff:await git(dir,"diff","--no-ext-diff",binding.base,head),
+        description:current.body,diff:await git(dir,"diff","--no-ext-diff","--no-textconv",binding.mergeBase,head),
         checks:{head,ci:current.ci,inventory:current.inventory,availability:current.availability,observedAt:current.fetchedAt},
-        ...(prior?{fixDiff:await git(dir,"diff","--no-ext-diff",prior.sha,head)}:{})})
+        ...(prior?{fixDiff:await git(dir,"diff","--no-ext-diff","--no-textconv",prior.sha,head)}:{})})
       const inputDigest=digestOf(await fs.readFile(manifest,"utf8"))
       const evidence=await readReviewEvidence(manifest,binding)
       const prompt = deliveryPrompt("review", { repo, pr, head, prior, evidence })

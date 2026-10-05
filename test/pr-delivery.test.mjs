@@ -1801,3 +1801,53 @@ test('fixture worker client measures credential presence without printing its va
   assert.doesNotMatch(result.stdout+result.stderr,/fixture-sentinel/)
  }
 })
+
+async function capturedReviewInput(f) {
+ const state = await f.read()
+ const manifestPath = /^OWNER-CAPTURED INPUT: (.+)$/m.exec(state.calls.at(-1).prompt)?.[1]
+ assert.ok(manifestPath)
+ const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"))
+ return {state, manifest, diff: await fs.readFile(manifest.files.diff.path, "utf8")}
+}
+
+test("PR52 finding 1: full review captures only topic changes when main diverges", async t => {
+ const f = await fixture(t)
+ const mergeBase = f.g("merge-base", "main", "topic")
+ await fs.writeFile(path.join(f.checkout, "main-only.txt"), "upstream\n")
+ f.g("add", "main-only.txt"); f.g("commit", "-qm", "Advance main"); f.g("push", "-q", "origin", "main")
+ const target = f.g("rev-parse", "main")
+ ok(await f.run("review-pr", repo, "7"))
+ const {state, manifest, diff} = await capturedReviewInput(f)
+ assert.match(diff, /feature.txt/)
+ assert.doesNotMatch(diff, /main-only.txt/)
+ assert.equal(diff, f.g("diff", "--no-ext-diff", "--no-textconv", mergeBase, f.head))
+ assert.equal(manifest.binding.base, target)
+ assert.equal(manifest.binding.mergeBase, mergeBase)
+ assert.equal(state.comments.length, 1)
+})
+
+for (const mode of ["full", "confirm"]) test(`PR52 finding 2: ${mode} review captures raw changes despite textconv`, async t => {
+ const f = await fixture(t)
+ if (mode === "confirm") await f.approve(`REVIEW: BLOCKED\nReviewed-SHA: ${f.head}\n1. change base.txt`)
+ const converter = path.join(f.root, "mask.mjs")
+ await fs.writeFile(converter, 'process.stdout.write("masked\\n")')
+ f.g("config", "diff.mask.textconv", `${process.execPath} ${converter}`)
+ f.g("checkout", "topic")
+ await fs.writeFile(path.join(f.checkout, ".gitattributes"), "base.txt diff=mask\n")
+ await fs.writeFile(path.join(f.checkout, "base.txt"), "changed source\n")
+ f.g("add", ".gitattributes", "base.txt"); f.g("commit", "-qm", "Change masked source"); f.g("push", "-q", "origin", "topic")
+ const head = f.g("rev-parse", "HEAD")
+ f.g("checkout", "main")
+ ok(await f.run("review-pr", repo, "7"))
+ const {state, manifest, diff} = await capturedReviewInput(f)
+ if (mode === "confirm") {
+  assert.match(state.calls.at(-1).prompt, /REVIEW MODE: confirm/)
+  const fixDiff = await fs.readFile(manifest.files.fixDiff.path, "utf8")
+  assert.match(fixDiff, /-base\n\+changed source/)
+  assert.equal(fixDiff, f.g("diff", "--no-ext-diff", "--no-textconv", f.head, head))
+ }
+ assert.match(diff, /diff --git a\/base.txt b\/base.txt/)
+ assert.match(diff, /-base\n\+changed source/)
+ assert.equal(manifest.binding.head, head)
+ assert.equal(state.comments.length, mode === "confirm" ? 2 : 1)
+})
