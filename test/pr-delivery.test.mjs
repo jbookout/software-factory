@@ -349,10 +349,12 @@ test("already merged state must prove its commit exists on main and delivers the
  assert.notEqual(r.code,0);assert.match(r.stderr,/MERGE.*(MAIN|SOURCE|VERIFY)/)
  assert.equal((await f.read()).ghCalls.filter(merges).length,0)
 })
-test("per-PR budget stop survives invocations and loop stops",async t=>{
+test("per-PR budget escalates the builder once and keeps review stopped",async t=>{
  const f=await fixture(t,{blockOnce:true},{limits:{runsPer24h:1,slots:1,timeoutMs:5000}})
- const r=await f.run("deliver",repo,"7","-","3");assert.equal(r.code,75);assert.match(r.stdout,/BUDGET-STOP/);assert.equal((await f.read()).calls.length,1)
+ const r=await f.run("deliver",repo,"7","-","3");assert.equal(r.code,75);assert.match(r.stdout,/BUDGET-STOP/)
+ const dispatched=(await f.read()).calls;assert.equal(dispatched.length,2);assert.match(dispatched[1].args.join(" "),/--model opus/)
  const again=await f.run("review-pr",repo,"7");assert.equal(again.code,75)
+ assert.equal((await f.read()).calls.length,2)
 })
 test("hard timeout kills a Codex that ignores SIGTERM and releases slot",async t=>{
  const f=await fixture(t,{hang:true},{limits:{runsPer24h:8,slots:1,timeoutMs:400},queueTimeoutMs:15000})
