@@ -182,6 +182,33 @@ Before/after behavior and job/evidence records.
         self.assertFalse(self.scan()['findings'])
         self.assertEqual([c['target'] for c in self.scan()['claims']], ['baselines/output.html'])
 
+    def test_whole_path_spans_preserve_directory_spaces(self):
+        self.write('my docs/guide.md', '# Guide\n')
+        self.write('git docs/guide.md', '# Guide\n')
+        self.write('README.md', 'Read `my docs/guide.md`.\nRead `CARR AI/guide.md`.\nRead `my docs/missing.md`.\n')
+        report = self.scan()
+        self.assertEqual([c['target'] for c in report['claims']],
+                         ['my docs/guide.md', 'CARR AI/guide.md', 'my docs/missing.md'])
+        self.assertEqual([f['target'] for f in report['findings']], ['my docs/missing.md'])
+        self.assertEqual([(c['target'], c['unchecked']) for c in report['unchecked']],
+                         [('CARR AI/guide.md', 'vault, quarantine, or git reference outside source tree')])
+
+    def test_known_command_name_can_start_a_directory_with_spaces(self):
+        self.write('git docs/guide.md', '# Guide\n')
+        self.write('README.md', 'Read `git docs/guide.md` and `git docs/missing.md`.\n')
+        report = self.scan()
+        self.assertEqual([c['target'] for c in report['claims']],
+                         ['git docs/guide.md', 'git docs/missing.md'])
+        self.assertEqual([f['target'] for f in report['findings']], ['git docs/missing.md'])
+
+    def test_planned_list_context_stops_at_independent_instruction(self):
+        self.write('README.md', 'Planned files:\n- `bin/future.sh`\n- `docs/future.md`\nRun `bin/missing.sh`.\n')
+        report = self.scan()
+        self.assertEqual([f['target'] for f in report['findings']], ['bin/missing.sh'])
+        self.assertEqual([(c['target'], c['unchecked']) for c in report['unchecked']],
+                         [('bin/future.sh', 'planned or historical reference'),
+                          ('docs/future.md', 'planned or historical reference')])
+
     def test_workflow_basename_is_not_a_root_filename(self):
         self.write('.github/workflows/ci.yml', 'name: CI\njobs:\n  check:\n    steps: []\n')
         self.write('README.md', 'The workflow `ci.yml` has job `check`.\n')
