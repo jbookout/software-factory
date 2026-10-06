@@ -326,18 +326,25 @@ service mode. The supervisor binds a unique job ID, assigned worktree, configure
 model and effort, private log, supervisor PID, group PID and deadline. It writes
 `running` only after that command acknowledges startup and its log exists.
 The supervisor writes the terminal receipt even after the caller disconnects.
-Job receipts and logs live under `stateDir/jobs`. Sensitive-output commands keep
+Job receipts and logs live under private directories in `stateDir/attempts`. Sensitive-output commands keep
 raw stdout/stderr out of logs as well as delivery records; their output digest
 remains available. Process scans cannot establish
 startup for another job.
 
 Repairs require repository-owned `checks`, a nonempty list of literal argv
-arrays, and optionally `checkTimeoutMs`. Configure CARR with
-`[["ops/ci.sh", "--strict"]]`. Configure DoctorCRE with its privacy, check, test,
-build and artifact-verification commands. Factory configuration includes `npm test`,
+arrays, and optionally `checkTimeoutMs`. Use native check entrypoints that report their result on stdout/stderr. Direct
+shell launches, shell scripts, and generic launch wrappers are refused because
+the launch validator cannot establish ownership of their redirected outputs.
+Configure DoctorCRE with its privacy, check, test, build and artifact-verification
+commands. Factory configuration includes `npm test`,
 the browser-select Python test and orchestration evidence replay steps from its CI.
 Install required dependencies before admission. Commands execute in the assigned
-worktree, under the existing process supervisor and compute reservations.
+worktree, under the existing process supervisor and compute reservations. Explicit
+`--output` and `--output-last-message` paths resolve from that child working
+directory and must name regular files in the physical attempt directory. Output
+symlinks are refused. Commands receive private `TMPDIR` and
+`FACTORY_ATTEMPT_DIR` paths; this contract does not sandbox arbitrary program
+filesystem access. Repository check code owns its other file writes.
 
 The builder performs focused tests and returns a local commit. The runner owns
 full checks, ordinary push and both remote/PR head readback. A remote change
@@ -379,3 +386,22 @@ remains an audit finding; the YAML audit does not certify installed shell behavi
 Installed-wrapper replays provide that separate evidence. To remove the pilot,
 remove its optional CI step. To roll back orchestration, drain jobs, reconcile
 private queue/usage records and restore retained wrappers as described above.
+
+
+Local checks use `npm run check` to capture stdout/stderr in a private attempt and
+validate the producer, command, outcome, source and log before reporting coverage.
+Use `npm run check -- node test/local-verification.test.mjs` for a focused Node
+run, or select `browser` and `orchestration` classes. With no arguments, all
+classes run.
+
+The source binding fingerprints tracked and non-ignored untracked files from the
+repository root, including when the check runs from a subdirectory. Tracked
+symlinks, Git submodules and non-file source entries fail closed. Ignored build
+outputs and dependencies are outside this source fingerprint. Source is checked
+both immediately before dispatch and when reading the result.
+
+`runVerification` returns a digest of the complete producer receipt, including
+its exit status. `readVerification` requires that digest as its third argument;
+callers retain it from the execution result, never derive it from the receipt
+being validated. Editing the receipt, source or capture log invalidates the
+evidence. The receipt has no self-authenticating success field.

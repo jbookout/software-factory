@@ -6,6 +6,7 @@ const roots = []
 test.after(() => {for (const root of roots) fs.rmSync(root,{recursive:true,force:true})})
 import assert from "node:assert/strict"
 import { createGithubProvider, latestTrustedReview } from "../src/github-snapshot.mjs"
+import { runProcess } from "../src/process-runner.mjs"
 
 const repo = "jbookout/software-factory", head = "a".repeat(40), base = "b".repeat(40)
 const comment = (id, verdict = "APPROVE", sha = head, login = "reviewer") => ({ id, body: `${verdict}\nReviewed-SHA: ${sha}`,
@@ -149,6 +150,21 @@ test('TLS observation preserves its probe and leaves service availability unprov
  const value=await provider.snapshot(repo,7)
  assert.equal(value.state,'unknown');assert.equal(value.availability.availability,'unproven')
  assert.equal(value.errors[0].probe.kind,'tls');assert.equal(value.errors[0].probe.route,`repos/${repo}/pulls/7`)
+})
+test('local process launch failures remain actionable without exposing provider exceptions', async () => {
+ for (const local of [true, false]) {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'snapshot-')); roots.push(stateDir)
+  const command = local
+   ? () => runProcess(['/usr/bin/true'], {onSpawn() {throw Error('private-canary')}})
+   : async () => {throw Error('private-canary')}
+  const provider = createGithubProvider({stateDir,pollMs:5,commandTimeoutMs:100}, {
+   command,getRepo:()=>({checkout:'/synthetic/factory',requiredChecks:[],trustedReviewers:[]}),authenticate:async()=>true
+  })
+  const value = await provider.snapshot(repo,7)
+  assert.equal(value.state,'unknown')
+  assert.equal(value.errors[0].message,local ? 'process launch binding failed' : 'GitHub snapshot unavailable')
+  assert.ok(!JSON.stringify(value).includes('private-canary'))
+ }
 })
 for (const failure of ["quota", "before launch", "after launch", "reported uncertainty"])
  test(`PR46 finding 7: mutation dispatch evidence survives ${failure}`, async () => {

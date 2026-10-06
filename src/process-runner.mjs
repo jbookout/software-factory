@@ -6,6 +6,9 @@ import { StringDecoder } from 'node:string_decoder'
 import fs from 'node:fs'
 import path from 'node:path'
 
+// Only fixed, local diagnostics cross the provider's error-reporting seam.
+export class ProcessError extends Error {}
+
 // The supervisor owns the group even when the caller disappears. Reserve TERM
 // and hard-stop time inside the caller's elapsed budget, including launch/bind.
 export function validateProcessRequest(argv, timeoutMs = 120_000) {
@@ -39,7 +42,7 @@ export function runProcess(argv, { cwd, env = process.env, input = '', timeoutMs
       binding.abort()
       if (groupPid) {
         try { killOwnedGroup(groupPid, 'SIGKILL') }
-        catch (e) { if (e.code !== 'ESRCH') launchError ??= new Error(`process cleanup failed (${e.code})`) }
+        catch (e) { if (e.code !== 'ESRCH') launchError ??= new ProcessError(`process cleanup failed (${e.code})`) }
       }
       child.kill('SIGKILL')
     }
@@ -55,8 +58,8 @@ export function runProcess(argv, { cwd, env = process.env, input = '', timeoutMs
     if (signal?.aborted) abort()
     const collect = (stream, chunk) => {
       bytes += chunk.length
-      if (job && captureOutput) { try { fs.appendFileSync(job.log, chunk) } catch { launchError = new Error('job log write failed'); stop(); return } }
-      try { onOutput?.(chunk, stream) } catch { launchError = new Error('process output consumer failed'); stop(); return }
+      if (job && captureOutput) { try { fs.appendFileSync(job.log, chunk) } catch { launchError = new ProcessError('job log write failed'); stop(); return } }
+      try { onOutput?.(chunk, stream) } catch { launchError = new ProcessError('process output consumer failed'); stop(); return }
       if (!captureOutput) return
       if (bytes > maxOutputBytes) { overflow = true; stop(); return }
       if (stream === 'stdout') stdout += decoders.stdout.write(chunk)
@@ -64,11 +67,11 @@ export function runProcess(argv, { cwd, env = process.env, input = '', timeoutMs
     }
     child.stdout.on('data', chunk => collect('stdout', chunk))
     child.stderr.on('data', chunk => collect('stderr', chunk))
-    child.on('error', () => { launchError = new Error('process supervisor launch failed'); stop() })
+    child.on('error', () => { launchError = new ProcessError('process supervisor launch failed'); stop() })
     child.on('message', message => {
       if (message.type === 'started') {
         started = true
-        acknowledgment = Promise.resolve().then(() => onStarted?.(message.receipt)).catch(() => {launchError = new Error('startup acknowledgment failed'); stop()})
+        acknowledgment = Promise.resolve().then(() => onStarted?.(message.receipt)).catch(() => {launchError = new ProcessError('startup acknowledgment failed'); stop()})
       } else if (message.groupPid) groupPid = message.groupPid
       else result = message
     })
@@ -86,7 +89,7 @@ export function runProcess(argv, { cwd, env = process.env, input = '', timeoutMs
       clearTimeout(timer); clearTimeout(hardStop); signal?.removeEventListener('abort', abort)
       if (groupPid) {
         try { killOwnedGroup(groupPid, 'SIGKILL') }
-        catch (e) { if (e.code !== 'ESRCH') launchError ??= new Error(`process cleanup failed (${e.code})`) }
+        catch (e) { if (e.code !== 'ESRCH') launchError ??= new ProcessError(`process cleanup failed (${e.code})`) }
       }
       stdout += decoders.stdout.end(); stderr += decoders.stderr.end()
       if (launchError) {
@@ -106,9 +109,9 @@ export function runProcess(argv, { cwd, env = process.env, input = '', timeoutMs
     }).then(bindings => {
       if (child.connected && !binding.signal.aborted && !launchError)
         child.send({ argv, cwd, env, input, elapsedDeadline, deadline, grace, job, bindings: bindings ?? [] }, error => {
-          if (error) { launchError = new Error('process launch binding failed'); stop() }
+          if (error) { launchError = new ProcessError('process launch binding failed'); stop() }
         })
-    }).catch(() => { if (!binding.signal.aborted) { launchError = new Error('process launch binding failed'); stop() } })
+    }).catch(() => { if (!binding.signal.aborted) { launchError = new ProcessError('process launch binding failed'); stop() } })
   })
 }
 

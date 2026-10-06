@@ -13,6 +13,11 @@ const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8",
 const fake = `#!/usr/bin/env node
 const fs = require('node:fs'), cp = require('node:child_process');
 const args = process.argv.slice(2), file = process.env.FAKE_PR;
+const diagnostic = value => fs.appendFileSync(file+'.transport.jsonl',JSON.stringify(value)+'\\n');
+if(require('node:path').basename(process.argv[1])==='gh') {
+ process.on('exit',code=>diagnostic({args,code}));
+ process.on('uncaughtException',error=>{diagnostic({args,error:{code:error.code,message:error.message,status:error.status,signal:error.signal}});process.exit(1)});
+}
 if(require('node:path').basename(process.argv[1])==='gh' && process.env.FAKE_WORKER_GH_TLS==='1'){console.log(JSON.stringify({credentialPresent:Boolean(process.env.GH_TOKEN||process.env.GITHUB_TOKEN)}));console.error('tls: failed to verify certificate: x509: OSStatus -26276');process.exit(1);}
 const s = JSON.parse(fs.readFileSync(file));
 // Concurrent fake calls and the test read this file; replace it atomically.
@@ -173,7 +178,13 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
  const read=async()=>JSON.parse(await fs.readFile(env.FAKE_PR,"utf8"))
  const launch=(command,args,workerEnv=env)=>new Promise((resolve,reject)=>{
   const child=spawn(command,args,{env:workerEnv,stdio:["ignore","pipe","pipe"]});let stdout="",stderr=""
-  child.stdout.on("data",b=>stdout+=b);child.stderr.on("data",b=>stderr+=b);child.on("error",reject);child.on("close",code=>resolve({code,stdout,stderr}))
+  child.stdout.on("data",b=>stdout+=b);child.stderr.on("data",b=>stderr+=b);child.on("error",reject);child.on("close",async code=>{
+   if(code) {
+    const diagnostics=await fs.readFile(env.FAKE_PR+'.transport.jsonl','utf8').catch(()=>"")
+    stderr+='\nFixture transport diagnostics:\n'+diagnostics.split('\n').slice(-5).join('\n')
+   }
+   resolve({code,stdout,stderr})
+  })
  })
  const run=(...args)=>launch(process.execPath,[cli,config,...args])
  const wrapper=(name,...args)=>launch("sh",[fileURLToPath(new URL(`../deploy/orch/${name}.sh`,import.meta.url)),...args],
@@ -195,6 +206,24 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
 const repo="fixture/new-repository"
 const ok = r => assert.equal(r.code,0,JSON.stringify(r))
 const merges = a => a.includes("-X") && a.some(v=>v.endsWith("/merge"))
+
+for (const status of ['absent', 'delivered']) test(`repair-status wraps ${status} records in a normalized result`, async t => {
+ const f = await fixture(t)
+ const record = status === 'absent' ? {status} : {
+  schema: 'factory-repair-delivery/v1', id: 'completed-repair', repo, pr: 7,
+  status, head: f.head, worktree: f.checkout
+ }
+ if (status !== 'absent') {
+  await fs.mkdir(path.join(f.stateDir, 'repairs'), {recursive: true})
+  await fs.writeFile(path.join(f.stateDir, 'repairs', `${keyFor(repo, 7)}.json`), JSON.stringify(record))
+ }
+ const adapter = createPrDeliveryAdapter(await loadDeliveryConfig(f.config))
+ const result = await adapter.execute('repair-status', {repo, pr: 7})
+ assert.deepEqual(result, {
+  status: 'pass', evidence: [], findings: [], measurements: {}, proposals: [], data: record
+ })
+ assert.equal((await f.read()).ghCalls.length, 0)
+})
 
 test("review refuses a rejected comment publication", async t => {
  // A definitive refusal; a 5xx is an ambiguous write that reconciles instead.
@@ -908,8 +937,9 @@ test('subprocess error canaries do not reach persisted delivery/wait bytes',asyn
  assert.equal(result.code,42,JSON.stringify(result))
  const bytes=await fs.readFile(path.join(f.stateDir,'delivery.jsonl'),'utf8')
  assert.doesNotMatch(bytes,/CANARY_PRIVATE/);assert.doesNotMatch(result.stderr,/CANARY_PRIVATE/)
- for(const name of await fs.readdir(path.join(f.stateDir,'jobs'))) {
-  assert.doesNotMatch(await fs.readFile(path.join(f.stateDir,'jobs',name),'utf8'),/CANARY_PRIVATE/,name)
+ for(const directory of await fs.readdir(path.join(f.stateDir,'attempts'))) {
+  for(const name of await fs.readdir(path.join(f.stateDir,'attempts',directory)))
+   assert.doesNotMatch(await fs.readFile(path.join(f.stateDir,'attempts',directory,name),'utf8'),/CANARY_PRIVATE/,name)
  }
 })
 
@@ -1421,7 +1451,7 @@ test('retro 7: recovery refuses a still-running check and resumes only after obs
 async function installedFixture(f) {
  const source=path.join(f.root,'factory-source'),installed=path.join(f.root,'installed')
  git(f.checkout,'clone','--quiet','--no-hardlinks',fileURLToPath(new URL('../',import.meta.url)),source)
- const names=['src/review-evidence.mjs','src/orch-installation.mjs','bin/orch-install.mjs','src/github-snapshot.mjs','src/evidence.mjs','src/pr-delivery-state.mjs','src/pr-delivery.mjs','src/pr-delivery-prompts.mjs',
+ const names=['src/local-verification.mjs','src/review-evidence.mjs','src/orch-installation.mjs','bin/orch-install.mjs','src/github-snapshot.mjs','src/evidence.mjs','src/pr-delivery-state.mjs','src/pr-delivery.mjs','src/pr-delivery-prompts.mjs',
    'src/process-group.mjs','src/process-runner.mjs','src/process-launcher.mjs','src/process-supervisor.mjs','bin/pr-delivery.mjs',
    'deploy/orch/factory-verify.mjs','deploy/orch/factory-entry.sh','deploy/orch/test-browser.sh','deploy/orch/branch-wt.sh','deploy/orch/merge-enqueue.sh']
  for(const name of names){await fs.copyFile(fileURLToPath(new URL('../'+name,import.meta.url)),path.join(source,name))}
@@ -1444,10 +1474,11 @@ test('retro 4: installed wrapper death interrupts its acknowledged caller-owned 
  let jobFile,job
  t.after(()=>{owner.kill('SIGKILL');if(job?.groupPid)try{process.kill(-job.groupPid,'SIGKILL')}catch{}})
  for(let i=0;i<3000;i++){
-   const names=await fs.readdir(path.join(f.stateDir,'jobs')).catch(()=>[])
-   for(const name of names.filter(n=>n.endsWith('.json'))){
-     const candidate=JSON.parse(await fs.readFile(path.join(f.stateDir,'jobs',name),'utf8'))
-     if(candidate.status==='running'){job=candidate;jobFile=path.join(f.stateDir,'jobs',name);break}
+   const directories=await fs.readdir(path.join(f.stateDir,'attempts')).catch(()=>[])
+   for(const directory of directories){
+     const file=path.join(f.stateDir,'attempts',directory,'worker.json')
+     const candidate=JSON.parse(await fs.readFile(file,'utf8').catch(()=> 'null'))
+     if(candidate?.status==='running'){job=candidate;jobFile=file;break}
    }
    if(job)break;await pause(10)
  }
@@ -1917,6 +1948,31 @@ test('blocking 5: worktree-specific push destination is checked after repository
  const result=await f.run('fix-pr',repo,'7','-')
  assert.equal(result.code,9,JSON.stringify(result));assert.match(result.stdout+result.stderr,/push destination/)
  assert.equal(remoteTopic(f),f.head);assert.equal(git(f.root,'--git-dir',other,'rev-parse','refs/heads/topic'),f.head)
+})
+
+test('review scratch allocation failure leaves no registered worktree', async t => {
+ const f=await fixture(t)
+ await fs.mkdir(f.stateDir,{recursive:true})
+ await fs.writeFile(path.join(f.stateDir,'attempts'),'occupied')
+ const before=f.g('worktree','list','--porcelain')
+ const result=await f.run('review-pr',repo,'7')
+ assert.notEqual(result.code,0)
+ assert.match(result.stderr,/EEXIST|ENOTDIR/)
+ assert.equal(f.g('worktree','list','--porcelain'),before)
+ assert.equal((await f.read()).calls.length,0)
+})
+
+test('delivery check launch rejects shared-log shell commands', async t => {
+ const f=await fixture(t)
+ const shared=path.join(f.root,'shared.log')
+ f.cfg.repos[repo].checks=[['sh','-c',`echo PASS > '${shared}'; cat '${shared}'`]]
+ await fs.writeFile(f.config,JSON.stringify(f.cfg))
+ await f.approve('REVIEW: BLOCKED\nReviewed-SHA: '+f.head+'\n1. defect')
+ const result=await f.run('fix-pr',repo,'7','-','--no-loop')
+ assert.notEqual(result.code,0)
+ assert.match(result.stderr,/shell.*unsupported/)
+ await assert.rejects(fs.access(shared),/ENOENT/)
+ assert.equal(f.g('ls-remote','origin','refs/heads/topic').split(/\s+/)[0],f.head)
 })
 
 const adapterModule=JSON.stringify(fileURLToPath(new URL('../src/pr-delivery.mjs',import.meta.url)))
