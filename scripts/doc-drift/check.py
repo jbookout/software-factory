@@ -3,6 +3,7 @@
 import argparse
 import difflib
 import fnmatch
+from functools import lru_cache
 import json
 from pathlib import Path
 import plistlib
@@ -17,12 +18,37 @@ SCHEMA = 'doc-drift/v1'
 PATH = re.compile(r'(?<![\w/:])(?:\./|\.\./|~/|/)?(?:[\w.@*<>${}-]+/)+[\w.@*<>${}-]*(?:/)?')
 LINK = re.compile(r'\[[^\]]*\]\(<?([^\s)>]+)>?(?:\s+[^)]*)?\)')
 CODE = re.compile(r'`([^`\n]+)`')
-TOOL = re.compile(r'''["']([a-z][a-z0-9-]+)["']\s*:\s*\{\s*(?:(?:write|humanOnly)\s*:\s*(?:true|false)\s*,\s*)*description\s*:''')
 IMPORT = re.compile(r'''(?:from\s*|import\s*)["'](\.[^"']+)["']''')
 
 
 def git(root, *args):
     return subprocess.check_output(['git', '-C', str(root), *args], text=True, stderr=subprocess.PIPE, timeout=30)
+
+
+def path_matches(path, pattern):
+    parts, patterns = path.split('/'), pattern.split('/')
+
+    @lru_cache(None)
+    def match(i, j):
+        if j == len(patterns):
+            return i == len(parts)
+        if patterns[j] == '**':
+            return match(i, j + 1) or (i < len(parts) and match(i + 1, j))
+        return i < len(parts) and fnmatch.fnmatchcase(parts[i], patterns[j]) and match(i + 1, j + 1)
+
+    return match(0, 0)
+
+
+def instruction_lines(text):
+    for number, line in enumerate(text.splitlines(), 1):
+        start, in_code = 0, False
+        for index, char in enumerate(line):
+            if char == '`':
+                in_code = not in_code
+            if not in_code and char in '.;' and line[index + 1:index + 2].isspace():
+                yield number, line[start:index + 1]
+                start = index + 1
+        yield number, line[start:]
 
 
 def document(file):
@@ -56,13 +82,26 @@ class Tree:
         self.configs = {}
         self.renames = None
         self.load_verbs('mcp-server/src/tools.js')
+        if self.verb_sources:
+            registry = (root / 'mcp-server/src/tools.js').resolve().as_uri()
+            result = subprocess.run(['node', '--input-type=module', '-e',
+                                     'const {TOOLS} = await import(process.argv[1]); console.log(JSON.stringify(Object.keys(TOOLS)));',
+                                     registry], text=True, capture_output=True, timeout=30, check=True)
+            names = json.loads(result.stdout)
+            if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+                raise ValueError('invalid registered verb inventory')
+            self.verbs = set(names)
         for file in sorted(self.files):
             if file.startswith('.github/workflows/') and file.endswith(('.yml', '.yaml')):
                 data = self.config(file)
                 if not isinstance(data, dict):
                     raise ValueError(f'invalid workflow mapping: {file}')
                 self.workflows[file] = str(data.get('name', Path(file).stem))
-                self.jobs[file] = set(data.get('jobs', {}))
+                jobs = data.get('jobs')
+                if not isinstance(jobs, dict) or not jobs or not all(
+                        isinstance(name, str) and isinstance(job, dict) for name, job in jobs.items()):
+                    raise ValueError(f'invalid workflow jobs mapping: {file}')
+                self.jobs[file] = set(jobs)
             elif file.endswith('.plist'):
                 data = plistlib.loads((root / file).read_bytes())
                 if isinstance(data, dict) and isinstance(data.get('Label'), str):
@@ -77,7 +116,6 @@ class Tree:
             return
         self.verb_sources.add(file)
         source = (self.root / file).read_text()
-        self.verbs.update(TOOL.findall(source))
         for relative in IMPORT.findall(source):
             path = (self.root / file).parent / relative
             self.load_verbs(path.resolve().relative_to(self.root).as_posix())
@@ -138,7 +176,7 @@ class Tree:
             if not resolved.is_relative_to(self.root):
                 continue
             target = resolved.relative_to(self.root).as_posix()
-            if choice.exists() or any(fnmatch.fnmatch(f, target) for f in self.files):
+            if choice.exists() or any(path_matches(f, target) for f in self.files):
                 return target, None
         first = choices[0].resolve()
         if not first.is_relative_to(self.root):
@@ -173,28 +211,28 @@ def extract(tree, file, text):
         if key not in seen:
             seen.add(key)
             claims.append(dict(file=file, line=line, kind=kind, target=target,
-                               sources=list(sources), unchecked=unchecked))
+                               sources=list(sources), unchecked=unchecked or context))
 
-    paragraph_context = None
-    for number, line in enumerate(text.splitlines(), 1):
-        if not line.strip() or line.startswith('#'):
-            paragraph_context = None
+    context = None
+    for number, line in instruction_lines(text):
+        context = None
+        if re.search(r'do not create|must not (?:create|use)|has no|does not (?:have|contain)|never create', line, re.I):
+            context = 'negative instruction, not an existence claim'
+        elif re.search(r'\bplanned\b|\bproposed\b|not started|future (?:file|path|work)|old script', line, re.I):
+            context = 'planned or historical reference'
         clean = line
         for match in LINK.finditer(line):
             target, reason = tree.path(match[1], file, relative=True)
             add(number, 'path', target, [target], reason)
             clean = clean.replace(match[0], ' ' * len(match[0]))
         clean = re.sub(r'(?:https?://|app://|file://|plugin://)[^\s`)>]+', '', clean)
-        context = paragraph_context
-        if re.search(r'do not create|must not (?:create|use)|has no|does not (?:have|contain)|never create', line, re.I):
-            context = 'negative instruction, not an existence claim'
-        elif re.search(r'\bplanned\b|\bproposed\b|not started|future (?:file|path|work)|old script', line, re.I):
-            context = 'planned or historical reference'
-        paragraph_context = context
+        workflow_codes = set(re.findall(r'workflow\s+`([^`]+)`', clean, re.I))
         path_text = clean
-        for code in CODE.findall(clean):
+        for code in workflow_codes:
+            path_text = path_text.replace('`' + code + '`', '')
+        for code in CODE.findall(path_text):
             if (re.fullmatch(r'(?:\./|\.\./|~/)?[\w .@*<>${}-]+(?:/[\w .@*<>${}-]+)+/?', code)
-                    and not re.match(r'(?:python3?|node|npm|bash|sh|git|gh|env)\s', code)
+                    and not re.match(r'^[\w-]+\s', code)
                     and (code.split('/')[0] in tree.roots or code.startswith(('./', '../', '~/', 'DNA/', '00_Context/', '@'))
                          or re.search(r'\.(?:py|sh|js|mjs|ts|tsx|json|ya?ml|toml|md|mdx|rst|html|css|sql)$', code))
                     and (not ' ' in code or re.search(r'\.[\w]+$', code) or code.endswith('/'))):
@@ -216,6 +254,8 @@ def extract(tree, file, text):
             add(number, 'path', path, [path], reason)
         codes = CODE.findall(clean)
         for code in codes:
+            if code in workflow_codes:
+                continue
             if re.fullmatch(r'[\w.-]+\.(?:py|sh|js|mjs|ts|json|ya?ml|toml|md|mdx|rst)', code):
                 target, reason = tree.path(code, file)
                 add(number, 'path', target, [target], reason or context)
@@ -261,7 +301,7 @@ def check(tree, claim):
     if claim['unchecked']:
         return None
     if kind == 'path':
-        good = (tree.root / target).exists() or any(fnmatch.fnmatch(f, target) for f in tree.files)
+        good = (tree.root / target).exists() or any(path_matches(f, target) for f in tree.files)
         candidates = tree.files
     elif kind == 'verb':
         if 'mcp-server/src/tools.js' not in tree.files:
@@ -304,7 +344,7 @@ def scan(root, base=None):
         base_docs = set(filter(None, git(root, 'ls-tree', '-r', '--name-only', '-z', base).split('\0')))
         prior = [c for file in docs if file in base_docs for c in extract(tree, file, git(root, 'show', f'{base}:{file}'))]
         for claim in claims + prior:
-            if any(fnmatch.fnmatch(p, s) or p.startswith(s.rstrip('/') + '/')
+            if any(path_matches(p, s) or p.startswith(s.rstrip('/') + '/')
                    for s in claim['sources'] for p in changed):
                 selected.add(claim['file'])
         if any(f.startswith('.github/workflows/') for f in changed):
@@ -315,7 +355,7 @@ def scan(root, base=None):
             selected = set(docs)
     claims = [c for c in claims if c['file'] in selected]
     findings = [f for c in claims if (f := check(tree, c))]
-    return dict(schema=SCHEMA, owner='orchestrator', scope='pr' if base else 'full', source_sha=git(root, 'rev-parse', 'HEAD').strip(),
+    return dict(schema=SCHEMA, owner='orchestrator', scope='pr' if base else 'full', repository=tree.repo, source_sha=git(root, 'rev-parse', 'HEAD').strip(),
                 files_checked=sorted(selected), claims=claims, findings=findings,
                 unchecked=[c for c in claims if c['unchecked']])
 

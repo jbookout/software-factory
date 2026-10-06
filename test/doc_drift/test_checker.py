@@ -51,7 +51,8 @@ class CheckerTest(unittest.TestCase):
 
     def test_checks_commands_verbs_workflows_jobs_config_and_relative_links(self):
         self.write("run.sh", '#!/bin/sh\ncase "$1" in\nhealth) exit 0 ;;\ncall) exit 0 ;;\nesac\n')
-        self.write("mcp-server/src/tools.js", 'import { extraTools } from "./extra.js";\nexport const tools = {"find": {write: true, humanOnly: true, description: "find", handler() {}}};\nregisterTools(extraTools());\n')
+        self.write('mcp-server/package.json', '{"type":"module"}')
+        self.write("mcp-server/src/tools.js", 'import { extraTools } from "./extra.js";\nexport const TOOLS = {"find": {write: true, humanOnly: true, description: "find", handler() {}}};\nObject.assign(TOOLS, extraTools());\n')
         self.write("mcp-server/src/extra.js", 'export const extraTools = () => ({"extra-verb": {description: "extra", handler() {}}});\n')
         self.write("package.json", '{"scripts":{"test":"node --test"}}')
         self.write(".github/workflows/ci.yml", "name: CI\non: pull_request\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps: []\n")
@@ -144,6 +145,74 @@ Before/after behavior and job/evidence records.
         result = subprocess.run([sys.executable, str(CHECKER), '--root', str(self.root)], text=True, capture_output=True)
         self.assertEqual(result.returncode, 2)
         self.assertIn('no clean verdict', result.stderr)
+
+
+    def test_negative_context_does_not_hide_next_line_or_clause(self):
+        self.write("README.md", "Do not create `docs/adr/`\nRun `bin/missing.sh`.\nDo not create `docs/adr/`; run `bin/another.sh`.\n")
+        self.assertEqual({f['target'] for f in self.scan()['findings']},
+                         {'bin/missing.sh', 'bin/another.sh'})
+
+    def test_planned_context_applies_to_all_claim_kinds(self):
+        self.write('run.sh', 'case "$1" in\nhealth) exit 0 ;;\nesac\n')
+        self.write('mcp-server/package.json', '{"type":"module"}')
+        self.write('mcp-server/src/tools.js', 'export const TOOLS = {};')
+        self.write('README.md', "Planned: `./run.sh call vanished`, verb `gone`, `./run.sh old`, `npm run absent`.\nPlanned: workflow `Old` has job `ghost`.\n")
+        self.assertFalse(self.scan()['findings'])
+
+    def test_globs_respect_segments_and_recursive_matches(self):
+        self.write('bin/nested/task.sh', 'echo safe\n')
+        self.write('README.md', 'Run `bin/*.sh` and `bin/**/*.sh`.\n')
+        self.assertEqual([f['target'] for f in self.scan()['findings']], ['bin/*.sh'])
+        self.git('commit', '-qm', 'globs')
+        self.write('bin/nested/task.sh', 'echo changed\n')
+        self.git('commit', '-qm', 'nested change')
+        self.assertEqual(self.scan('--base', 'HEAD~1')['files_checked'], ['README.md'])
+
+    def test_nonrecursive_glob_does_not_select_nested_changes(self):
+        self.write('bin/nested/task.sh', 'echo safe\n')
+        self.write('README.md', 'Run `bin/*.sh`.\n')
+        self.git('commit', '-qm', 'glob')
+        self.write('bin/nested/task.sh', 'echo changed\n')
+        self.git('commit', '-qm', 'nested change')
+        self.assertEqual(self.scan('--base', 'HEAD~1')['files_checked'], [])
+
+    def test_command_span_extracts_path_operand(self):
+        self.write('baselines/output.html', '<html/>')
+        self.write('README.md', 'Run `shasum -a 256 baselines/output.html`.\n')
+        self.assertFalse(self.scan()['findings'])
+        self.assertEqual([c['target'] for c in self.scan()['claims']], ['baselines/output.html'])
+
+    def test_workflow_basename_is_not_a_root_filename(self):
+        self.write('.github/workflows/ci.yml', 'name: CI\njobs:\n  check:\n    steps: []\n')
+        self.write('README.md', 'The workflow `ci.yml` has job `check`.\n')
+        self.assertFalse(self.scan()['findings'])
+
+    def test_job_list_is_not_a_workflow_authority(self):
+        self.write('.github/workflows/ci.yml', 'name: CI\njobs: [ghost]\n')
+        self.write('README.md', 'The workflow `ci.yml` has job `ghost`.\n')
+        result = subprocess.run([sys.executable, str(CHECKER), '--root', str(self.root)], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('no clean verdict', result.stderr)
+
+    def test_verbs_equal_registered_inventory_with_both_error_directions(self):
+        self.write('mcp-server/package.json', '{"type":"module"}')
+        self.write('mcp-server/src/tools.js', 'import { extras, unused } from "./extra.js";\nexport const TOOLS = {"call-verb": {/* metadata */ description:"call"}, ...extras};\n')
+        self.write('mcp-server/src/extra.js', 'export const extras = {["read-" + "cre-lifecycle"]: {description:"read"}};\nexport const unused = {"admit-journey-one-minimum-receipt": {description:"unused"}};\n')
+        self.write('README.md', 'Use verb `call-verb` and verb `read-cre-lifecycle`.\nUse verb `admit-journey-one-minimum-receipt`.\n')
+        report = self.scan()
+        self.assertEqual([(f['kind'], f['target']) for f in report['findings']],
+                         [('verb', 'admit-journey-one-minimum-receipt')])
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('checker_inventory', CHECKER)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertEqual(module.Tree(self.root.resolve()).verbs, {'call-verb', 'read-cre-lifecycle'})
+
+    def test_report_binds_repository_and_full_document_inventory(self):
+        self.write('README.md', '# Fixture\n')
+        report = self.scan()
+        self.assertEqual(report['repository'], 'jbookout/fixture')
+        self.assertEqual(report['files_checked'], ['README.md'])
 
 
 if __name__ == "__main__":

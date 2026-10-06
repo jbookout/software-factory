@@ -13,6 +13,14 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class CiTest(unittest.TestCase):
+    def test_missing_product_manifest_refuses(self):
+        spec = importlib.util.spec_from_file_location('doc_drift_ci', ROOT / 'scripts/doc-drift/ci.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        scratch = Path(tempfile.mkdtemp(prefix='doc-drift-missing-pin-'))
+        with self.assertRaises(ValueError):
+            module.verify_snapshot(scratch)
+
     def test_pinned_product_copy_refuses_modified_bytes(self):
         spec = importlib.util.spec_from_file_location('doc_drift_ci', ROOT / 'scripts/doc-drift/ci.py')
         module = importlib.util.module_from_spec(spec)

@@ -11,7 +11,7 @@ import sys
 def verify_snapshot(root):
     manifest = root / 'scripts/doc-drift/source.json'
     if not manifest.exists():
-        return
+        raise ValueError('product instruction checker source manifest is required')
     pin = json.loads(manifest.read_text())
     if pin['repository'] != 'jbookout/software-factory' or len(pin['revision']) != 40 or not pin['files']:
         raise ValueError('invalid instruction checker source pin')
@@ -26,7 +26,8 @@ def main():
     parser.add_argument('--base')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
-    verify_snapshot(root)
+    if (root / 'ops/ci.sh').exists():
+        verify_snapshot(root)
     subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-s', 'test/doc_drift', '-v'], cwd=root, check=True)
     command = [sys.executable, str(root / 'scripts/doc-drift/check.py'), '--root', str(root),
                '--format', 'github', '--output', str(root / 'out/doc-drift/report.json')]
