@@ -3,6 +3,7 @@ import { DeliveryError } from "./pr-delivery-state.mjs"
 import { DeadlineError } from "./deadline.mjs"
 import { randomUUID } from "node:crypto"
 import { createGitHubObservation } from "./github-observation.mjs"
+import { ProcessError } from "./process-runner.mjs"
 
 export function readProbe(client,route,result) {
  const tls=/x509: OSStatus -?\d+/.exec(result.stderr??'')?.[0]
@@ -198,7 +199,7 @@ export function createGithubProvider(config, { command, getRepo, authenticate, n
     } catch (error) {
       return freeze({ ...base, state: "unknown", availability:probeAvailability(error.probe?[error.probe]:[]), fetchedAt: new Date(now()).toISOString(),
         ci: { state: "provider-unknown", nextAction: "retry-provider-observation" }, review: null,
-        errors: [{ message: error instanceof DeliveryError || error instanceof DeadlineError ? error.message : "GitHub snapshot unavailable", transient: error.transient ?? false,
+        errors: [{ message: error instanceof DeliveryError || error instanceof DeadlineError || error instanceof ProcessError ? error.message : "GitHub snapshot unavailable", transient: error.transient ?? false,
           ...(error.probe ? {probe:error.probe} : {}), code: error.code, state: error.state, pool: error.pool, retryAt: error.retryAt, queryErrors: error.queryErrors, terminal: error.terminal,
           ...(error.phase ? { phase: error.phase, nextAction: error.nextAction } : {}) }] })
     }

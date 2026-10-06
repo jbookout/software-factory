@@ -39,6 +39,7 @@ export async function rehearse({
           "--test",
           `--test-name-pattern=${recoveryPattern}`,
           "test/pr-delivery.test.mjs",
+          "test/pr-delivery.shard-1.test.mjs",
         ],
         {
           cwd: fileURLToPath(new URL("..", import.meta.url)),

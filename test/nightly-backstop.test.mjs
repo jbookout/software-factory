@@ -431,7 +431,7 @@ test("48-hour wall-clock driver survives restarts at quota/worker/provider seams
     },
     run: async (argv, options) => {
       calls++;
-      assert.equal(argv.at(-1), "test/pr-delivery.test.mjs");
+      assert.deepEqual(argv.slice(-2), ["test/pr-delivery.test.mjs", "test/pr-delivery.shard-1.test.mjs"]);
       assert.ok(argv.some((v) => v.includes(recoveryPattern)));
       assert.ok(!options.env.NODE_TEST_CONTEXT);
       tick += 1000;

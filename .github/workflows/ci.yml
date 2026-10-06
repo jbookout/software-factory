@@ -31,20 +31,46 @@ jobs:
           cache: npm
       - run: npm ci
         timeout-minutes: 5
-      - run: npm test
+      - name: Install pinned Python check dependencies
+        run: |
+          python3 -m venv "$RUNNER_TEMP/factory-check"
+          "$RUNNER_TEMP/factory-check/bin/python" -m pip install -r scripts/orch/requirements.txt
+          echo "$RUNNER_TEMP/factory-check/bin" >> "$GITHUB_PATH"
+        timeout-minutes: 5
+      - name: Run npm run check
         if: github.event_name != 'schedule'
+        shell: bash
+        env:
+          TMPDIR: ${{ runner.temp }}/factory-check-evidence
+        run: |
+          mkdir -p "$TMPDIR"
+          npm run check | tee "$TMPDIR/results.jsonl"
         timeout-minutes: 45
+
+      - name: Retain check receipts and captured logs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ always() && github.event_name != 'schedule' }}
+        with:
+          name: local-check-receipts
+          path: |
+            ${{ runner.temp }}/factory-check-evidence/results.jsonl
+            ${{ runner.temp }}/factory-check-evidence/factory-attempt-*/verification.json
+            ${{ runner.temp }}/factory-check-evidence/factory-attempt-*/output.log
+          retention-days: 7
+          if-no-files-found: error
       - run: node scripts/full-main.mjs .nightly/factory/receipt.json
         if: github.event_name == 'schedule'
         timeout-minutes: 45
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: ${{ always() && github.event_name == 'schedule' }}
         with:
           name: full-main-factory-receipt
           path: .nightly/factory/receipt.json
           if-no-files-found: error
           retention-days: 7
-      - run: python3 capabilities/jev-browser-select/test_select.py
+      - run: npm run check -- browser orchestration
+        if: github.event_name == 'schedule'
+        timeout-minutes: 10
 
       - name: Audit installed workflow configuration (non-blocking pilot)
         continue-on-error: true

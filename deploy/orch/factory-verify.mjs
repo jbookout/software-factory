@@ -7,7 +7,7 @@ const readJson = async (file,fallback) => {try{return JSON.parse(await fs.readFi
 export const hash = bytes => createHash('sha256').update(bytes).digest('hex')
 export const git = (root,...args) => execFileSync('git',args,{cwd:root,encoding:'utf8',stdio:['ignore','pipe','pipe'],timeout:30000,maxBuffer:4*1024*1024}).trim()
 const receiptName = '.factory-orch.json'
-export const runtimePaths = ['src','bin','deploy/orch','schemas','package.json','package-lock.json']
+export const runtimePaths = ['src','bin','deploy/orch','schemas','config/delivery-models.v1.json','config/review-tiers','package.json','package-lock.json']
 const within = (root,file) => file === root || file.startsWith(root+path.sep)
 export async function physicalPath(file) {
  file=path.resolve(file)
