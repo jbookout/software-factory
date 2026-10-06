@@ -1206,7 +1206,10 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
             stored = await queueTransition(entry.id, "reconciled", { attempts: stored.attempts + 1, outcome })
           }
         })
-        if (stored.state !== "reconciled") return outcome.data.state ? { ...outcome, data: { ...outcome.data, processed: true } } : { message: outcome.data.message, processed: true, outcome, code: 0 }
+        if (stored.state !== "reconciled") {
+          if (outcome.data.code === 75) return { ...outcome, data: { ...outcome.data, processed: true, transient: true } }
+          return outcome.data.state ? { ...outcome, data: { ...outcome.data, processed: true } } : { message: outcome.data.message, processed: true, outcome, code: 0 }
+        }
       }
       await deadlines.run(new Deadline(config.commandTimeoutMs), () => queueTransition(entry.id, "acknowledged", { owner: null, nextAction: "none" }))
       await log({ step: "merge", repo: entry.repo, pr: entry.pr, head: entry.head, attemptId: stored.attemptId, effectId: stored.effectId, ...outcome.data })
