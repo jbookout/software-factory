@@ -37,6 +37,7 @@ export function classifyChecks({ head, observedHead, requiredChecks, checkRuns, 
     if (!latest.has(key) || latest.get(key).id < c.id) latest.set(key, { id: c.id, name, appId, state })
   }
   const missing = [], selected = [...latest.values()]
+  const cancelled = selected.some(c => c.state === "cancelled")
   let failed = false, waiting = false, repairable = false
   for (const c of selected) {
     if (failures.has(c.state)) failed = true
@@ -48,7 +49,7 @@ export function classifyChecks({ head, observedHead, requiredChecks, checkRuns, 
     if (!matches.length) { missing.push(required.name); continue }
     if (matches.some(c => ["skipped", "neutral"].includes(c.state))) failed = true
   }
-  if (failed) return result("failure", { repairable, nextAction: repairable ? "repair-failed-check" : "rerun-required-check" })
-  if (waiting || missing.length) return result("pending", { missing, nextAction: "wait-for-required-checks" })
-  return result("success", { nextAction: "verify-review" })
+  if (failed) return result("failure", { repairable, cancelled, nextAction: repairable ? "repair-failed-check" : "rerun-required-check" })
+  if (waiting || missing.length) return result("pending", { missing, cancelled, nextAction: "wait-for-required-checks" })
+  return result("success", { cancelled, nextAction: "verify-review" })
 }

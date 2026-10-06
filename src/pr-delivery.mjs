@@ -339,7 +339,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       }
       throw new DeliveryError("CI RETRIGGER UNCERTAIN: inspect Git API intent before retry", 75)
     }
-    if (prior?.newHead === current.headRefOid || !current.ci.evidence.some(c => c.head_sha === current.headRefOid && c.conclusion === "cancelled"))
+    if (prior?.newHead === current.headRefOid || !current.ci.cancelled)
       return { retriggered: false, head: current.headRefOid }
     if (current.isCrossRepository !== false) throw new DeliveryError("CI retrigger requires an owned repository branch", 9)
     await requireNotCancelled(repo, pr, current.headRefOid)
@@ -1338,7 +1338,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
               let current = await view(repo, pr)
               if (current.state === "MERGED") { data = await verifyDelivery(repo, pr, current, current.headRefOid); break }
               requireOpen(current)
-              if (current.ci.evidence.some(c => c.head_sha === current.headRefOid && c.conclusion === "cancelled")) {
+              if (current.ci.cancelled) {
                 await retriggerCi(repo, pr)
                 current = await view(repo, pr)
               }

@@ -2405,3 +2405,16 @@ test('normal lifecycle suspension writes one shared status line across repeats',
  assert.equal(lines.length,1)
  assert.match(lines[0],/UNRESOLVED after 3 rounds.*next=/)
 })
+
+test('historical cancellation with a newer green check never retriggers CI', async t => {
+ const f=await fixture(t)
+ const state=await f.read()
+ state.checkRuns=[{id:1,name:'test',head_sha:f.head,status:'completed',conclusion:'cancelled',app:{id:15368}},{id:2,name:'test',head_sha:f.head,status:'completed',conclusion:'success',app:{id:15368}}]
+ await fs.writeFile(f.env.FAKE_PR,JSON.stringify(state))
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const result=await adapter.exclusive(repo,7,()=>adapter.execute('ci-retrigger',{repo,pr:7}))
+ assert.equal(result.status,'pass',JSON.stringify(result))
+ assert.equal(result.data.retriggered,false)
+ const after=await f.read();assert.equal(after.headRefOid,f.head)
+ assert.equal(after.ghCalls.filter(a=>a.includes('POST')&&a.some(v=>v.endsWith('/git/commits'))).length,0)
+})
