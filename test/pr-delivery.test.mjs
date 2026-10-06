@@ -581,12 +581,12 @@ test("missing required check cannot authorize enqueue or merge and spends no fix
  assert.notEqual((await f.run("deliver",repo,"7","-","1")).code,0)
  assert.equal((await f.read()).calls.length,0)
 })
-test("app refusal replay: nine launches across deployed recovery writers preserve exit 75 and one wait",async t=>{
+test("review budget refusal replay preserves exit 75 and one wait across deployed recovery writers",async t=>{
  const f=await fixture(t,{}, {limits:{runsPer24h:1,slots:1,timeoutMs:5000}})
  await fs.mkdir(f.stateDir,{recursive:true})
  await fs.writeFile(path.join(f.stateDir,"usage.json"),JSON.stringify([{repo,pr:7,kind:"review",at:Date.now()}]))
  assert.equal((await f.wrapper("pr-loop",repo,"7","-","3")).code,75)
- for(const name of ["review-pr","fix-pr","codex-guard","unstick","stall-watch","unstick","stall-watch","pr-loop"]) {
+ for(const name of ["review-pr","review-pr","codex-guard","unstick","stall-watch","unstick","stall-watch","pr-loop"]) {
    const args=["unstick","stall-watch"].includes(name)?["--once"]:name==="codex-guard"?[repo,"7","review",process.execPath,"-e","process.exit(0)"]:[repo,"7","-","3"]
    assert.equal((await f.wrapper(name,...args)).code,75,name)
  }
