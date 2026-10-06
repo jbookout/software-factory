@@ -130,8 +130,14 @@ export function createGithubProvider(config, { command, getRepo, authenticate, n
         if (next) {
           const url = new URL(next)
           const expectedUrl = new URL(`https://api.github.com/repos/${repo}/${route}`)
-          if (url.origin !== expectedUrl.origin || url.pathname !== expectedUrl.pathname || Number(url.searchParams.get("page")) !== page + 1 ||
-              Number(url.searchParams.get("per_page")) !== PAGE_SIZE || batch.length === 0) fail("invalid GitHub REST pagination link")
+          // gh/GitHub emits both named-repo and numeric repository-ID links.
+          // Read pages through our original route, never through this URL.
+          const sameRoute = url.pathname.replace(/^\/repositories\/[1-9][0-9]*\//, `/repos/${repo}/`) === expectedUrl.pathname
+          const expectedParams = new URLSearchParams(expectedUrl.search)
+          expectedParams.set('per_page', String(PAGE_SIZE)); expectedParams.set('page', String(page + 1))
+          const sameQuery = JSON.stringify([...url.searchParams].sort()) === JSON.stringify([...expectedParams].sort())
+          if (url.origin !== expectedUrl.origin || url.username || url.password || url.hash || !sameRoute || !sameQuery || batch.length === 0)
+            fail("invalid GitHub REST pagination link")
         }
         if (!next && batch.length < PAGE_SIZE && expected !== null && rows.length + batch.length !== expected)
           fail("incomplete GitHub REST pages", true)

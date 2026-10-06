@@ -133,7 +133,7 @@ if(['codex','claude'].includes(tool)) {
  s.headRefOid=git('--git-dir',s.remote,'rev-parse','refs/heads/topic');s.moveDuringChecks=false;save(); }
  save();respond({...pr(Number(route.split('/').at(-1))),...s.prOverrides});
  } else if(route.includes('/pulls?')) {
- const prs=s.listCount?Array.from({length:s.listCount},(_,i)=>({...pr(),body:'x'.repeat(s.listBodyBytes??0),id:i+100,number:i===s.listCount-1?7:i+100,comments:i===s.listCount-1?s.comments.length:0})):[pr()];respond(prs.slice((page-1)*pageSize,page*pageSize));
+ const prs=s.listCount?Array.from({length:s.listCount},(_,i)=>({...pr(),body:'x'.repeat(s.listBodyBytes??0),id:i+100,number:i===s.listCount-1?7:i+100,comments:i===s.listCount-1?s.comments.length:0})):[pr()];if(s.listOmitsComments) for(const row of prs) delete row.comments;respond(prs.slice((page-1)*pageSize,page*pageSize));
  } else if(route.includes('/comments')) {
  const number=Number(/issues\\/([0-9]+)\\//.exec(route)[1]);
  if(s.missingCommentPage===page) respond([]); else respond(s.comments.filter(c=>(c.pr??7)===number).map((c,i)=>({id:i+1,created_at:new Date(1700000000000+i*1000).toISOString(),updated_at:new Date(1700000000000+i*1000).toISOString(),user:{login:c.author?.login??'reviewer'},...c})).slice((page-1)*pageSize,page*pageSize));
@@ -213,6 +213,41 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
 const repo="fixture/new-repository"
 const ok = r => assert.equal(r.code,0,JSON.stringify(r))
 const merges = a => a.includes("-X") && a.some(v=>v.endsWith("/merge"))
+
+test('live legacy branch-wt accepts the configured checkout path and repository name', async t => {
+ const f = await fixture(t)
+ const byName = await f.run('branch-wt', repo, 'topic')
+ ok(byName)
+ const byPath = await f.run('branch-wt', f.checkout, 'topic')
+ ok(byPath)
+ assert.equal(await fs.realpath(byPath.stdout.trim()), await fs.realpath(byName.stdout.trim()))
+ assert.notEqual(byPath.stdout.trim(), f.checkout)
+ const unknown = await f.run('branch-wt', path.join(f.root, 'unknown'), 'topic')
+ assert.notEqual(unknown.code, 0)
+ assert.match(unknown.stderr, /UNKNOWN REPO/)
+})
+
+test('cutover smoke scans GitHub read-only without discovering jobs or queueing', async t => {
+ const f = await fixture(t)
+ const result = await f.run('delivery-smoke', repo)
+ ok(result)
+ assert.equal(JSON.parse(result.stdout).pulls, 1)
+ const state = await f.read()
+ assert.equal(state.calls.length, 0)
+ assert.ok(state.ghCalls.length > 0)
+ assert.ok(state.ghCalls.every(argv => argv[0] === 'api' && !argv.includes('-X')))
+ for (const file of ['inflight.json','queue.json']) await assert.rejects(fs.access(path.join(f.stateDir,file)), {code:'ENOENT'})
+})
+
+test('discovery observes approved PRs when the pull list omits comments', async t => {
+ const f = await fixture(t, {listOmitsComments:true})
+ await f.approve()
+ const adapter = createPrDeliveryAdapter(await loadDeliveryConfig(f.config), {env:f.env})
+ const result = await adapter.execute('delivery-scan', {repo})
+ assert.equal(result.status, 'pass', JSON.stringify(result))
+ assert.deepEqual(result.data.candidates, [])
+ assert.ok((await f.read()).ghCalls.some(argv => argv[1].includes('/issues/7/comments')))
+})
 
 for (const status of ['absent', 'delivered']) test(`repair-status wraps ${status} records in a normalized result`, async t => {
  const f = await fixture(t)

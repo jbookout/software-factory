@@ -1,0 +1,36 @@
+{
+  "ghVersion": "2.102.0 (2026-09-30)",
+  "source": "Recorded on Joe\u2019s Mac using the provider command on 2026-10-06. Only status, Content-Type, Date, Link, id, number and draft retained. PR bodies, users, refs and other content omitted. Pagination headers and retained values are unmodified.",
+  "pages": [
+    {
+      "argv": [
+        "gh",
+        "api",
+        "repos/jbookout/carr-system/pulls?state=open&per_page=25&page=1",
+        "--include"
+      ],
+      "code": 0,
+      "stdout": "HTTP/2.0 200 OK\nContent-Type: application/json; charset=utf-8\nDate: Tue, 06 Oct 2026 06:21:18 GMT\nLink: <https://api.github.com/repositories/1311400386/pulls?state=open&per_page=25&page=2>; rel=\"next\", <https://api.github.com/repositories/1311400386/pulls?state=open&per_page=25&page=3>; rel=\"last\"\n\n[{\"id\": 4754211944, \"number\": 1614, \"draft\": false}, {\"id\": 4754093797, \"number\": 1613, \"draft\": true}, {\"id\": 4753213015, \"number\": 1612, \"draft\": false}, {\"id\": 4751721398, \"number\": 1610, \"draft\": false}, {\"id\": 4751150091, \"number\": 1606, \"draft\": false}, {\"id\": 4751059837, \"number\": 1604, \"draft\": false}, {\"id\": 4750974659, \"number\": 1603, \"draft\": false}, {\"id\": 4750782115, \"number\": 1602, \"draft\": false}, {\"id\": 4750693155, \"number\": 1601, \"draft\": false}, {\"id\": 4750691841, \"number\": 1600, \"draft\": true}, {\"id\": 4750573171, \"number\": 1599, \"draft\": false}, {\"id\": 4750168856, \"number\": 1598, \"draft\": false}, {\"id\": 4750121318, \"number\": 1597, \"draft\": false}, {\"id\": 4749977345, \"number\": 1596, \"draft\": false}, {\"id\": 4749884059, \"number\": 1594, \"draft\": false}, {\"id\": 4749852571, \"number\": 1593, \"draft\": true}, {\"id\": 4749847268, \"number\": 1592, \"draft\": false}, {\"id\": 4749771848, \"number\": 1590, \"draft\": false}, {\"id\": 4749631285, \"number\": 1588, \"draft\": false}, {\"id\": 4749614215, \"number\": 1587, \"draft\": false}, {\"id\": 4749535294, \"number\": 1582, \"draft\": false}, {\"id\": 4749506430, \"number\": 1581, \"draft\": true}, {\"id\": 4749366060, \"number\": 1580, \"draft\": false}, {\"id\": 4749271822, \"number\": 1579, \"draft\": false}, {\"id\": 4749251150, \"number\": 1578, \"draft\": false}]"
+    },
+    {
+      "argv": [
+        "gh",
+        "api",
+        "repos/jbookout/carr-system/pulls?state=open&per_page=25&page=2",
+        "--include"
+      ],
+      "code": 0,
+      "stdout": "HTTP/2.0 200 OK\nContent-Type: application/json; charset=utf-8\nDate: Tue, 06 Oct 2026 06:22:09 GMT\nLink: <https://api.github.com/repositories/1311400386/pulls?state=open&per_page=25&page=1>; rel=\"prev\", <https://api.github.com/repositories/1311400386/pulls?state=open&per_page=25&page=3>; rel=\"next\", <https://api.github.com/repositories/1311400386/pulls?state=open&per_page=25&page=3>; rel=\"last\", <https://api.github.com/repositories/1311400386/pulls?state=open&per_page=25&page=1>; rel=\"first\"\n\n[{\"id\": 4749231083, \"number\": 1577, \"draft\": false}, {\"id\": 4749188512, \"number\": 1576, \"draft\": false}, {\"id\": 4749177343, \"number\": 1575, \"draft\": false}, {\"id\": 4749167452, \"number\": 1574, \"draft\": false}, {\"id\": 4749140577, \"number\": 1573, \"draft\": false}, {\"id\": 4749007137, \"number\": 1572, \"draft\": false}, {\"id\": 4748950825, \"number\": 1571, \"draft\": false}, {\"id\": 4748312637, \"number\": 1570, \"draft\": false}, {\"id\": 4747993927, \"number\": 1568, \"draft\": false}, {\"id\": 4747991906, \"number\": 1567, \"draft\": true}, {\"id\": 4747843109, \"number\": 1566, \"draft\": false}, {\"id\": 4747459333, \"number\": 1564, \"draft\": true}, {\"id\": 4746901617, \"number\": 1563, \"draft\": false}, {\"id\": 4746899428, \"number\": 1562, \"draft\": false}, {\"id\": 4746836689, \"number\": 1561, \"draft\": true}, {\"id\": 4746820028, \"number\": 1560, \"draft\": true}, {\"id\": 4746201395, \"number\": 1558, \"draft\": false}, {\"id\": 4745744940, \"number\": 1557, \"draft\": false}, {\"id\": 4745340623, \"number\": 1555, \"draft\": false}, {\"id\": 4744997296, \"number\": 1554, \"draft\": false}, {\"id\": 4744569488, \"number\": 1551, \"draft\": false}, {\"id\": 4741976655, \"number\": 1548, \"draft\": false}, {\"id\": 4740140209, \"number\": 1540, \"draft\": false}, {\"id\": 4740091913, \"number\": 1539, \"draft\": false}, {\"id\": 4739862894, \"number\": 1536, \"draft\": false}]"
+    },
+    {
+      "argv": [
+        "gh",
+        "api",
+        "repos/jbookout/carr-system/pulls?state=open&per_page=25&page=3",
+        "--include"
+      ],
+      "code": 0,
+      "stdout": "HTTP/2.0 200 OK\nContent-Type: application/json; charset=utf-8\nDate: Tue, 06 Oct 2026 06:22:10 GMT\nLink: <https://api.github.com/repositories/1311400386/pulls?state=open&per_page=25&page=2>; rel=\"prev\", <https://api.github.com/repositories/1311400386/pulls?state=open&per_page=25&page=1>; rel=\"first\"\n\n[{\"id\": 4738082594, \"number\": 1527, \"draft\": false}, {\"id\": 4736771653, \"number\": 1522, \"draft\": false}, {\"id\": 4732461061, \"number\": 1510, \"draft\": false}, {\"id\": 4728709134, \"number\": 1505, \"draft\": false}, {\"id\": 4714203970, \"number\": 1491, \"draft\": false}, {\"id\": 4711281518, \"number\": 1477, \"draft\": false}, {\"id\": 4704333452, \"number\": 1457, \"draft\": false}, {\"id\": 4696713037, \"number\": 1448, \"draft\": false}, {\"id\": 4689222117, \"number\": 1436, \"draft\": false}, {\"id\": 4685062029, \"number\": 1434, \"draft\": true}, {\"id\": 4684989086, \"number\": 1433, \"draft\": false}, {\"id\": 4684974766, \"number\": 1432, \"draft\": false}, {\"id\": 4684561903, \"number\": 1429, \"draft\": true}, {\"id\": 4684496823, \"number\": 1428, \"draft\": true}, {\"id\": 4683707198, \"number\": 1425, \"draft\": true}, {\"id\": 4677831721, \"number\": 1403, \"draft\": false}, {\"id\": 4631547298, \"number\": 1244, \"draft\": false}, {\"id\": 4613551421, \"number\": 1133, \"draft\": true}, {\"id\": 4427036984, \"number\": 863, \"draft\": false}, {\"id\": 4361341736, \"number\": 652, \"draft\": false}]"
+    }
+  ]
+}
