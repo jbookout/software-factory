@@ -662,14 +662,23 @@ test("close/reopen preserves unchanged refusal; recovery completion retires wait
  for(const dir of await fs.readdir(path.join(f.stateDir,"locks")))
    if(dir.endsWith(".claims")) assert.deepEqual(await fs.readdir(path.join(f.stateDir,"locks",dir)),[],"claims disposed")
 })
-test("current cancelled CI is refused by loop/review/scan/merge without fixer dispatch",async t=>{
+test("current cancelled CI is refused by review/scan/merge without fixer dispatch",async t=>{
  const f=await fixture(t);await f.approve()
  const s=await f.read();s.statusCheckRollup=[{status:"COMPLETED",conclusion:"CANCELLED"}];await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
- for(const name of ["pr-loop","review-pr","merge-one-core"]) assert.equal((await f.wrapper(name,repo,"7",name==="merge-one-core"?f.head:"-","1")).code,3)
+ for(const name of ["review-pr","merge-one-core"]) assert.equal((await f.wrapper(name,repo,"7",name==="merge-one-core"?f.head:"-","1")).code,3)
  ok(await f.wrapper("auto-enqueue","--once"))
  await assert.rejects(fs.readFile(path.join(f.stateDir,"queue.json")),{code:"ENOENT"})
  assert.equal((await f.read()).calls.length,0)
  assert.ok((await f.read()).ghCalls.every(a=>a[0]==="api"),"new reads never call GraphQL")
+})
+test("delivery loop retriggers cancelled CI once and reviews the new head",async t=>{
+ const f=await fixture(t);await f.approve()
+ const s=await f.read();s.statusCheckRollup=[{status:"COMPLETED",conclusion:"CANCELLED"}];await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ ok(await f.wrapper("pr-loop",repo,"7","-","1"))
+ const after=await f.read();assert.notEqual(after.headRefOid,f.head)
+ assert.equal(after.ghCalls.filter(a=>a.includes("-X")&&a.some(v=>v.endsWith("/git/commits"))).length,1)
+ assert.equal(after.calls.length,1);assert.match(after.calls[0].prompt,/REVIEW MODE:/)
+ assert.ok(after.comments.some(c=>c.body.startsWith("APPROVE")&&c.body.includes(`Reviewed-SHA: ${after.headRefOid}`)))
 })
 test("provider-unknown mergeability cannot send a green approved head to a code fixer",async t=>{
  const f=await fixture(t);await f.approve()
