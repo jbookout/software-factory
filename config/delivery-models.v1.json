@@ -1,0 +1,10 @@
+{
+  "schema": "factory-delivery-models/v1",
+  "purpose": "The one place the delivery loop chooses a model per role. Replace with carr-system's router config once jbookout/carr-system PR 1570 merges. Tier 1 has no role: it never runs a model.",
+  "roles": {
+    "review-tier2": { "model": "gpt-6.1-sol", "effort": "high" },
+    "review-tier3": { "model": "gpt-6.1-sol", "effort": "high" },
+    "fix": { "model": "gpt-6.1-sol", "effort": "high" },
+    "ci-fix": { "model": "gpt-6.1-sol", "effort": "high" }
+  }
+}

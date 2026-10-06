@@ -1,7 +1,7 @@
 {
   "repos": {
-    "owner/repository": {
-      "checkout": "/absolute/path/to/repository",
+    "jbookout/carr-system": {
+      "checkout": "/absolute/path/to/carr-system",
       "worktreeRoot": "/absolute/path/to/delivery-worktrees",
       "requiredChecks": [
         {
@@ -9,7 +9,29 @@
           "appId": 15368
         }
       ],
-      "dependencyRevision": "owned-actionable-input-revision",
+      "checks": [
+        [
+          "ops/ci.sh",
+          "--strict"
+        ]
+      ],
+      "checkTimeoutMs": 3600000,
+      "trustedReviewers": [
+        "replace-with-verified-review-poster"
+      ],
+      "reviewPolicy": {
+        "repositoryPath": "ops/config/review-tiers.v1.json"
+      }
+    },
+    "jbookout/doctorcre-app": {
+      "checkout": "/absolute/path/to/doctorcre-app",
+      "worktreeRoot": "/absolute/path/to/delivery-worktrees",
+      "requiredChecks": [
+        {
+          "name": "test",
+          "appId": 15368
+        }
+      ],
       "checks": [
         [
           "npm",
@@ -23,14 +45,37 @@
       "checkTimeoutMs": 3600000,
       "trustedReviewers": [
         "replace-with-verified-review-poster"
-      ]
+      ],
+      "reviewPolicy": {
+        "file": "/absolute/path/to/software-factory/config/review-tiers/doctorcre-app.v1.json"
+      }
+    },
+    "jbookout/software-factory": {
+      "checkout": "/absolute/path/to/software-factory",
+      "worktreeRoot": "/absolute/path/to/delivery-worktrees",
+      "requiredChecks": [
+        {
+          "name": "test",
+          "appId": 15368
+        }
+      ],
+      "checks": [
+        [
+          "npm",
+          "run",
+          "check"
+        ]
+      ],
+      "checkTimeoutMs": 3600000,
+      "trustedReviewers": [
+        "replace-with-verified-review-poster"
+      ],
+      "reviewPolicy": {
+        "file": "/absolute/path/to/software-factory/config/review-tiers/software-factory.v1.json"
+      }
     }
   },
   "stateDir": "/absolute/path/to/private/factory-delivery-state",
-  "codex": {
-    "model": "gpt-6.1-sol",
-    "effort": "high"
-  },
   "limits": {
     "runsPer24h": 8,
     "slots": 4,
@@ -46,7 +91,6 @@
     "requestsPerHour": 1000,
     "cacheMs": 60000
   },
-  "holds": [],
   "queueTimeoutMs": 900000,
   "apiTimeoutMs": 120000,
   "attemptTimeoutMs": 9600000,
@@ -54,5 +98,12 @@
     "capacity": 8,
     "agentUnits": 1,
     "browserConcurrency": 1
+  },
+  "holdsFile": "/absolute/path/to/orchestrator/merge-holds.txt",
+  "orchestratorDir": "/absolute/path/to/orchestrator",
+  "statusFile": "/absolute/path/to/orchestrator/delivery-status.txt",
+  "cloudSlots": 1,
+  "claude": {
+    "command": "claude"
   }
 }
