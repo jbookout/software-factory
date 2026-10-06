@@ -28,6 +28,12 @@ jobs:
           cache: npm
       - run: npm ci
         timeout-minutes: 5
+      - name: Install pinned Python check dependencies
+        run: |
+          python3 -m venv "$RUNNER_TEMP/factory-check"
+          "$RUNNER_TEMP/factory-check/bin/python" -m pip install -r scripts/orch/requirements.txt
+          echo "$RUNNER_TEMP/factory-check/bin" >> "$GITHUB_PATH"
+        timeout-minutes: 5
       - run: npm run check
         timeout-minutes: 45
 
