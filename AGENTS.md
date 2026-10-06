@@ -88,12 +88,12 @@ When running checks, reviewing their results, or preparing delivery, use `npm ru
 
 ### Issue tracker
 
-GitHub Issues. See [tracker operations](docs/agents/issue-tracker.md).
+Issues and specs live in GitHub Issues for `jbookout/software-factory` (the `gh` CLI). PRs are not a triage surface. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Default canonical labels. See [triage mapping](docs/agents/triage-labels.md).
+Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). Only `wontfix` exists as a GitHub label today; the other four are not yet created. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
-Single-context; factory record-store destination. See [domain consumers](docs/agents/domain.md).
+Single-context: a root `GLOSSARY.md` and `docs/adr/`, both created lazily. See `docs/agents/domain.md`.
