@@ -10,6 +10,7 @@ import { acquireLease, keyFor, pause } from "../src/pr-delivery-state.mjs"
 
 const cli = fileURLToPath(new URL("../bin/pr-delivery.mjs", import.meta.url))
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
+const foregroundArgs = (name, args) => [...args, ...(["pr-loop", "deliver"].includes(name) ? ["--foreground"] : [])]
 const fake = `#!/usr/bin/env node
 const fs = require('node:fs'), cp = require('node:child_process');
 const args = process.argv.slice(2), file = process.env.FAKE_PR;
@@ -193,7 +194,7 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
   })
  })
  const run=(...args)=>launch(process.execPath,[cli,config,...args])
- const wrapper=(name,...args)=>launch("sh",[fileURLToPath(new URL(`../deploy/orch/${name}.sh`,import.meta.url)),...args,...(["pr-loop","deliver"].includes(name)?["--foreground"]:[])],
+ const wrapper=(name,...args)=>launch("sh",[fileURLToPath(new URL(`../deploy/orch/${name}.sh`,import.meta.url)),...foregroundArgs(name,args)],
    {...env,FACTORY_ROOT:fileURLToPath(new URL("../",import.meta.url)),FACTORY_PR_CONFIG:config})
  const approve=async (body,number=7,setupTimeoutMs=5000)=>{
   if(body) { const s=await read();s.comments.push({body,author:{login:"reviewer"}});await fs.writeFile(env.FAKE_PR,JSON.stringify(s));
@@ -1477,7 +1478,7 @@ async function installedFixture(f) {
  await fs.symlink(fileURLToPath(new URL('../node_modules',import.meta.url)),path.join(source,'node_modules'),'dir')
  execFileSync(process.execPath,[fileURLToPath(new URL('../bin/orch-install.mjs',import.meta.url)),'install',source,installed,f.config],{encoding:'utf8'})
  const wrapper=(name,...args)=>new Promise((resolve,reject)=>{
-   const child=spawn('sh',[path.join(installed,name+'.sh'),...args],{env:f.env,stdio:['ignore','pipe','pipe']})
+   const child=spawn('sh',[path.join(installed,name+'.sh'),...foregroundArgs(name,args)],{env:f.env,stdio:['ignore','pipe','pipe']})
    let stdout='',stderr='';child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b)
    child.on('error',reject);child.on('close',code=>resolve({code,stdout,stderr}))
  })
@@ -1514,7 +1515,8 @@ test('retro 3: installed review/fix/queue wrappers exercise the bound PR adapter
  const failed=await f.read();failed.statusCheckRollup=[{status:'COMPLETED',conclusion:'FAILURE'}];await fs.writeFile(f.env.FAKE_PR,JSON.stringify(failed))
  ok(await wrapper('ci-fix',repo,'7','-','--no-loop'))
  ok(await wrapper('review-pr',repo,'7'))
- ok(await wrapper('pr-loop',repo,'7','-','1'))
+ const delivered=await wrapper('pr-loop',repo,'7','-','1');ok(delivered)
+ assert.match(delivered.stdout,/APPROVED; QUEUED/,'installed smoke waits for PR delivery before reading state or cleaning up')
  ok(await wrapper('auto-enqueue','--once'))
  assert.equal((await f.read()).calls.length,4)
  const queue=JSON.parse(await fs.readFile(path.join(f.stateDir,'queue.json'),'utf8'));assert.equal(queue.length,1)
