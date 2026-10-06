@@ -18,6 +18,7 @@ SCHEMA = 'doc-drift/v1'
 PATH = re.compile(r'(?<![\w/:])(?:\./|\.\./|~/|/)?(?:[\w.@*<>${}-]+/)+[\w.@*<>${}-]*(?:/)?')
 LINK = re.compile(r'\[[^\]]*\]\(<?([^\s)>]+)>?(?:\s+[^)]*)?\)')
 CODE = re.compile(r'`([^`\n]+)`')
+COMMAND = re.compile(r'^(?:python[\d.]*|node|bash|sh|zsh|shasum|sha256sum|cat|git|npm|npx|pip[\d.]*|curl|ls|rg|grep|find|sed|awk|cp|mv|rm|chmod|mkdir|touch|[\w./-]+\.(?:sh|py|js|mjs))\s+')
 IMPORT = re.compile(r'''(?:from\s*|import\s*)["'](\.[^"']+)["']''')
 
 
@@ -213,13 +214,20 @@ def extract(tree, file, text):
             claims.append(dict(file=file, line=line, kind=kind, target=target,
                                sources=list(sources), unchecked=unchecked or context))
 
-    context = None
+    context = list_context = None
+    previous_number = None
     for number, line in instruction_lines(text):
-        context = None
+        list_item = re.match(r'^\s*(?:[-+*]|\d+[.)])\s+', line)
+        if number != previous_number and not list_item:
+            list_context = None
+        previous_number = number
+        context = list_context if list_item else None
         if re.search(r'do not create|must not (?:create|use)|has no|does not (?:have|contain)|never create', line, re.I):
             context = 'negative instruction, not an existence claim'
         elif re.search(r'\bplanned\b|\bproposed\b|not started|future (?:file|path|work)|old script', line, re.I):
             context = 'planned or historical reference'
+            if line.rstrip().endswith(':') and not CODE.search(line):
+                list_context = context
         clean = line
         for match in LINK.finditer(line):
             target, reason = tree.path(match[1], file, relative=True)
@@ -232,7 +240,7 @@ def extract(tree, file, text):
             path_text = path_text.replace('`' + code + '`', '')
         for code in CODE.findall(path_text):
             if (re.fullmatch(r'(?:\./|\.\./|~/)?[\w .@*<>${}-]+(?:/[\w .@*<>${}-]+)+/?', code)
-                    and not re.match(r'^[\w-]+\s', code)
+                    and (code.split('/')[0] in tree.roots or not COMMAND.match(code))
                     and (code.split('/')[0] in tree.roots or code.startswith(('./', '../', '~/', 'DNA/', '00_Context/', '@'))
                          or re.search(r'\.(?:py|sh|js|mjs|ts|tsx|json|ya?ml|toml|md|mdx|rst|html|css|sql)$', code))
                     and (not ' ' in code or re.search(r'\.[\w]+$', code) or code.endswith('/'))):
