@@ -81,3 +81,19 @@ Before opening or updating any pull request, apply both skills to the diff:
 2. `zero-tech-debt`: rework the change from its intended end state; delete dead compatibility paths and duplicated rules.
 
 Both are installed at `~/.agents/skills/` (sources: github.com/mattpocock/skills `skills/engineering/codebase-design`, github.com/jnsahaj/skills `skills/zero-tech-debt`). The PR reviewer checks both, so all two are required.
+
+When running checks, reviewing their results, or preparing delivery, use `npm run check`. Validate its producer/source/log receipt before reporting coverage.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues. See [tracker operations](docs/agents/issue-tracker.md).
+
+### Triage labels
+
+Default canonical labels. See [triage mapping](docs/agents/triage-labels.md).
+
+### Domain docs
+
+Single-context; factory record-store destination. See [domain consumers](docs/agents/domain.md).
