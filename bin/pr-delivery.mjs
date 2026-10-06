@@ -1,20 +1,31 @@
 #!/usr/bin/env node
+import { startDeliveryDaemon, deliveryStatus } from "../src/delivery-daemon.mjs"
 import { loadDeliveryConfig, createPrDeliveryAdapter } from "../src/pr-delivery.mjs"
 import { runPrDelivery } from "../src/operating-loop.mjs"
 import { queryBackoffMs } from "../src/github-observation.mjs"
 import { pause } from "../src/pr-delivery-state.mjs"
 
-const [configPath, action, ...args] = process.argv.slice(2)
+const [configPath, rawAction, ...rawArgs] = process.argv.slice(2)
+const action = rawAction
+const args = rawArgs.filter(arg => arg !== "--foreground" && (arg !== "--detach" || !rawArgs.includes("--foreground")))
+let config
 try {
   if (!configPath || !action) throw new Error("usage: node bin/pr-delivery.mjs <config.json> <action> [args]")
-  const adapter = createPrDeliveryAdapter(await loadDeliveryConfig(configPath))
+  config = await loadDeliveryConfig(configPath)
+  if (args.includes("--detach") && !rawArgs.includes("--foreground")) {
+    const clean = args.filter(arg => arg !== "--detach")
+    const receipt = await startDeliveryDaemon(config, [action, ...clean], [process.argv[1], configPath, action, ...clean])
+    process.stdout.write(JSON.stringify(receipt) + "\n")
+    process.exit(0)
+  }
+  const adapter = createPrDeliveryAdapter(config)
   const [repo, number, extra, fourth] = args
   const once = args.includes("--once"), pr = Number(number)
   // `deliver <repo>` is the repository's serial lane; `deliver <repo> <pr>` delivers one PR.
   const lane = action === "deliver" && (!number || number === "--once")
-  const daemons = ["merge-queue", "auto-enqueue", "recover", "shadow"]
+  const daemons = ["merge-queue", "auto-enqueue", "recover"]
   if (!daemons.includes(action) && !lane && !["branch-wt", "import-legacy", "queue-status", "github-read", "github-logs"].includes(action) && (!Number.isSafeInteger(pr) || pr <= 0)) throw new Error("PR number must be a positive integer")
-  if ((lane || action === "shadow") && !/^[^-]/.test(repo ?? "")) throw new Error(`${action} needs a configured repository`)
+  if (lane && !/^[^-]/.test(repo ?? "")) throw new Error(`${action} needs a configured repository`)
   const request = { repo, pr }
   const report = result => {
     const data = result.data ?? result
@@ -51,15 +62,22 @@ try {
     } while (true)
   }
   else if (daemons.includes(action) || lane) {
-    const steps = lane ? ["auto-enqueue", "merge-queue"] : [action]
+    const steps = lane ? ["delivery-scan", "auto-enqueue", "merge-queue"] : [action]
     const interval = action === "auto-enqueue" ? Math.max(300_000, adapter.config.autoPollMs)
-      : action === "shadow" ? Math.max(600_000, adapter.config.autoPollMs) : adapter.config.pollMs
+      : adapter.config.pollMs
     do {
       let wait = interval, stop = false
       for (const step of steps) {
         const result = await adapter.execute(step, { repo: repo !== "--once" ? repo : undefined })
         report(result)
-        stop ||= result.status === "fail" && !result.data.transient
+        if (step === "delivery-scan" && result.status === "pass") {
+          for (const candidate of result.data.candidates ?? []) {
+            await startDeliveryDaemon(config, ["deliver",candidate.repo,String(candidate.pr)], [process.argv[1],configPath,"deliver",candidate.repo,String(candidate.pr)])
+          }
+        }
+        // Persistent repo lanes reobserve provider/config refusals; a dead end
+        // is published to status.txt and never silently kills the only owner.
+        stop ||= !lane && result.status === "fail" && !result.data.transient
         // A lane's scan deadline never delays its merges.
         if (result.data.retryAt && (steps.length === 1 || result.status === "fail")) wait = Math.max(wait, result.data.retryAt - Date.now())
         else if (result.status === "fail" && result.data.state) wait = Math.max(wait, queryBackoffMs(result.data.queryErrors ?? 1))
@@ -95,5 +113,6 @@ try {
   else throw new Error(`unknown delivery action: ${action}`)
 } catch (error) {
   process.stderr.write(`${error.message}\n`)
+  if (config) await deliveryStatus(config, {step:action,repo:args[0],pr:Number(args[1]) || undefined,code:error.code,message:error.message})
   if (!process.exitCode) process.exitCode = Number.isInteger(error.code) ? error.code : 1
 }

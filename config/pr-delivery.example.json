@@ -62,11 +62,8 @@
       "checks": [
         [
           "npm",
-          "test"
-        ],
-        [
-          "python3",
-          "capabilities/jev-browser-select/test_select.py"
+          "run",
+          "check"
         ]
       ],
       "checkTimeoutMs": 3600000,
@@ -102,5 +99,11 @@
     "agentUnits": 1,
     "browserConcurrency": 1
   },
-  "holdsFile": "/absolute/path/to/orchestrator/merge-holds.txt"
+  "holdsFile": "/absolute/path/to/orchestrator/merge-holds.txt",
+  "orchestratorDir": "/absolute/path/to/orchestrator",
+  "statusFile": "/absolute/path/to/orchestrator/delivery-status.txt",
+  "cloudSlots": 1,
+  "claude": {
+    "command": "claude"
+  }
 }

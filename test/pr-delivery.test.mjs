@@ -25,7 +25,7 @@ const save = () => { const temp = file + '.' + process.pid + '.tmp'; fs.writeFil
 const git = (...a) => cp.execFileSync('git', a, {encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
 s.headRefOid = git('--git-dir',s.remote,'rev-parse','refs/heads/topic');
 const tool = require('node:path').basename(process.argv[1]);
-if(tool === 'codex') {
+if(['codex','claude'].includes(tool)) {
  let prompt=''; process.stdin.on('data',b=>prompt+=b); process.stdin.on('end',()=>{
  s.calls.push({prompt,cwd:process.cwd(),args}); save();
  if(s.childReader) {
@@ -79,7 +79,11 @@ if(tool === 'codex') {
  if(['empty','partial'].includes(fault)) {console.log('HTTP/2.0 200 OK\\n\\n'+(fault==='partial'?'{\"id\":':''));process.exit(0);}
  if(typeof fault==='number') reply(fault,{message:s.writeErrorMessage??'synthetic'});
  const topicHasMain=()=>{try{git('--git-dir',s.remote,'merge-base','--is-ancestor','refs/heads/main','refs/heads/topic');return true}catch{return false}};
- if(name==='comments') {
+ if(route.endsWith('/git/commits')) {
+ const sha=cp.execFileSync('git',['--git-dir',s.remote,'commit-tree',body.tree,'-p',body.parents[0]],{input:body.message,encoding:'utf8'}).trim();s.createdCommit=sha;save();reply(201,{sha});
+ } else if(route.includes('/git/refs/heads/')) {
+ git('--git-dir',s.remote,'update-ref','refs/heads/topic',body.sha,s.headRefOid);s.headRefOid=body.sha;s.statusCheckRollup=[{status:'COMPLETED',conclusion:'SUCCESS'}];save();reply(200,{object:{sha:body.sha}});
+ } else if(name==='comments') {
  s.comments.push({body:body.body,pr:Number(route.split('/')[4]),author:{login:body.body.startsWith('DELIVERY VERIFIED')?(s.deliveryPublisher??'reviewer'):'reviewer'}});
  if(s.blockBeforeMerge&&body.body.startsWith('DELIVERY VERIFIED')) s.comments.push({body:'REVIEW: BLOCKED\\nReviewed-SHA: '+s.headRefOid,author:{login:'reviewer'}});
  if(s.advanceMainOnComment&&body.body.startsWith('DELIVERY VERIFIED')) {git('-C',s.checkout,'checkout','-q','main');fs.writeFileSync(s.checkout+'/late-main.txt','late');git('-C',s.checkout,'add','late-main.txt');git('-C',s.checkout,'commit','-qm','Late main');git('-C',s.checkout,'push','-q','origin','main');s.advanceMainOnComment=false;}
@@ -142,6 +146,7 @@ if(tool === 'codex') {
  const statuses=s.statuses??s.statusCheckRollup.filter(c=>c.__typename==='StatusContext').map((c,i)=>({id:i+1,context:c.context??'test',state:c.state?.toLowerCase()}));
  respond(statuses.slice((page-1)*pageSize,page*pageSize));
  }
+ else if(route.includes('/git/commits/')) respond({sha:s.headRefOid,tree:{sha:git('--git-dir',s.remote,'rev-parse',s.headRefOid+'^{tree}')},parents:[{sha:git('--git-dir',s.remote,'rev-parse',s.headRefOid+'^')}],message:'fixture'});
  else if(route.includes('/git/ref/heads/')) respond({ref:'refs/heads/'+decodeURIComponent(route.split('/git/ref/heads/')[1]),object:{type:'commit',sha:git('--git-dir',s.remote,'rev-parse','refs/heads/main')}});
  else if(route.includes('/rules/branches/main')) {
  const rules=s.rules??[{type:'required_status_checks',ruleset_id:1,parameters:{strict_required_status_checks_policy:true}}];
@@ -156,7 +161,7 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
  const root = await fs.mkdtemp(path.join(os.tmpdir(), "factory-delivery-"))
  t.after(() => fs.rm(root, { recursive: true, force: true }))
  const checkout = path.join(root, "checkout"), remote = path.join(root, "remote.git")
- const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid", FAKE_PR: path.join(root, "pr.json") }
+ const env = { ...process.env, FORCE_UPDATE: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid", FAKE_PR: path.join(root, "pr.json") }
  // Local Git identity is fixture-only; no inherited credentials or hooks.
  execFileSync("git", ["init", "--bare", remote], {env,stdio:"ignore"})
  execFileSync("git", ["clone", remote, checkout], {env,stdio:"ignore"})
@@ -166,7 +171,7 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
  g("checkout","-b","topic");await fs.writeFile(path.join(checkout,"feature.txt"),"feature\n");g("add","feature.txt");g("commit","-qm","Feature");g("push","-q","origin","topic")
  const head = g("rev-parse","HEAD");g("checkout","main")
  const tools=path.join(root,"tools");await fs.mkdir(tools)
- for(const name of ["gh","codex"]) await fs.writeFile(path.join(tools,name),fake,{mode:0o755})
+ for(const name of ["gh","codex","claude"]) await fs.writeFile(path.join(tools,name),fake,{mode:0o755})
  env.PATH=tools+path.delimiter+env.PATH
  const state={ remote,checkout,number:7,title:"Fixture PR",state:"OPEN",baseRefName:"main",isCrossRepository:false,headRefName:"topic",headRefOid:head,mergeStateStatus:"CLEAN",mergeable:"MERGEABLE",isDraft:false,author:{login:"builder"},comments:[],statusCheckRollup:[{status:"COMPLETED",conclusion:"SUCCESS"}],calls:[],ghCalls:[],builderNoPush:true,...overrides }
  await fs.writeFile(env.FAKE_PR,JSON.stringify(state))
@@ -188,7 +193,7 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
   })
  })
  const run=(...args)=>launch(process.execPath,[cli,config,...args])
- const wrapper=(name,...args)=>launch("sh",[fileURLToPath(new URL(`../deploy/orch/${name}.sh`,import.meta.url)),...args],
+ const wrapper=(name,...args)=>launch("sh",[fileURLToPath(new URL(`../deploy/orch/${name}.sh`,import.meta.url)),...args,...(["pr-loop","deliver"].includes(name)?["--foreground"]:[])],
    {...env,FACTORY_ROOT:fileURLToPath(new URL("../",import.meta.url)),FACTORY_PR_CONFIG:config})
  const approve=async (body,number=7,setupTimeoutMs=5000)=>{
   if(body) { const s=await read();s.comments.push({body,author:{login:"reviewer"}});await fs.writeFile(env.FAKE_PR,JSON.stringify(s));
@@ -2192,7 +2197,7 @@ for (const mode of ["full", "confirm"]) test(`PR52 finding 2: ${mode} review cap
  assert.equal(state.comments.length, mode === "confirm" ? 2 : 1)
 })
 
-// Orchestrator switchover: tiered review, release-pipeline envelope, FREEZE, the deliver lane and shadow mode.
+// Orchestrator switchover: tiered review, release-pipeline envelope, FREEZE, the detached deliver lane.
 const tierMap = tiers => ({schema_version:"review-tiers.v1",purpose:"fixture",provenance:"fixture",default_tier:1,
  rules:Object.entries(tiers).map(([pattern,tier],i)=>({id:"r"+i,tier,class:"adversarial",match:"path",pattern,why:"fixture"})),
  noise_exclusions:[{id:"n",match:"suffix",pattern:".lock",why:"fixture"}],never_exclude:[{id:"k",match:"prefix",pattern:".github/",why:"fixture"}]})
@@ -2283,21 +2288,6 @@ test("deliver lanes stay serial: concurrent lanes for one repository make one me
  const results=await Promise.all([f.run("deliver",repo,"--once"),f.run("deliver",repo,"--once")])
  assert.ok(results.every(r=>[0,75].includes(r.code)),JSON.stringify(results));assert.equal((await f.read()).ghCalls.filter(merges).length,1)
 })
-test("shadow records tier and would-decisions beside the old path, posts nothing, and captures the old outcome",async t=>{
- const f=await tiered(t,{"feature.txt":1})
- await f.approve("APPROVE\nReviewed-SHA: "+f.head+"\n\nlegacy reviewer")
- ok(await f.run("shadow",repo,"--once"))
- assert.equal((await f.read()).ghCalls.filter(a=>a.includes("-X")).length,0,"shadow never writes to GitHub")
- await assert.rejects(fs.readFile(path.join(f.stateDir,"queue.json")),{code:"ENOENT"})
- const s=await f.read();s.state="MERGED";s.mergeCommit={oid:f.head};await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
- ok(await f.run("shadow",repo,"--once"))
- const records=(await fs.readFile(path.join(f.stateDir,"shadow.jsonl"),"utf8")).split("\n").filter(Boolean).map(JSON.parse)
- assert.equal(records.length,2)
- assert.deepEqual([records[0].tier,records[0].wouldReview,records[0].wouldApprove,records[0].wouldMerge,records[0].legacy.verdict],[1,"none",true,true,"APPROVE"])
- assert.deepEqual([records[1].state,records[1].legacy.merged],["MERGED",true])
- const compare=JSON.parse(execFileSync(process.execPath,[fileURLToPath(new URL("../bin/delivery-shadow-compare.mjs",import.meta.url)),path.join(f.stateDir,"shadow.jsonl")],{encoding:"utf8"}))
- assert.deepEqual([compare.heads,compare.modelReviewsAvoided,compare.tier1Approval.agreePercent,compare.merge.agreePercent],[1,1,100,100])
-})
 test("a tier-1 deterministic block (red checks) clears deterministically once checks are green",async t=>{
  const f=await tiered(t,{"feature.txt":1});await f.approve("REVIEW: BLOCKED\nReviewed-SHA: "+f.g("rev-parse","main")+"\n\n1. Tier-1 deterministic review: hosted checks are not green\nReview-Tier: 1")
  ok(await f.run("review-pr",repo,"7"));const s=await f.read()
@@ -2337,4 +2327,81 @@ test("test-only tier-1 paths get a model review with their evidence intact",asyn
  assert.match(reviewed.calls[0].prompt,/0 code lines; 1 test lines/)
  assert.match(reviewed.workerInput.diff,/Code changes\n\(none\)\n\nTests \(evidence\)\ndiff --git a\/feature.txt/)
  assert.match(reviewed.comments[0].body,/^Review-Tier: 2$/m)
+})
+
+test('switchover: merge rule refusals stay queued beyond three attempts', async t => {
+ const f=await fixture(t);await f.approve();ok(await f.run('merge-enqueue',repo,'7',f.head))
+ let s=await f.read();s.writeFaults={merge:Array(10).fill(405)};await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ for(let i=0;i<5;i++) ok(await f.run('merge-queue',repo,'--once'))
+ const queue=JSON.parse(await fs.readFile(path.join(f.stateDir,'queue.json'),'utf8'))
+ assert.notEqual(queue[0].state,'acknowledged','a refused merge remains owned until merged or explicitly cancelled')
+ assert.ok(queue[0].attempts>=5)
+ s=await f.read();delete s.writeFaults;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(s))
+ ok(await f.run('merge-queue',repo,'--once'));assert.equal((await f.read()).state,'MERGED')
+})
+
+test('switchover: every dead end publishes one shared status line', async t => {
+ const f=await fixture(t);const config=await loadDeliveryConfig(f.config)
+ config.statusFile=path.join(f.root,'needs-orch.txt')
+ const adapter=createPrDeliveryAdapter(config,{env:f.env})
+ const result=await adapter.execute('enqueue',{repo,pr:7,head:f.head})
+ assert.equal(result.status,'fail')
+ const lines=(await fs.readFile(config.statusFile,'utf8')).trim().split('\n')
+ assert.equal(lines.length,1);assert.match(lines[0],/fixture\/new-repository#7.*enqueue.*code=4.*next=/)
+})
+
+test('switchover: disjoint approved PR merges without a main update or new review', async t => {
+ const f=await fixture(t,{rules:[{type:'required_status_checks',ruleset_id:1,parameters:{strict_required_status_checks_policy:false}}]});await f.approve();delete f.env.FORCE_UPDATE
+ await fs.writeFile(path.join(f.checkout,'disjoint.txt'),'main');f.g('add','disjoint.txt');f.g('commit','-qm','Disjoint main');f.g('push','-q','origin','main')
+ ok(await f.run('merge-one-core',repo,'7',f.head))
+ const s=await f.read();assert.equal(s.state,'MERGED');assert.equal(s.calls.length,0)
+ assert.equal(s.ghCalls.filter(a=>a.includes('-X')&&a.some(v=>v.endsWith('/update-branch'))).length,0)
+})
+
+test('switchover: canonical checkout can never be selected for a fixer', async t => {
+ const f=await fixture(t);f.g('checkout','topic')
+ const r=await f.run('fix-pr',repo,'7','-')
+ assert.notEqual(r.code,0);assert.match(r.stderr,/canonical checkout/)
+ assert.equal((await f.read()).calls.length,0)
+})
+
+test('switchover: cancelled checks retrigger through one empty Git API commit', async t => {
+ const f=await fixture(t,{statusCheckRollup:[{status:'COMPLETED',conclusion:'CANCELLED'}]})
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const result=await adapter.exclusive(repo,7,()=>adapter.execute('ci-retrigger',{repo,pr:7}))
+ assert.equal(result.status,'pass',JSON.stringify(result))
+ const s=await f.read();assert.notEqual(s.headRefOid,f.head)
+ assert.equal(execFileSync('git',['--git-dir',f.remote,'rev-parse',`${s.headRefOid}^{tree}`],{encoding:'utf8'}).trim(),f.g('rev-parse',`${f.head}^{tree}`))
+ assert.equal(s.ghCalls.filter(a=>a.includes('POST')&&a.some(v=>v.endsWith('/git/commits'))).length,1)
+ assert.equal(s.ghCalls.filter(a=>a.includes('PATCH')&&a.some(v=>v.includes('/git/refs/heads/'))).length,1)
+ assert.ok(s.ghCalls.every(a=>!a.includes('rerun')&&!a.includes('workflow')))
+ assert.equal((await adapter.execute('ci-retrigger',{repo,pr:7})).status,'pass')
+ assert.equal((await f.read()).ghCalls.filter(a=>a.includes('POST')&&a.some(v=>v.endsWith('/git/commits'))).length,1)
+})
+
+ test('switchover: spent primary budget dispatches one alternate builder and persists its stop',async t=>{
+ const f=await fixture(t,{}, {limits:{runsPer24h:1,slots:1,timeoutMs:5000}})
+ await fs.copyFile(path.join(f.root,'tools','codex'),path.join(f.root,'tools','claude'))
+ // The alternate executable follows the same test protocol, but has a distinct lane name.
+ let fakeClaude=await fs.readFile(path.join(f.root,'tools','claude'),'utf8')
+ fakeClaude=fakeClaude.replace("['codex','claude'].includes(tool)", "tool === 'claude'")
+ await fs.writeFile(path.join(f.root,'tools','claude'),fakeClaude,{mode:0o755})
+ await fs.mkdir(f.stateDir,{recursive:true});await fs.writeFile(path.join(f.stateDir,'usage.json'),JSON.stringify([{repo,pr:7,kind:'fix',at:Date.now()}]))
+ ok(await f.run('fix-pr',repo,'7','-'))
+ const s=await f.read();assert.equal(s.calls.length,1);assert.ok(s.calls[0].args.includes('opus'))
+ // A second fix on the moved head cannot repeat either the spent primary lane or escalation.
+ const second=await f.run('fix-pr',repo,'7','-');assert.equal(second.code,75)
+ assert.match(second.stderr,/ESCALATION ALREADY/);assert.equal((await f.read()).calls.length,1)
+ })
+
+test('normal lifecycle suspension writes one shared status line across repeats', async t => {
+ const f=await fixture(t)
+ const config=await loadDeliveryConfig(f.config)
+ config.statusFile=path.join(f.root,'status.txt')
+ const adapter=createPrDeliveryAdapter(config,{env:f.env})
+ const stop={cause:'rounds-exhausted',code:1,message:'UNRESOLVED after 3 rounds',resetAt:null}
+ for(let i=0;i<2;i++) assert.equal((await adapter.execute('pr:suspend',{repo,pr:7,head:f.head,stop})).status,'pass')
+ const lines=(await fs.readFile(config.statusFile,'utf8')).trim().split('\n')
+ assert.equal(lines.length,1)
+ assert.match(lines[0],/UNRESOLVED after 3 rounds.*next=/)
 })

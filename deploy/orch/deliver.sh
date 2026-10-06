@@ -1,2 +1,2 @@
 #!/bin/sh
-exec "$(dirname "$0")/factory-entry.sh" deliver "$@"
+exec "$(dirname "$0")/factory-entry.sh" deliver "$@" --detach

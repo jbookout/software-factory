@@ -5,10 +5,9 @@ import os from "node:os"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
-import { compareShadow } from "../src/delivery-shadow.mjs"
 
 const script = fileURLToPath(new URL("../scripts/orch/delivery-cutover.sh", import.meta.url))
-const legacy = ["review-pr.sh", "pr-loop.sh", "merge-queue.sh", "auto-enqueue.sh", "wait-green-enqueue.sh", "gate-merge.sh", "unstick.sh", "merge-queue-keepalive.sh"]
+const legacy = ["review-pr.sh", "pr-loop.sh", "merge-queue.sh", "auto-enqueue.sh", "wait-green-enqueue.sh", "shepherd.sh", "gate-merge.sh", "unstick.sh", "merge-queue-keepalive.sh"]
 
 async function orch(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "delivery-cutover-"))
@@ -18,22 +17,20 @@ async function orch(t) {
   for (const name of legacy) await fs.writeFile(path.join(old, name), `#!/bin/zsh\n# legacy ${name}\n`, { mode: 0o755 })
   await fs.writeFile(path.join(old, "merge-holds.txt"), "# <owner/repo> <title-regex> <reason>\n")
   await fs.writeFile(path.join(old, "merge-queue.txt"), "")
+  await fs.writeFile(path.join(old, "merge-queue.done"), "")
+  await fs.mkdir(path.join(old,"budget"))
   const config = path.join(root, "config.json")
-  await fs.writeFile(config, JSON.stringify({ stateDir: "state" }))
+  await fs.writeFile(config, JSON.stringify({ stateDir: "state", repos: {"jbookout/carr-system":{}} }))
   const run = (...args) => spawnSync("sh", [script, ...args], { encoding: "utf8",
     env: { ...process.env, OLD: old, CONFIG: config, CUTOVER_SIMULATE: "1", REPOS: "jbookout/carr-system" } })
   return { root, old, state, run }
 }
 
-test("shadow -> flip -> rollback moves files only and restores the legacy scripts byte for byte", async t => {
+test("direct flip -> rollback moves files only and restores the legacy scripts byte for byte", async t => {
   const { old, state, run } = await orch(t)
   const before = Object.fromEntries(await Promise.all(legacy.map(async n => [n, await fs.readFile(path.join(old, n), "utf8")])))
   assert.equal(run("status").stdout.trim(), "mode: legacy")
-  assert.equal(run("flip").status, 1, "flip requires a shadow phase first")
-
-  assert.equal(run("shadow").status, 0)
-  assert.match(await fs.readFile(path.join(old, "cutover-simulated.log"), "utf8"), /pr-delivery\.mjs' '.*' shadow 'jbookout\/carr-system'/)
-  for (const name of legacy) await fs.access(path.join(old, name)) // shadow touches no legacy file
+  assert.notEqual(run("shadow").status, 0, "there is no shadow cutover mode")
 
   const flip = run("flip"); assert.equal(flip.status, 0, flip.stderr)
   assert.equal(run("status").stdout.trim(), "mode: factory")
@@ -43,7 +40,7 @@ test("shadow -> flip -> rollback moves files only and restores the legacy script
   assert.match(await fs.readFile(path.join(old, "pr-loop.sh"), "utf8"), /factory-entry\.sh" deliver/, "installed wrapper replaces pr-loop.sh")
   await assert.rejects(fs.access(path.join(old, "gate-merge.sh")), { code: "ENOENT" }, "a legacy direct-merge path is moved aside")
   const log = await fs.readFile(path.join(old, "cutover-simulated.log"), "utf8")
-  assert.match(log, /import-legacy/); assert.match(log, /deliver\.sh 'jbookout\/carr-system'/); assert.match(log, /pkill -f '\(\^\|\/\| \)merge-queue-keepalive\.sh/)
+  assert.match(log, /import-legacy/); assert.match(log, /deliver jbookout\/carr-system --detach/); assert.match(log, /stop legacy processes/)
 
   await fs.writeFile(path.join(state, "queue.json"), JSON.stringify([
     { repo: "jbookout/carr-system", pr: 9, head: "a".repeat(40), note: "auto", outcome: null },
@@ -55,33 +52,46 @@ test("shadow -> flip -> rollback moves files only and restores the legacy script
   assert.equal(await fs.readFile(path.join(old, "merge-queue.txt"), "utf8"), `jbookout/carr-system 9 ${"a".repeat(40)} factory rollback: auto\n`)
   const kept = (await fs.readdir(path.join(old, "_to_delete"))).find(n => n.startsWith("factory-wrappers-"))
   await fs.access(path.join(old, "_to_delete", kept, "deliver.sh"))
-  assert.match(await fs.readFile(path.join(old, "cutover-simulated.log"), "utf8"), /nohup zsh merge-queue-keepalive\.sh/)
+  assert.match(await fs.readFile(path.join(old, "cutover-simulated.log"), "utf8"), /restart legacy merge-queue-keepalive\.sh/)
 })
 
 test("rollback refuses to overwrite a file that reappeared in the orchestrator directory", async t => {
   const { old, run } = await orch(t)
-  run("shadow"); run("flip")
+  run("flip")
   await fs.writeFile(path.join(old, "gate-merge.sh"), "new hand edit\n")
   const back = run("rollback")
   assert.notEqual(back.status, 0); assert.match(back.stderr, /gate-merge\.sh exists; refusing to overwrite/)
   assert.equal(await fs.readFile(path.join(old, "gate-merge.sh"), "utf8"), "new hand edit\n")
 })
 
-test("compare reports tier-1 and merge disagreements against the old path", () => {
-  const rec = (pr, head, open, legacy) => ({ schema: "factory-delivery-shadow/v1", repo: "r/x", pr, head, state: open ? "OPEN" : "MERGED", ...open, legacy })
-  const h = c => c.repeat(40)
-  const report = compareShadow([
-    rec(1, h("a"), { tier: 1, wouldReview: "none", wouldApprove: true, wouldMerge: true, frozen: false }, { verdict: "APPROVE", reviewedSha: h("a"), merged: false }),
-    rec(1, h("a"), null, { verdict: "APPROVE", reviewedSha: h("a"), merged: true }),
-    rec(2, h("b"), { tier: 1, wouldReview: "none", wouldApprove: true, wouldMerge: false, frozen: true }, { verdict: "REVIEW: BLOCKED", reviewedSha: h("b"), merged: false }),
-    rec(2, h("b"), null, { verdict: "REVIEW: BLOCKED", reviewedSha: h("b"), merged: true }),
-    rec(3, h("c"), { tier: 3, wouldReview: "full", wouldApprove: null, wouldMerge: false, frozen: false }, { verdict: null, reviewedSha: null, merged: false }),
-    rec(4, h("d"), { tier: 2, wouldReview: "focused", wouldApprove: null, wouldMerge: false, frozen: false }, { verdict: "APPROVE", reviewedSha: h("e"), merged: false }),
-  ])
-  assert.deepEqual(report.tiers, { 1: 2, 2: 1, 3: 1 })
-  assert.equal(report.modelReviewsAvoided, 2); assert.equal(report.focusedInsteadOfFull, 1)
-  assert.deepEqual(report.tier1Approval, { compared: 2, agreePercent: 50, disagreements: [`r/x#2@${"b".repeat(12)} shadow APPROVE / old REVIEW: BLOCKED`] })
-  assert.equal(report.merge.compared, 2); assert.equal(report.merge.agreePercent, 50)
-  assert.deepEqual(report.merge.mergedWhileFrozen, [`r/x#2@${"b".repeat(12)}`])
-  assert.equal(report.pending, 2)
+test("cutover carries queue, budget and in-flight PR state and rollback restores it",async t=>{
+ const {old,state,run}=await orch(t)
+ await fs.mkdir(path.join(old,"locks"))
+ const line=`jbookout/carr-system 1536 ${"a".repeat(40)} approved`
+ await fs.writeFile(path.join(old,"merge-queue.txt"),line+"\n")
+ await fs.writeFile(path.join(old,"merge-queue.done"),"")
+ await fs.writeFile(path.join(old,"loop-carr-system-1536.log"),"BUDGET-STOP\n")
+ await fs.writeFile(path.join(old,"locks/pr-loop-carr-system-1536.pid"),"12345\n")
+ await fs.writeFile(path.join(old,"budget/carr-system-1536.log"),`${Math.floor(Date.now()/1000)} fix\n`)
+ const flip=run("flip");assert.equal(flip.status,0,flip.stderr)
+ assert.equal(JSON.parse(await fs.readFile(path.join(state,"queue.json")))[0].pr,1536)
+ assert.equal(Object.values(JSON.parse(await fs.readFile(path.join(state,"inflight.json"))))[0].lastStatus,"BUDGET-STOP")
+ assert.equal(JSON.parse(await fs.readFile(path.join(state,"usage.json"))).length,1)
+ assert.match(await fs.readFile(path.join(old,"cutover-simulated.log"),"utf8"),/stop launchd jobs/)
+ assert.equal(run("rollback").status,0)
+ assert.equal((await fs.readFile(path.join(old,"merge-queue.txt"),"utf8")).trim(),line)
+})
+
+test('interrupted rollback retains restored scripts when installation receipt has moved', async t => {
+ const {old,run}=await orch(t)
+ const before=await fs.readFile(path.join(old,'pr-loop.sh'),'utf8')
+ assert.equal(run('flip').status,0)
+ const record=JSON.parse(await fs.readFile(path.join(old,'delivery-cutover.json')))
+ const partial=path.join(old,'_to_delete','partial-rollback');await fs.mkdir(partial)
+ await fs.rename(path.join(old,'.factory-orch.json'),path.join(partial,'.factory-orch.json'))
+ await fs.rename(path.join(old,'pr-loop.sh'),path.join(partial,'pr-loop.sh'))
+ await fs.rename(path.join(record.backup,'pr-loop.sh'),path.join(old,'pr-loop.sh'))
+ const result=run('rollback');assert.equal(result.status,0,result.stderr)
+ assert.equal(await fs.readFile(path.join(old,'pr-loop.sh'),'utf8'),before)
+ assert.equal(run('status').stdout.trim(),'mode: legacy')
 })

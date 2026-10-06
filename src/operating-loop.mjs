@@ -366,11 +366,21 @@ export async function runPrDelivery(job, adapter) {
   }
   for (let round = 0; round < rounds; round++) {
     const inspect = await execute("pr:inspect")
-    if (inspect.status !== "pass") return stopped(inspect)
+    if (inspect.status !== "pass") {
+      if (inspect.data.cause !== "budget-exhausted" || !inspect.data.builderEscalation) return stopped(inspect)
+      const escalation = await execute("fix")
+      if (escalation.status !== "pass") return stopped(escalation)
+      const review = await execute("review")
+      if (review.status !== "pass") return stopped(review)
+      continue
+    }
     if (inspect.data.merged) return complete(inspect.data.message)
     if (inspect.data.ready) return complete("APPROVED")
-    if (inspect.data.approved && !inspect.data.repairable)
-      return { code: 75, message: "WAIT: no observed failed required check; resolve mergeability before delivery", events }
+    if (inspect.data.approved && !inspect.data.repairable) {
+      const stop = {cause:"slot-wait",code:75,message:"WAIT: no observed failed required check; resolve mergeability before delivery",resetAt:null}
+      await adapter.execute("pr:suspend",{...request,head:inspect.data.head,stop})
+      return {...stop,events}
+    }
     if (inspect.data.approved || inspect.data.blocked) {
       const repair = await execute(inspect.data.approved ? "ci-fix" : "fix")
       if (repair.status !== "pass") return stopped(repair)
