@@ -6,6 +6,8 @@ const classes = {
   browser:['python3','capabilities/jev-browser-select/test_select.py'],
   orchestration:['python3','-m','unittest','discover','-s','test/orch','-p','test_*.py','-v']
 }
+const defaultClasses=Object.keys(classes)
+classes.formatter=[process.execPath,'capabilities/oxfmt-qualification/qualify.mjs']
 const args=process.argv.slice(2)
 const focused=args[0]==='node' && args.length>1 && !args.slice(1).every(name=>Object.hasOwn(classes,name))
 const selected=focused?['node']:args
@@ -17,7 +19,7 @@ process.on('SIGINT',cancel);process.on('SIGTERM',cancel)
 let admission
 try {
   admission=await reserveCheck({budget:new Deadline(3600_000,{phase:'check-admission',signal:controller.signal})})
-  for(const name of selected.length?selected:Object.keys(classes)) {
+  for(const name of selected.length?selected:defaultClasses) {
     if(!classes[name])throw new Error(`unknown check class ${name}`)
     const attempt=await runVerification({cwd:process.cwd(),producer:process.env.FACTORY_PRODUCER ?? `local-check:${process.pid}`,
       argv:classes[name],admission,signal:controller.signal})
