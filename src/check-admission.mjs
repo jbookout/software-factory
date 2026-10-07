@@ -47,10 +47,11 @@ export async function reserveCheck({ root = process.env.FACTORY_HEAVY_CHECK_DIR 
   const token = randomUUID(), file = path.join(queue, `${token}.json`), began = monotonicNow()
   const election = fn => withLease(root, 'check-election', fn, { budget, waitMs: Math.ceil(budget.remaining()), pollMs })
   const rows = async () => {
-    const result = []
+    const result = [], missing = Symbol("missing queue entry")
     for (const entry of await fs.readdir(queue)) {
       if (!entry.endsWith('.json')) continue
-      const record = await readJson(path.join(queue, entry), null)
+      const record = await readJson(path.join(queue, entry), missing)
+      if (record === missing) continue
       if (!record || !Number.isSafeInteger(record.pid) || record.pid < 1 || !Number.isSafeInteger(record.ticket) ||
           record.ticket < 1 || `${record.token}.json` !== entry || !['waiting', 'active'].includes(record.status))
         throw new Error('check queue metadata is invalid')

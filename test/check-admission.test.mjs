@@ -93,12 +93,32 @@ test('nested workers reuse the owned lease and cannot release the outer slot', a
   await assert.rejects(reserveCheck({ ...options, inherited: outer.env.FACTORY_CHECK_CONTEXT }), /no longer owned/)
 })
 
+test('release between queue listing and metadata read is a benign missing entry', async t => {
+  const options = await fixture(t, 1), active = await reserveCheck(options)
+  const queue = path.join(await fs.realpath(options.root), 'queue'), original = fs.readdir
+  let interleaved = false
+  try {
+    fs.readdir = async (directory, ...args) => {
+      const names = await original(directory, ...args)
+      if (directory === queue && !interleaved) { interleaved = true; await active.release() }
+      return names
+    }
+    const successor = await reserveCheck(options)
+    assert.equal(interleaved, true)
+    await successor.release()
+  } finally { fs.readdir = original; await active.release() }
+})
+
 test('invalid inherited context and corrupt queue metadata fail closed', async t => {
   const options = await fixture(t)
   await assert.rejects(reserveCheck({ ...options, inherited: '{}' }), /capacity mismatch/)
   await fs.mkdir(path.join(options.root, 'queue'), { recursive: true })
   await fs.writeFile(path.join(options.root, 'queue/bad.json'), '{"pid":"untrusted"}')
   await assert.rejects(reserveCheck(options), /metadata is invalid/)
+  await fs.writeFile(path.join(options.root, 'queue/bad.json'), 'null')
+  await assert.rejects(reserveCheck(options), /metadata is invalid/)
+  await fs.writeFile(path.join(options.root, 'queue/bad.json'), '{')
+  await assert.rejects(reserveCheck(options), /invalid delivery state JSON/)
 })
 
 test('resource evidence counts only the owned process tree and discloses sample errors', async () => {
