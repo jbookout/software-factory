@@ -54,7 +54,9 @@ async function assertCoincidentStems(page,selector,input) {
   for(const record of records){const group=records.filter(other=>other.locator.lat===record.locator.lat && other.locator.lon===record.locator.lon).map(record=>ends.find(end=>end.id===record.id)).filter(Boolean);if(group.length<2)continue;assert.ok(group.some(end=>end.stem),'coincident labels need visible stems');for(const end of group)assert.ok(Math.abs(end.x-group[0].x)<3 && Math.abs(end.y-group[0].y)<3,'stems retain the same original geographic anchor');}
 }
 export async function acceptBrowserSite({directory,negativeChecks=true,screenshots,offlineFixture=false}={}) {
-  const files=path.resolve(directory), input=JSON.parse(await fs.readFile(path.join(files,'presentation.json'),'utf8'));
+  const files=path.resolve(directory), raw=JSON.parse(await fs.readFile(path.join(files,'presentation.json'),'utf8'));
+  const contextProperties=raw.properties.filter(record=>record.status==='context');
+  const input={...raw,properties:raw.properties.filter(record=>record.status!=='context')};
   let state={version:0,selected_ids:[],notes:'',property_notes:{},updated_at:null,csrf_token:'synthetic-csrf'}, failService=false, conflictNext=false;
   const server=createServer(async(request,response)=>{
     try {
@@ -123,6 +125,9 @@ export async function acceptBrowserSite({directory,negativeChecks=true,screensho
         await assertCoincidentStems(page,'#purchase-map .map-pin, #purchase-map .map-practice',input);
         for(let i=0;i<input.properties.length;i++)if(input.properties[i].locator){await page.locator(`#purchase-map [data-entity-id="${input.properties[i].id}"]`).hover();await page.locator('#purchase-map .map-pin-preview').waitFor({state:'visible'});if(input.properties[i].image)await assertImages(page,'#purchase-map .map-pin-preview img',{pixelCoverage:offlineFixture});await page.mouse.move(1,1);}
       }
+      assert.equal(await page.locator('#market-context .market-context-card').count(),contextProperties.length);
+      if(contextProperties.some(record=>record.image))await assertImages(page,'#market-context img',{pixelCoverage:offlineFixture});
+      for(const record of contextProperties)assert.equal(await page.locator(`#purchase-map .map-pin[data-entity-id="${record.id}"]`).count(),0,'context records remain outside the candidate map');
       if(input.currentPractice)assert.equal(await page.locator(`#${input.properties.length?'purchase':'development'}-map .map-practice .pin-stem`).count(),1);
       if(input.market.purchaseScreening?.length)assert.equal(await page.locator('#purchase-screening article').count(),input.market.purchaseScreening.length);
       await page.locator(`#${transaction} .next-action a`).click();await page.locator('#tour').waitFor({state:'visible'});
@@ -145,6 +150,7 @@ export async function acceptBrowserSite({directory,negativeChecks=true,screensho
       assert.match(await page.locator('#property-dialog-content').innerText(),/Property review/);assert.equal(await page.locator('#property-dialog-content a[href*="listing"]').count(),0);
       const label=await page.locator('#property-dialog .property-number').boundingBox(),bar=await page.locator('#property-dialog .project-dialog-bar').boundingBox();assert.ok(label.y>=bar.y+bar.height,'option label below toolbar');
       await page.locator('#property-dialog [data-toggle]').click();await page.keyboard.press('Escape');await page.locator('#site-nav a[href="#tour"]').click();await page.locator("#tour").waitFor({state:"visible"});
+      for(const record of contextProperties)assert.equal(await page.locator(`#tour [data-property-id="${record.id}"]`).count(),0,'context records remain outside the Tour List');
       const id=input.properties[0]?.id || input.leases[0].id;assert.equal(await page.locator(`#tour-selected [data-remove="${id}"]`).count(),1);
       const columns=await page.locator('.tour-layout>section').evaluateAll(nodes=>nodes.map(n=>{const b=n.getBoundingClientRect();return{x:b.x,y:b.y};}));assert.ok(device==='desktop'?columns[1].x>columns[0].x:columns[1].y>columns[0].y,JSON.stringify({device,columns}));
       if(device==='desktop') {
@@ -164,6 +170,7 @@ export async function acceptBrowserSite({directory,negativeChecks=true,screensho
       }
       if(input.strategy.mode==='owner_occupancy_30_70') {
         await page.locator('#site-nav a[href="#strategy"]').click();await page.locator('#strategy').waitFor({state:'visible'});
+        for(const record of contextProperties)assert.equal(await page.locator(`#strategy [data-preview="${record.id}"]`).count(),0,'context records remain outside ownership comparisons');
         assert.equal(await page.locator('#strategy .presentation-stage').count(),4);
         assert.equal(await page.locator('#strategy .strategy-benefit').count(),4);
         assert.equal(await page.locator('#allocation-spaces .allocation-space-row').count(),input.properties.length);
@@ -232,8 +239,10 @@ export async function acceptBrowserSite({directory,negativeChecks=true,screensho
 }
 export async function qualifyFixtures({screenshots}={}) {
   const temporary=await fs.mkdtemp(path.join(os.tmpdir(),'presentation-browser-')),runs=[];
-  for(const name of ['owner-occupancy','owner-occupancy-30-70','lease-only']) {
-    const data=JSON.parse(await fs.readFile(path.join(root,'test/fixtures',`${name}.json`),'utf8'));
+  for(const name of ['owner-occupancy','owner-occupancy-30-70','lease-only','mixed-context-30-70']) {
+    const fixture=name==='mixed-context-30-70'?'owner-occupancy-30-70':name;
+    const data=JSON.parse(await fs.readFile(path.join(root,'test/fixtures',`${fixture}.json`),'utf8'));
+    if(name==='mixed-context-30-70')data.properties.unshift({...structuredClone(data.properties[0]),id:'example-context-reference',name:'Example context reference',status:'context'});
     data.feedback={mode:'shared',endpoint:'/api/selection'};
     if(name==='owner-occupancy')data.currentPractice.locator={...data.properties[0].locator};
     for(const entity of [...data.properties,...data.leases,...data.developments])entity.image='synthetic.png';
