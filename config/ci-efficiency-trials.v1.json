@@ -1,0 +1,97 @@
+{
+  "schema": "factory-ci-efficiency-trials/v1",
+  "request_source": "https://x.com/PaulSangleF/status/2107465723513561197",
+  "scope": "Source-only trials through existing check entrypoints; no paid capacity, shared hook activation, deployment, account or security changes.",
+  "decision_policy": "Every technique must be implemented or trialed. A rejection requires a source-bound attempt receipt, concrete failed acceptance criterion and measured result. Low ROI or absent pnpm, Vercel or Prettier is not evidence of inapplicability.",
+  "coverage_policy": "Retain full required CI coverage, local compiler checks, existing producer/source/log receipt validation, all five shadcn diagnostic contract assertions and every configured lint rule.",
+  "trials": [
+    {
+      "id": 1, "technique": "Oxlint replacing applicable ESLint rules with diagnostic parity", "status": "planned",
+      "entrypoints": ["software-factory/npm run check", "software-factory/test/shadcn-lint.test.mjs"],
+      "trial": "Inventory the active rules and fixture diagnostics; pin Oxlint; compare normalized rule, severity, source range, message and repair guidance over clean and seeded-invalid fixtures. Trial native rules and supported JS plugins; retain the ESLint adapter for any unqualified custom rule.",
+      "acceptance": "No lost required diagnostic, unchanged clean acceptance, measured cold/warm time and RSS; replace only qualified rules. Test all six configured shadcn policies and all five current invalid-fixture assertions.",
+      "evidence": [], "reject_if": "An executed parity fixture proves a missing or incorrect required diagnostic that cannot be repaired in the bounded adapter trial.",
+      "sources": ["https://oxc.rs/docs/guide/usage/linter.html"]
+    },
+    {
+      "id": 2, "technique": "Oxfmt formatter", "status": "planned",
+      "entrypoints": ["existing repository check commands"],
+      "trial": "Pin Oxfmt and format a copied representative JS, MJS, TS, TSX, JSON, YAML, HTML and CSS corpus. Compare existing output where a formatter exists; otherwise qualify idempotence, parser validity and bounded existing-style changes without introducing Prettier or pnpm solely for comparison.",
+      "acceptance": "Idempotent output, unchanged runtime/contract tests, explicit supported-file inventory, measured cold/warm wall time and RSS; keep unsupported syntax on its current checker.",
+      "evidence": [], "reject_if": "A retained corpus demonstrates syntax, semantics or required-plugin incompatibility after the bounded configuration trial.",
+      "sources": ["https://oxc.rs/docs/guide/usage/formatter.html"]
+    },
+    {
+      "id": 3, "technique": "Type-aware lint in CI with actual compiler checks retained locally", "status": "planned",
+      "entrypoints": ["software-factory/npm run check", "CARR/ops/ci.sh types"],
+      "trial": "Add pinned Oxlint type-aware/type-check shadow checks over real TS consumer fixtures and seeded unsafe assignments/promises. Retain local tsc, current CI compiler checks and all non-TS compiler checks while comparing diagnostics. Qualify the TS7-powered CI path before any replacement.",
+      "acceptance": "Compiler/type-aware diagnostic parity on real and invalid consumers, full retained compiler coverage, lower measured duplicate work; unsupported configs get a full compiler fallback.",
+      "evidence": [], "reject_if": "A measured corpus proves an uncovered compiler error or incompatible required TS configuration after adapter testing.",
+      "sources": ["https://oxc.rs/docs/guide/usage/linter/type-aware.html"]
+    },
+    {
+      "id": 4, "technique": "Post-edit autoformat", "status": "planned",
+      "entrypoints": ["worktree-local developer edit workflow"],
+      "trial": "Use qualified Oxfmt on explicitly edited supported files in an opt-in owned-worktree wrapper. Trial symlink, deleted-file, concurrent edit, ignored-file and formatter-failure cases. Generate shared-hook configuration for review without installing or activating it.",
+      "acceptance": "Only the owned edited paths change, repeated formatting is stable, failures are visible and concurrent edits are preserved; no shared hook or live V1 source is touched.",
+      "evidence": [], "reject_if": "An actual edit replay shows corruption, unintended file changes or an unrepairable race.",
+      "sources": ["https://oxc.rs/docs/guide/usage/formatter.html"]
+    },
+    {
+      "id": 5, "technique": "Native TS7 LSP", "status": "planned",
+      "entrypoints": ["owned-worktree language-service harness"],
+      "trial": "Pin Microsoft's native compiler/LSP release and launch it in a disposable harness. Replay initialize/open/edit/diagnostics/definition/rename/shutdown against real exported consumer types; compare current language-service results. Prepare editor configuration without changing shared editor or agent settings.",
+      "acceptance": "Required diagnostics and navigation/rename results match, edit responses and RSS are measured, cancellation/shutdown leave no worker behind; disclose the upstream LSP implementation status.",
+      "evidence": [], "reject_if": "An executed required-language-service case fails after bounded configuration repair.",
+      "sources": ["https://github.com/microsoft/typescript-go"]
+    },
+    {
+      "id": 6, "technique": "One existing check entrypoint with bootstrap and affected checks plus full fallback", "status": "planned",
+      "entrypoints": ["software-factory/npm run check", "CARR/ops/ci.sh", "doctorcre-app/existing package check scripts"],
+      "trial": "Extend existing commands rather than add a competing checker. Bootstrap missing dependencies using frozen locks in the owned checkout and create missing env templates from checked-in placeholders without credentials. Compute changed-path impact for lint/types/tests; unknown, deleted, config, dependency or unresolved graph changes trigger the full current command.",
+      "acceptance": "Missing-runtime/template fixtures recover deterministically, affected selection is source-bound and seeded dependency changes are caught; full required hosted checks remain complete and callers retain explicit full mode.",
+      "evidence": [], "reject_if": "A measured impact/bootstrap fixture misses required coverage or changes another checkout despite bounded repair.",
+      "sources": []
+    },
+    {
+      "id": 7, "technique": "Shared maximum three heavy checks across worktrees", "status": "trial",
+      "entrypoints": ["software-factory/npm run check"],
+      "trial": "Reuse existing supervisor-bound leases with FIFO check tickets, a limit of three whole checks and inherited ownership for nested workers. Bind queue/wall time and owned-process RSS/CPU samples to existing verification receipts. Run deterministic fairness/cancellation/dead-owner/nesting fixtures and actual check entrypoint trials in multiple owned worktrees. Product-local adapters follow qualification without requiring the factory at product runtime.",
+      "acceptance": "At most three admitted whole checks, FIFO registered waiters, cancellation retires its own claim, live owners are never age-evicted, dead owners recover, nested workers cannot free the outer slot, and receipts retain source/log integrity. Existing CARR gate pool four and app/factory Node pool two remain intact.",
+      "evidence": [], "reject_if": "Controlled trials show starvation, leaked/over-admitted leases, ownership errors or an unrepairable full-check regression.",
+      "sources": []
+    },
+    {
+      "id": 8, "technique": "Direct official-release installer instead of npm tool bootstrap", "status": "planned",
+      "entrypoints": ["owned-worktree tool bootstrap"],
+      "trial": "Use official pinned release artifacts for tools that publish them, verify supplied checksums/signatures and target architecture, and compare clean-cache install time with the current npm bootstrap. Install only into an owned trial tool directory; when an official binary is unavailable, trial the smallest official source/build equivalent and record the actual result.",
+      "acceptance": "Identical pinned tool behavior, verified provenance/integrity, measured installation time and no global PATH, credentials or security-setting changes.",
+      "evidence": [], "reject_if": "The attempted official path has unavailable artifacts, unverifiable integrity or failed platform/behavior qualification.",
+      "sources": ["https://github.com/oxc-project/oxlint/releases", "https://github.com/microsoft/typescript-go", "https://docs.astral.sh/uv/getting-started/installation/"]
+    },
+    {
+      "id": 9, "technique": "Appropriately sized 16GB typecheck runner trial", "status": "planned",
+      "entrypoints": ["software-factory/scripts/ci-runner-benchmark.mjs", "existing standard hosted CI"],
+      "trial": "Reuse the existing runner benchmark's source and retained-log binding. Confirm actual runner memory and run the exact type-consumer command on existing public standard Ubuntu capacity, which GitHub documents as 16GB; compare local/resource receipts and available baseline runner results. Do not provision paid larger runners.",
+      "acceptance": "Exact source/command parity, observed memory capacity, measured wall time/peak RSS/no OOM and retained full tests. If the existing account cannot supply the profile, record an actual eligibility failure and trial an owned 16GB process-memory envelope without claiming it equals a hosted runner.",
+      "evidence": [], "reject_if": "Observed runner eligibility/capacity or an executed exact-source typecheck fails the declared target.",
+      "sources": ["https://docs.github.com/en/actions/reference/runners/github-hosted-runners"]
+    },
+    {
+      "id": 10, "technique": "TS7 build and consumer typechecking", "status": "planned",
+      "entrypoints": ["software-factory/typecheck", "existing build/check consumers"],
+      "trial": "Run pinned native TS7 against existing declared exports and real consumer fixtures, seeded invalid consumers, JS/JSDoc inputs, declaration emit and project-reference build cases. Compare current TS6 command output and downstream consumption without migrating the package manager.",
+      "acceptance": "No missing required diagnostic, compatible declarations/build outputs and unchanged consumers, measured cold/incremental wall time and RSS; preserve current compiler fallback for unqualified cases.",
+      "evidence": [], "reject_if": "A concrete required declaration/build/consumer case fails after a bounded adapter/configuration trial.",
+      "sources": ["https://github.com/microsoft/typescript-go"]
+    },
+    {
+      "id": 11, "technique": "Previews only for DB-changing PRs with on-demand option and full CI retained", "status": "planned",
+      "entrypoints": ["CARR/current DB preview workflow", "doctorcre-app/current Cloudflare preview/release tooling"],
+      "trial": "Source-only diff classification fixtures identify migrations/schema/DB contracts, including renames/deletions and unknown-impact fallback. Generate the equivalent existing-provider preview selector, with explicit on-demand dispatch, without adding Vercel or deploying. Run retained complete CI for every PR; only automatic preview provisioning is conditional.",
+      "acceptance": "Every seeded DB change requests a preview, explicit on-demand requests work for non-DB changes, uncertain impact is conservative and all required CI/E2E coverage is retained. Actual branch/preview provisioning waits for specific approval.",
+      "evidence": [], "reject_if": "Executed classification/provider-adapter fixtures miss a DB change, lose on-demand behavior or weaken required CI.",
+      "sources": []
+    }
+  ]
+}

@@ -1470,7 +1470,7 @@ test('retro 7: recovery refuses a still-running check and resumes only after obs
 async function installedFixture(f) {
  const source=path.join(f.root,'factory-source'),installed=path.join(f.root,'installed')
  git(f.checkout,'clone','--quiet','--no-hardlinks',fileURLToPath(new URL('../',import.meta.url)),source)
- const names=['src/local-verification.mjs','src/review-evidence.mjs','src/orch-installation.mjs','bin/orch-install.mjs','src/github-snapshot.mjs','src/evidence.mjs','src/pr-delivery-state.mjs','src/pr-delivery.mjs','src/pr-delivery-prompts.mjs',
+ const names=['src/local-verification.mjs','src/check-resources.mjs','src/review-evidence.mjs','src/orch-installation.mjs','bin/orch-install.mjs','src/github-snapshot.mjs','src/evidence.mjs','src/pr-delivery-state.mjs','src/pr-delivery.mjs','src/pr-delivery-prompts.mjs',
    'src/process-group.mjs','src/process-runner.mjs','src/process-launcher.mjs','src/process-supervisor.mjs','bin/pr-delivery.mjs',
    'deploy/orch/factory-verify.mjs','deploy/orch/factory-entry.sh','deploy/orch/test-browser.sh','deploy/orch/branch-wt.sh','deploy/orch/merge-enqueue.sh']
  for(const name of names){await fs.copyFile(fileURLToPath(new URL('../'+name,import.meta.url)),path.join(source,name))}

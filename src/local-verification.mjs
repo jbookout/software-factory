@@ -5,6 +5,8 @@ import os from 'node:os'
 import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { runProcess, validateProcessRequest } from './process-runner.mjs'
+import { monotonicNow } from './deadline.mjs'
+import { observeCheckResources } from './check-resources.mjs'
 
 const digest = bytes => createHash('sha256').update(bytes).digest('hex')
 const missing = error => { if (error.code === 'ENOENT') return null; throw error }
@@ -104,9 +106,10 @@ export async function readVerification(file,expected,receiptDigest) {
     throw new Error('verification log digest mismatch')
   await verifySource(expected)
   if (!Number.isInteger(receipt.code)) throw new Error('verification exit status missing')
-  return {...expected,code:receipt.code,log:receipt.log,receiptDigest}
+  return {...expected,code:receipt.code,log:receipt.log,receiptDigest,
+    ...(receipt.metrics ? { metrics: receipt.metrics } : {})}
 }
-export async function runVerification({cwd,producer,argv,attempt,timeoutMs=3600_000}) {
+export async function runVerification({cwd,producer,argv,attempt,timeoutMs=3600_000,admission,signal}) {
   attempt ??= await allocateVerification({cwd,producer,argv})
   const {binding,log,receipt,directory}=attempt
   if (binding.cwd!==path.resolve(cwd) || binding.producer!==producer || JSON.stringify(binding.argv)!==JSON.stringify(argv))
@@ -115,10 +118,19 @@ export async function runVerification({cwd,producer,argv,attempt,timeoutMs=3600_
   await verifySource(binding)
   const handle=await fs.open(log,'wx',0o600)
   await handle.close()
-  const result=await runProcess(argv,{cwd,env:{...process.env,TMPDIR:directory,FACTORY_ATTEMPT_DIR:directory},
-    timeoutMs,captureOutput:false,onOutput:chunk=>appendFileSync(log,chunk)})
+  const began=monotonicNow()
+  let stopResources, resources, result
+  try {
+    result=await runProcess(argv,{cwd,env:{...process.env,...admission?.env,TMPDIR:directory,FACTORY_ATTEMPT_DIR:directory},
+      timeoutMs,signal,captureOutput:false,onOutput:chunk=>appendFileSync(log,chunk),
+      onSpawn:async(job,bindingSignal)=>{
+        if(admission)stopResources=observeCheckResources(job.pid)
+        return admission?.bindJob(job,bindingSignal)
+      }})
+  } finally { resources=await stopResources?.() }
+  const metrics=admission ? {...admission.metrics,elapsedMs:monotonicNow()-began,resources} : undefined
   const bytes=JSON.stringify({schema:'factory-verification/v1',binding,code:result.code,
-    log,logDigest:digest(await fs.readFile(log))})
+    log,logDigest:digest(await fs.readFile(log)),...(metrics ? { metrics } : {})})
   await fs.writeFile(receipt,bytes,{flag:'wx',mode:0o600})
   const receiptDigest=digest(bytes)
   await readVerification(receipt,binding,receiptDigest)
