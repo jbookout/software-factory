@@ -2542,19 +2542,19 @@ test('PR63 repair: a later malformed PR observation retains earlier approved pro
 })
 
 for(const overrides of [{listOmitBaseRef:true},{listOverrides:{title:null}},{listOverrides:{number:0}},{listOverrides:{draft:null}},{listOverrides:{head:{sha:'bad'}}}])
- test('PR63 repair: incomplete pull list fails smoke and preserves pending intent: '+JSON.stringify(overrides),async t=>{
+ for(const step of ['delivery-smoke','delivery-scan'])
+ test('PR63 repair: incomplete pull list independently fails '+step+' and preserves pending intent: '+JSON.stringify(overrides),async t=>{
  const f=await fixture(t,overrides)
  await fs.mkdir(f.stateDir,{recursive:true})
  const jobs={[keyFor(repo,999)]:{repo,pr:999,head:f.head,status:'pending',source:'discovery'}}
  await fs.writeFile(path.join(f.stateDir,'inflight.json'),JSON.stringify(jobs))
  const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
- for(const step of ['delivery-smoke','delivery-scan']){
-  const result=await adapter.execute(step,{repo})
-  assert.equal(result.status,'fail',JSON.stringify(result))
-  assert.match(result.data.message,/invalid GitHub (?:observation shape|pull-list response)/)
-  assert.deepEqual(JSON.parse(await fs.readFile(path.join(f.stateDir,'inflight.json'))),jobs)
- }
+ const result=await adapter.execute(step,{repo})
+ assert.equal(result.status,'fail',JSON.stringify(result))
+ assert.match(result.data.message,/invalid GitHub (?:observation shape|pull-list response)/)
+ assert.deepEqual(JSON.parse(await fs.readFile(path.join(f.stateDir,'inflight.json'))),jobs)
  await assert.rejects(fs.access(path.join(f.stateDir,'discovery',encodeURIComponent(repo)+'.json')),{code:'ENOENT'})
  const state=await f.read();assert.equal(state.calls.length,0)
+ assert.ok(state.ghCalls.some(a=>a[0]==='api'&&a[1].includes('/pulls?state=open')), 'must read the malformed list, not stop at a prior hold')
  assert.ok(state.ghCalls.every(a=>a[0]==='api'&&!a.includes('-X')))
 })
