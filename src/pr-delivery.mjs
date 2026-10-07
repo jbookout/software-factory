@@ -8,7 +8,6 @@ import { AsyncLocalStorage } from "node:async_hooks"
 import { Deadline, DeadlineError, waitForCondition, validDuration } from "./deadline.mjs"
 import fs from "node:fs/promises"
 import path from "node:path"
-import os from "node:os"
 import { fileURLToPath } from "node:url"
 import { createHash, randomUUID } from "node:crypto"
 import { reserveCompute } from "./process-capacity.mjs"
@@ -22,6 +21,7 @@ import { createGithubProvider, parseReview, latestTrustedReview } from "./github
 import { DeliveryError, keyFor, readJson, writeJson, withLease, reserveCodex, deliveryWait, completeDeliveryWait, orphanLeaseCount } from "./pr-delivery-state.mjs"
 import { decideReview, assembleReviewDiff } from "./review-tiers.mjs"
 import { readHolds, holdFor, freezeFor } from "./merge-holds.mjs"
+import { deliveryStateDir } from "../deploy/orch/factory-verify.mjs"
 
 const DEFAULT_MODELS = fileURLToPath(new URL("../config/delivery-models.v1.json", import.meta.url))
 const MODEL_ROLES = ["review-tier2", "review-tier3", "fix", "ci-fix"]
@@ -59,6 +59,15 @@ export function tierOneVerdict(head, base, route, ci) {
 // a tier-1 deterministic block (red checks) clears deterministically.
 const dispatchTier = (route, prior) => route.tier === 1 && prior && !/^Review-Tier: 1$/m.test(prior.body) ? 2 : route.tier
 
+// Both admission smoke and discovery require the fields discovery consumes.
+function validatePullListRow(repo, row) {
+  if (!Number.isSafeInteger(row.number) || row.number <= 0 || typeof row.draft !== 'boolean' ||
+      typeof row.title !== 'string' || typeof row.base?.ref !== 'string' || !row.base.ref.trim() ||
+      row.base?.repo?.full_name !== repo || !SHA.test(row.head?.sha ?? '') || !SHA.test(row.base?.sha ?? '') ||
+      row.comments !== undefined && (!Number.isSafeInteger(row.comments) || row.comments < 0))
+    throw new DeliveryError('invalid GitHub pull-list response')
+}
+
 export async function loadDeliveryConfig(file) {
   const value = await readJson(file)
   if (!value || !value.repos || !Object.keys(value.repos).length) throw new DeliveryError("config.repos is required", 9)
@@ -67,7 +76,10 @@ export async function loadDeliveryConfig(file) {
     if (typeof p !== "string" || !p.trim()) throw new DeliveryError("config path is required", 9)
     return path.resolve(base, p)
   }
-  const config = { ...value, configFile: path.resolve(file), stateDir: absolute(value.stateDir ?? path.join(os.homedir(), 'carr-delivery/state')),
+  let stateDir
+  try { stateDir = deliveryStateDir(file, value.stateDir) }
+  catch { throw new DeliveryError("config path is required", 9) }
+  const config = { ...value, configFile: path.resolve(file), stateDir,
     repos: Object.fromEntries(Object.entries(value.repos).map(([repo, local]) => {
       if (!REPO.test(repo)) throw new DeliveryError("invalid repository in config", 9)
       if (!Array.isArray(local.trustedReviewers) || !local.trustedReviewers.length || local.trustedReviewers.some(login => typeof login !== "string" || !/^[A-Za-z0-9-]+(?:\[bot\])?$/.test(login)))
@@ -149,8 +161,10 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     if (typeof input === 'string' && path.isAbsolute(input)) {
       const checkout = await fs.realpath(input).catch(error => {if (error.code === 'ENOENT') return null; throw error})
       const matches = []
-      if (checkout) for (const [repo, local] of Object.entries(config.repos))
-        if (await fs.realpath(local.checkout) === checkout) matches.push(repo)
+      if (checkout) for (const [repo, local] of Object.entries(config.repos)) {
+        const candidate = await fs.realpath(local.checkout).catch(error => { if (error.code === 'ENOENT') return null; throw error })
+        if (candidate === checkout) matches.push(repo)
+      }
       if (matches.length === 1) return matches[0]
       if (matches.length > 1) throw new DeliveryError('ambiguous configured checkout for branch-wt', 9)
     }
@@ -1283,29 +1297,53 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
   async function discoverDelivery(repo) {
     const file = path.join(config.stateDir, "discovery", `${encodeURIComponent(repo)}.json`)
     const previous = await readJson(file, null)
-    if (previous?.retryAt > Date.now()) return { candidates: [], retryAt: previous.retryAt }
-    await writeJson(file, { retryAt: Date.now() + Math.max(300_000, config.autoPollMs) })
-    const open = (await provider.pages(repo, "pulls?state=open")).filter(p => p.base?.ref === "main" && !p.draft)
-    const holds = await readHolds(config.holdsFile)
-    const ready = new Set()
-    for (const raw of open) {
-      if (raw.comments === 0 || holdFor(holds, repo, raw.title)) continue
-      const current = await view(repo, raw.number)
-      if (current.review?.verdict === "APPROVE" && current.review.sha === current.headRefOid && current.ci.state === "success") ready.add(raw.number)
+    if (previous?.retryAt > Date.now()) return {
+      candidates: (await thisRecoveryCandidates()).filter(job => job.repo === repo), retryAt: previous.retryAt
     }
+    const open = (await provider.pages(repo, "pulls?state=open", {
+      validateRow: row => validatePullListRow(repo, row)
+    })).filter(p => p.base.ref === "main" && !p.draft)
+    const holds = await readHolds(config.holdsFile)
+    // Persist validated intent before any PR-specific observation can fail.
     await withLease(locks, "legacy-import", async () => {
       const file = path.join(config.stateDir, "inflight.json"), jobs = await readJson(file, {})
       for (const raw of open) {
         if (holdFor(holds, repo, raw.title)) continue
         const key = keyFor(repo, raw.number)
-        if (ready.has(raw.number)) { if (jobs[key]) jobs[key].status = "complete"; continue }
-        if (!jobs[key] || jobs[key].head !== raw.head.sha) jobs[key] = { repo, pr: raw.number, head: raw.head.sha, status: "pending", source: "discovery" }
+        if (!jobs[key] || jobs[key].head !== raw.head.sha) jobs[key] = {
+          repo, pr: raw.number, head: raw.head.sha, status: "pending", source: "discovery"
+        }
       }
       const numbers = new Set(open.map(p => p.number))
       for (const job of Object.values(jobs)) if (job.repo === repo && !numbers.has(job.pr)) job.status = "complete"
       await writeJson(file, jobs)
     }, leaseWait())
-    return { candidates: (await thisRecoveryCandidates()).filter(job => job.repo === repo) }
+    await writeJson(file, { retryAt: Date.now() + Math.max(300_000, config.autoPollMs) })
+    const ready = new Map(), observationErrors = []
+    for (const raw of open) {
+      if (raw.comments === 0 || holdFor(holds, repo, raw.title)) continue
+      try {
+        const current = await observe(repo, raw.number, { requireApproval: true })
+        if (current.state === "unknown") throw observationError(current)
+        if (current.state === "refused") continue
+        supportedBase(current)
+        if (current.prState === "OPEN" && !current.isDraft && current.headRefOid === raw.head.sha &&
+            current.review?.verdict === "APPROVE" && current.review.sha === current.headRefOid && current.ci.state === "success")
+          ready.set(raw.number, current.headRefOid)
+      } catch (error) {
+        observationErrors.push({ pr: raw.number, message: error.message, transient: error.transient ?? false })
+      }
+    }
+    if (ready.size) await withLease(locks, "legacy-import", async () => {
+      const file = path.join(config.stateDir, "inflight.json"), jobs = await readJson(file, {})
+      for (const [pr, head] of ready) {
+        const job = jobs[keyFor(repo, pr)]
+        if (job?.head === head) job.status = "complete"
+      }
+      await writeJson(file, jobs)
+    }, leaseWait())
+    return { candidates: (await thisRecoveryCandidates()).filter(job => job.repo === repo),
+      ...(observationErrors.length ? { observationErrors } : {}) }
   }
   async function thisRecoveryCandidates() {
     const jobs = await readJson(path.join(config.stateDir, "inflight.json"), {})
@@ -1408,11 +1446,9 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
             case "auto-enqueue": data = await enqueueOwner(() => autoEnqueue(repo ? [repo] : Object.keys(config.repos))); break
             case "delivery-scan": data = await discoverDelivery(repo); break
             case 'delivery-smoke': {
-              const pulls = await provider.pages(repo, 'pulls?state=open', {validateRow: row => {
-                if (!Number.isSafeInteger(row.number) || row.number <= 0 || typeof row.draft !== 'boolean' ||
-                    row.base?.repo?.full_name !== repo || !SHA.test(row.head?.sha ?? '') || !SHA.test(row.base?.sha ?? ''))
-                  throw new DeliveryError('invalid GitHub pull-list response')
-              }})
+              const pulls = await provider.pages(repo, 'pulls?state=open', {
+                validateRow: row => validatePullListRow(repo, row)
+              })
               data = {repo, pulls:pulls.length}; break
             }
             case "import-legacy": data = await importLegacy(request.root); break

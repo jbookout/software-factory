@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import os from 'node:os'
 import {createHash} from 'node:crypto'
 import {execFileSync} from 'node:child_process'
 import {pathToFileURL} from 'node:url'
@@ -9,6 +10,13 @@ export const git = (root,...args) => execFileSync('git',args,{cwd:root,encoding:
 const receiptName = '.factory-orch.json'
 export const runtimePaths = ['src','bin','deploy/orch','schemas','config/delivery-models.v1.json','config/review-tiers','package.json','package-lock.json']
 const within = (root,file) => file === root || file.startsWith(root+path.sep)
+// The standalone installed verifier cannot import source before validating it.
+// Keep the shared configuration path rule in this receipt-bound executable.
+export function deliveryStateDir(configPath, raw) {
+ const value=raw ?? path.join(os.homedir(),'carr-delivery/state')
+ if(typeof value!=='string'||!value.trim())throw new Error('config path is required')
+ return path.resolve(path.dirname(path.resolve(configPath)),value)
+}
 export async function physicalPath(file) {
  file=path.resolve(file)
  try {return await fs.realpath(file)}
@@ -51,7 +59,7 @@ export async function checkOrchestration(installedDir) {
    if(!actual || hash(actual)!==file.sha256)throw new Error(`${file.path} hash mismatch; reinstall delivered source before invoking orchestration`)
  }
  const config=await readJson(receipt.configPath)
- const sourceRoot=await fs.realpath(receipt.sourceRoot),configPath=await fs.realpath(receipt.configPath),stateDir=await physicalPath(path.resolve(path.dirname(configPath),config.stateDir))
+ const sourceRoot=await fs.realpath(receipt.sourceRoot),configPath=await fs.realpath(receipt.configPath),stateDir=await physicalPath(deliveryStateDir(configPath,config.stateDir))
  requireSeparation(sourceRoot,installedDir,configPath,stateDir)
  if(stateDir!==receipt.stateDir)throw new Error('private state location changed; reinstall with owning configuration')
  return {...receipt,status:'bound'}

@@ -2,12 +2,12 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import {randomUUID} from 'node:crypto'
 import {readJson,writeJson} from './pr-delivery-state.mjs'
-import {hash,git,runtimePaths,physicalPath,requireSeparation,isExecutable,executableBytes} from '../deploy/orch/factory-verify.mjs'
+import {hash,git,runtimePaths,physicalPath,requireSeparation,isExecutable,executableBytes,deliveryStateDir} from '../deploy/orch/factory-verify.mjs'
 export {checkOrchestration} from '../deploy/orch/factory-verify.mjs'
 const receiptName='.factory-orch.json'
 export async function installOrchestration(sourceRoot, installedDir, configPath) {
  sourceRoot=await fs.realpath(sourceRoot); installedDir=await physicalPath(installedDir); configPath=await fs.realpath(configPath)
- const config=await readJson(configPath), stateDir=await physicalPath(path.resolve(path.dirname(configPath),config.stateDir))
+ const config=await readJson(configPath), stateDir=await physicalPath(deliveryStateDir(configPath,config.stateDir))
  requireSeparation(sourceRoot,installedDir,configPath,stateDir)
  if(git(sourceRoot,'status','--porcelain','--untracked-files=all','--',...runtimePaths)) throw new Error('deliver clean committed factory source before installation')
  const sourceRevision=git(sourceRoot,'rev-parse','HEAD')
