@@ -98,11 +98,7 @@ test("real client config requires complete source-backed records and a verified 
   for (
     const item of [...data.properties, ...data.leases, ...data.developments]
   ) item.noPhotoReason = "No synthetic image supplied.";
-  data.metrics.forEach((metric) => {
-    metric.sourceId = "source-market-fixture";
-    metric.geography = "Example Region";
-    metric.period = "2021–2026";
-  });
+
   assert.equal(validate(data), data);
   delete data.properties[0].locator;
   data.properties[0].noPinReason = "No source-backed coordinate supplied.";

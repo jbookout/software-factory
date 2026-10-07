@@ -16,7 +16,7 @@
   },
   "strategy": {
     "mode": "owner_occupancy_30_70",
-    "tiContributionPerSf": 50,
+    "tiContributionPerSf": 25,
     "tiRange": {
       "min": 25,
       "max": 75,
@@ -89,35 +89,6 @@
       }
     ]
   },
-  "metrics": [
-    {
-      "value": 4.1,
-      "suffix": "%",
-      "label": "Sample household growth",
-      "note": "Fictional five-year example",
-      "sourceId": "source-market-fixture",
-      "geography": "Example Region (fictional)",
-      "period": "2021\u20132026"
-    },
-    {
-      "value": 2.7,
-      "suffix": "%",
-      "label": "Sample employment growth",
-      "note": "Fictional five-year example",
-      "sourceId": "source-market-fixture",
-      "geography": "Example Region (fictional)",
-      "period": "2021\u20132026"
-    },
-    {
-      "value": 1.8,
-      "suffix": "%",
-      "label": "Sample population index",
-      "note": "Fictional planning measure",
-      "sourceId": "source-market-fixture",
-      "geography": "Example Region (fictional)",
-      "period": "2021\u20132026"
-    }
-  ],
   "locator": {
     "center": {
       "lat": 35.12,
@@ -125,7 +96,266 @@
     },
     "zoom": 11,
     "disclaimer": "Fictional coordinates for interface testing only; do not use for navigation.",
-    "style": "https://demotiles.maplibre.org/style.json"
+    "style": {
+      "version": 8,
+      "sources": {
+        "water": {
+          "type": "geojson",
+          "data": {
+            "type": "FeatureCollection",
+            "features": [
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "Polygon",
+                  "coordinates": [
+                    [
+                      [
+                        -90.07119999999999,
+                        35.075
+                      ],
+                      [
+                        -90.05499999999999,
+                        35.075
+                      ],
+                      [
+                        -90.05499999999999,
+                        35.165
+                      ],
+                      [
+                        -90.0658,
+                        35.165
+                      ],
+                      [
+                        -90.07119999999999,
+                        35.075
+                      ]
+                    ]
+                  ]
+                }
+              }
+            ]
+          },
+          "attribution": "Synthetic test geometry; no real geography or navigation data"
+        },
+        "roads": {
+          "type": "geojson",
+          "data": {
+            "type": "FeatureCollection",
+            "features": [
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.13000000000001,
+                      35.075
+                    ],
+                    [
+                      -90.13000000000001,
+                      35.165
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.14500000000001,
+                      35.09
+                    ],
+                    [
+                      -90.05499999999999,
+                      35.09
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.11500000000001,
+                      35.075
+                    ],
+                    [
+                      -90.11500000000001,
+                      35.165
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.14500000000001,
+                      35.105000000000004
+                    ],
+                    [
+                      -90.05499999999999,
+                      35.105000000000004
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.1,
+                      35.075
+                    ],
+                    [
+                      -90.1,
+                      35.165
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.14500000000001,
+                      35.120000000000005
+                    ],
+                    [
+                      -90.05499999999999,
+                      35.120000000000005
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.085,
+                      35.075
+                    ],
+                    [
+                      -90.085,
+                      35.165
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.14500000000001,
+                      35.135
+                    ],
+                    [
+                      -90.05499999999999,
+                      35.135
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.07,
+                      35.075
+                    ],
+                    [
+                      -90.07,
+                      35.165
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.14500000000001,
+                      35.15
+                    ],
+                    [
+                      -90.05499999999999,
+                      35.15
+                    ]
+                  ]
+                }
+              }
+            ]
+          },
+          "attribution": "Synthetic test geometry"
+        }
+      },
+      "layers": [
+        {
+          "id": "land",
+          "type": "background",
+          "paint": {
+            "background-color": "#e9f2fa"
+          }
+        },
+        {
+          "id": "water",
+          "type": "fill",
+          "source": "water",
+          "paint": {
+            "fill-color": "#82b5dc",
+            "fill-opacity": 0.88
+          }
+        },
+        {
+          "id": "road-casing",
+          "type": "line",
+          "source": "roads",
+          "paint": {
+            "line-color": "#b7cadd",
+            "line-width": 2.6
+          }
+        },
+        {
+          "id": "roads",
+          "type": "line",
+          "source": "roads",
+          "paint": {
+            "line-color": "#ffffff",
+            "line-width": 1.7
+          }
+        }
+      ]
+    }
   },
   "developments": [
     {
@@ -154,7 +384,7 @@
       "price": 1250000,
       "totalSf": 7000,
       "description": "Synthetic purchase record for testing complete practice occupancy.",
-      "planningNote": "No external tenant strategy is represented in this example.",
+      "planningNote": "Synthetic 30/70 allocation; verify clinical fit and outside-tenant demand before relying on the illustration.",
       "locator": {
         "kind": "approximate",
         "lat": 35.12,
@@ -175,7 +405,7 @@
       "price": 1500000,
       "totalSf": 9000,
       "description": "Synthetic purchase record for testing complete practice occupancy.",
-      "planningNote": "No external tenant strategy is represented in this example.",
+      "planningNote": "Synthetic 30/70 allocation; verify clinical fit and outside-tenant demand before relying on the illustration.",
       "locator": {
         "kind": "approximate",
         "lat": 35.12,
@@ -217,7 +447,7 @@
     "downPaymentFraction": 0.25,
     "annualInterest": 0.065,
     "amortizationYears": 25,
-    "holdYears": 7,
+    "holdYears": 10,
     "annualAppreciation": 0.02,
     "annualRentPerSf": 24,
     "collectionLoss": 0.08,

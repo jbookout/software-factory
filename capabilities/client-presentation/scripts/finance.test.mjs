@@ -9,6 +9,7 @@ function close(x,y,tolerance=.00001){assert.ok(Math.abs(x-y)<tolerance,`${x} != 
 test('cash-flow sums reconcile with independent closed-form balance and two-year rent ramp',()=>{
   const p={price:2400000,totalSf:10001}; const m=compute(p,a,25);
   assert.equal(m.practiceSf,3001);assert.equal(m.tenantSf,7000);
+  close(m.stabilizedMonthlyRent,7000*28*.95/12);
   const r=.0625/12, q=(1+r)**120;
   close(m.balance,2400000*q-m.payment*(q-1)/r);
   const annual=7000*28*.95;

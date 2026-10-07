@@ -335,6 +335,13 @@
       "top-right",
     );
     maps[id] = map;
+    const preview = new maplibregl.Popup({closeButton:false,closeOnClick:false,maxWidth:"240px",offset:20,className:"map-pin-preview"});
+    const bindMarkerPreview = (button, point, record) => {
+      const showPreview = () => preview.setLngLat(point).setHTML(`${image(record,title(record))}<strong class="map-preview-title">${esc(title(record))}</strong><span>Approximate area locator · Open for full details</span>`).addTo(map);
+      button.addEventListener("mouseenter", showPreview);
+      button.addEventListener("focus", showPreview);
+      for (const event of ["mouseleave", "blur", "click"]) button.addEventListener(event, () => preview.remove());
+    };
     const markers = [];
     const coordinates = [];
     let pins = 0;
@@ -359,6 +366,7 @@
         p.locator.lat,
       ]).addTo(map);
       markers.push({marker, button, point: [p.locator.lon, p.locator.lat]});
+      bindMarkerPreview(button,[p.locator.lon,p.locator.lat],p);
       coordinates.push([p.locator.lon, p.locator.lat]);
       pins++;
     });
@@ -511,10 +519,7 @@
   }
   function renderMarket() {
     let m = d.market || {}, p = d.presentation || {};
-    txt("market-title", p.title || m.title || "Market and property review");
-    txt("market-meta", `${p.preparedFor || ""} · ${p.scenarioDate || ""}`);
-    txt("market-section-title", m.sectionTitle || "Market snapshot");
-    txt("market-subtitle", m.subtitle || m.geography || "Market area");
+    txt("market-title", m.title || p.title || "Market and property review");
     txt("market-summary", m.summary);
     txt("market-note", m.note);
     const snapshot = $("#home-demographics");
@@ -524,30 +529,13 @@
       const population = model.population.values.at(-1);
       const source = d.sources.find(item => item.id === model.population.sourceId);
       const incomeSource = d.sources.find(item => item.id === model.income.sourceId);
-      const max = Math.max(1, ...model.population.values.map(point => point.value));
-      $("#home-demographic-overview").innerHTML = `<article><strong>${number(population.value)}</strong><span>Population · ${esc(population.label)} · people</span><small>${esc(source.title)}</small></article><article><strong>${number(model.income.total)}</strong><span>Households · ${esc(model.income.period)}</span><small>${esc(incomeSource.title)}</small></article><article><strong>${money(model.income.median.value)}</strong><span>Median household income · USD/year</span><small>${esc(model.income.period)} · ${esc(incomeSource.title)}</small></article>`;
-      $("#home-population-chart").innerHTML = `<h4>Population over time</h4>${model.population.values.map(point => `<div class="bar-row"><span>${esc(point.label)}</span><div><i style="width:${point.value / max * 100}%"></i></div><strong>${number(point.value)}</strong></div>`).join("")}<p class="source-caption">${esc(model.geography.label)} · people · research as of ${esc(model.asOfDate)} · ${esc(source.title)} · ${esc(source.date)}</p>`;
+      $("#home-demographic-overview").innerHTML = `<a href="#demographics"><strong>${number(population.value)}</strong><span>Population · ${esc(population.label)} · people</span><small>${esc(source.title)}</small></a><a href="#demographics"><strong>${number(model.income.total)}</strong><span>Households · ${esc(model.income.period)}</span><small>${esc(incomeSource.title)}</small></a><a href="#demographics"><strong>${money(model.income.median.value)}</strong><span>Median household income · USD/year</span><small>${esc(model.income.period)} · ${esc(incomeSource.title)}</small></a>`;
     }
     const next = $(".home-actions a");
     next.href = properties.length ? "#purchases" : "#leases";
     next.textContent = properties.length ? "Review purchase options ↗" : "Review lease options ↗";
     txt("development-title", m.developmentTitle || "Projects in context");
-    txt(
-      "development-disclaimer",
-      d.locator?.disclaimer ||
-        "Map points are approximate and are not navigation destinations.",
-    );
-    let cards = $("#market-highlights");
-    cards.replaceChildren();
-    (d.metrics || []).slice(0, 4).forEach((x) => {
-      let c = document.createElement("article");
-      c.innerHTML = `<strong>${esc(x.value)}${
-        esc(x.suffix || "")
-      }</strong><span>${esc(x.label)}</span><small>${
-        esc(x.geography || "")
-      } · ${esc(x.period || "")}</small>`;
-      cards.append(c);
-    });
+
   }
   function renderDemographics() {
     txt("demographics-title", d.demographics?.title || "Demographic context");
@@ -606,6 +594,7 @@
       list.append(c);
     });
     txt("sources-title", d.market?.sourcesTitle || "Sources and next steps");
+    txt("locator-disclaimer", d.locator?.disclaimer || "Map points are approximate and are not navigation destinations.");
     txt(
       "sources-intro",
       d.market?.sourcesIntro || "Review named sources, geography and dates.",
@@ -639,28 +628,36 @@
     propertyLabel.append(picker);
     controlGrid.append(propertyLabel);
     const tiRange = d.strategy.tiRange;
+    let selectedTiRate = d.strategy.tiContributionPerSf;
+    for (const id of ["strategy-ti-controls", "ownership-ti-controls"]) {
       const field = document.createElement("fieldset");
       field.className = "ti-toggle";
       const legend = document.createElement("legend");
-      legend.textContent = "Tenant TI Allowance / SF · Updates the illustration";
+      legend.textContent = "Tenant TI Allowance / SF · Updates every comparison";
       field.append(legend);
       for (let rate = tiRange.min; rate <= tiRange.max; rate += tiRange.step) {
         const label = document.createElement("label");
         const input = document.createElement("input");
         input.type = "radio";
-        input.name = "tenant-ti-rate";
+        input.name = id + "-rate";
+        input.dataset.tenantTiRate = "";
         input.value = String(rate);
-        input.checked = rate === d.strategy.tiContributionPerSf;
+        input.checked = rate === selectedTiRate;
         const span = document.createElement("span");
         span.textContent = money(rate);
         label.append(input, span);
         field.append(label);
-        input.addEventListener("change", update);
+        input.addEventListener("change", () => {
+          selectedTiRate = rate;
+          document.querySelectorAll("[data-tenant-ti-rate]").forEach(node => { node.checked = Number(node.value) === rate; });
+          update();
+        });
       }
-      controlGrid.append(field);
+      $("#" + id).replaceChildren(field);
+    }
     controls.append(controlGrid);
     const assumptions = d.assumptions;
-    const tiRate = () => Number($("input[name='tenant-ti-rate']:checked").value);
+    const tiRate = () => selectedTiRate;
     const model = (property, rate = tiRate()) => window.PresentationFinance.compute(
       {price: property.price, totalSf: property.totalSf}, assumptions, rate,
     );
@@ -671,12 +668,25 @@
       option.textContent = title(property);
       return option;
     }));
+    const comparison = (id, rows, measures) => {
+      $("#" + id).innerHTML = `<thead><tr><th>Measure</th>${rows.map(({property}) => `<th><button type="button" class="text-button" data-preview="${esc(property.id)}">${esc(title(property))}</button></th>`).join("")}</tr></thead><tbody>${measures.map(([label, value]) => `<tr><th>${esc(label)}</th>${rows.map(row => `<td>${esc(value(row.result, row.property))}</td>`).join("")}</tr>`).join("")}</tbody>`;
+    };
     function update() {
       const active = byId[picker.value] || eligible[0];
       const activeResult = model(active);
-      $("#strategy-table tbody").innerHTML = `<tr><th>${esc(title(active))}</th><td>${number(activeResult.practiceSf)} SF</td><td>${number(activeResult.tenantSf)} SF</td><td>${money(activeResult.benefit)}</td></tr>`;
-      txt("finance-results", `Illustrative year ${activeResult.year}: estimated property equity ${money(activeResult.equity)}; modeled cash required ${money(activeResult.extraCashRequired)}; outside rent received ${money(activeResult.outsideRent)}. Equity is not liquid cash. Assumptions: ${(assumptions.assumptionNotes || []).join(" ")}`);
+      txt("finance-results", `${title(active)} · Illustrative year ${activeResult.year}: estimated property equity ${money(activeResult.equity)}; modeled cash required ${money(activeResult.extraCashRequired)}; outside rent received ${money(activeResult.outsideRent)}. Equity is not liquid cash. Assumptions: ${(assumptions.assumptionNotes || []).join(" ")}`);
       const rows = eligible.map((property) => ({property, result: model(property)}));
+      $("#strategy-benefits").innerHTML = [["Practice occupancy", `${number(activeResult.practiceSf)} SF allocated to the practice.`], ["Outside-tenant space", `${number(activeResult.tenantSf)} SF allocated to outside tenants under the stated scenario.`], ["Mortgage contribution", `${money(activeResult.carry)} over ${assumptions.holdYears} years after modeled outside rent, before other owner costs.`], ["Estimated equity", `${money(activeResult.equity)} at year ${assumptions.holdYears}; a balance-sheet estimate rather than liquid cash or profit.`]].map(([label, value],i) => `<article class="strategy-benefit"><span class="benefit-icon">${i+1}</span><h4>${label}</h4><p>${value}</p></article>`).join("");
+      $("#strategy-assumptions").innerHTML = [[`${(assumptions.downPaymentFraction*100).toFixed(1)}%`, "Down payment"], [`${(assumptions.annualInterest*100).toFixed(2)}%`, "Annual interest"], [String(assumptions.amortizationYears), "Amortization · years"], [`${(assumptions.annualAppreciation*100).toFixed(2)}%`, "Annual appreciation assumption"], [money(assumptions.annualRentPerSf), "Rent / SF / year"], [String(assumptions.fillMonths), "Lease-up · months"]].map(([value,label]) => `<div><strong>${value}</strong><span>${label}</span></div>`).join("");
+      $("#allocation-spaces").innerHTML = rows.map(({property,result}) => `<button type="button" class="allocation-space-row text-button" data-preview="${esc(property.id)}"><b>${esc(title(property))}</b><div class="allocation-space-bar"><span class="practice" style="width:${result.practiceSf/property.totalSf*100}%"></span><span class="tenants" style="width:${result.tenantSf/property.totalSf*100}%"></span></div><div class="allocation-space-values"><span>Practice ${number(result.practiceSf)} SF</span><span>Outside tenants ${number(result.tenantSf)} SF</span></div></button>`).join("");
+      $("#rent-coverage").innerHTML = rows.map(({property,result}) => {const rent=result.stabilizedMonthlyRent, scale=Math.max(1,rent,result.payment);return `<button type="button" class="coverage-row text-button" data-preview="${esc(property.id)}"><b>${esc(title(property))}</b><div class="coverage-measure"><span>Outside rent</span><i class="coverage-income" style="width:${rent/scale*100}%"></i><strong>${money(rent)}/month</strong></div><div class="coverage-measure"><span>Loan P&amp;I</span><i class="coverage-gap" style="width:${result.payment/scale*100}%"></i><strong>${money(result.payment)}/month</strong></div></button>`;}).join("");
+      comparison("strategy-table", rows, [["Purchase price",(r,p)=>money(p.price)], ["Building area",(r,p)=>`${number(p.totalSf)} SF`], ["Practice area",r=>`${number(r.practiceSf)} SF`], ["Outside-tenant area",r=>`${number(r.tenantSf)} SF`], ["Down payment",r=>money(r.downPayment)], ["Loan amount",r=>money(r.loan)], ["Monthly principal and interest",r=>money(r.payment)]]);
+      $("#strategy-highlights").innerHTML = rows.map(({property}) => `<button type="button" class="property-jump" data-preview="${esc(property.id)}">${image(property,title(property))}<div><strong>${esc(title(property))}</strong><small>${esc(property.planningNote || property.description)}</small><small>${esc(sourceLine(property))}</small><span class="tile-action">Review the property ↗</span></div></button>`).join("");
+      comparison("buildout-table", rows, [["Practice area",r=>`${number(r.practiceSf)} SF`], ["Practice buildout / SF",()=>money(assumptions.practiceBuildoutPerSf)], ["Practice buildout budget",r=>money(r.practiceBuildout)], ["Outside-tenant area",r=>`${number(r.tenantSf)} SF`], ["Tenant TI / SF",()=>money(tiRate())], ["Tenant TI budget",r=>money(r.tenantTi)], ["Combined improvement budget",r=>money(r.combinedBudget)]]);
+      comparison("cash-carry-table", rows, [["Down payment",r=>money(r.downPayment)], ["Mortgage payments",r=>money(r.mortgagePayments)], ["Outside rent received",r=>money(r.outsideRent)], ["Mortgage contribution",r=>money(r.carry)], ["Practice rent avoided",r=>money(r.avoidedPracticeRent)], ["Tenant TI budget",r=>money(r.tenantTi)], ["Additional cash compared with leasing",r=>money(r.extraCashRequired)]]);
+      comparison("annual-carry-table", rows, Array.from({length:assumptions.holdYears},(_,i)=>[`Year ${i+1} · mortgage contribution`,r=>money(r.years[i+1].carry-r.years[i].carry)]));
+      comparison("equity-components", rows, [[`Year ${assumptions.holdYears} · property value`,r=>money(r.value)], ["Remaining loan",r=>money(r.balance)], ["Initial down payment",r=>money(r.downPayment)], ["Principal repaid",r=>money(r.principalRepaid)], ["Signed appreciation",r=>money(r.appreciation)], ["Estimated equity",r=>money(r.equity)]]);
+      comparison("ownership-summary", rows, [["Estimated property equity",r=>money(r.equity)], ["Additional cash compared with leasing",r=>money(r.extraCashRequired)], ["Modeled equity less additional cash",r=>money(r.benefit)]]);
       $("#equity-year").max = String(assumptions.holdYears);
       const year = Math.min(Number($("#equity-year").value || assumptions.holdYears), assumptions.holdYears);
       $("#equity-year-label").textContent = String(year);

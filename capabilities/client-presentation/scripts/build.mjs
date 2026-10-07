@@ -79,7 +79,7 @@ export function validate(data) {
     );
   }
   for (
-    const key of ["properties", "leases", "developments", "metrics", "sources"]
+    const key of ["properties", "leases", "developments", "sources"]
   ) {
     if (!Array.isArray(data[key])) throw new Error(`${key} must be an array`);
   }
@@ -88,7 +88,6 @@ export function validate(data) {
   }
   text(data.market.title, "market.title");
   text(data.market.summary, "market.summary");
-  if (!data.metrics.length) throw new Error("market metrics must not be empty");
   const sections = new Map();
   for (const section of data.sections || []) {
     if (!validSections.has(section.id) || sections.has(section.id)) {
@@ -347,15 +346,7 @@ export function validate(data) {
         "client development map requires a locator configuration",
       );
     }
-    for (const metric of data.metrics) {
-      if (!metric.sourceId || !sourceIds.has(metric.sourceId)) {
-        throw new Error(
-          `market metric ${metric.label || ""} requires a matching sourceId`,
-        );
-      }
-      text(metric.geography, "market metric geography");
-      text(metric.period, "market metric period");
-    }
+
   }
   return data;
 }

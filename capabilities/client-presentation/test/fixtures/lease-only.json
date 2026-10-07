@@ -54,35 +54,6 @@
     "summary": "These made-up market signals illustrate layout only. They are not local facts or forecasts.",
     "developmentTitle": "Example projects in context"
   },
-  "metrics": [
-    {
-      "value": 4.1,
-      "suffix": "%",
-      "label": "Sample household growth",
-      "note": "Fictional five-year example",
-      "sourceId": "source-market-fixture",
-      "geography": "Example Region (fictional)",
-      "period": "2021\u20132026"
-    },
-    {
-      "value": 2.7,
-      "suffix": "%",
-      "label": "Sample employment growth",
-      "note": "Fictional five-year example",
-      "sourceId": "source-market-fixture",
-      "geography": "Example Region (fictional)",
-      "period": "2021\u20132026"
-    },
-    {
-      "value": 1.8,
-      "suffix": "%",
-      "label": "Sample population index",
-      "note": "Fictional planning measure",
-      "sourceId": "source-market-fixture",
-      "geography": "Example Region (fictional)",
-      "period": "2021\u20132026"
-    }
-  ],
   "locator": {
     "center": {
       "lat": 35.12,
@@ -90,7 +61,266 @@
     },
     "zoom": 11,
     "disclaimer": "Fictional coordinates for interface testing only; do not use for navigation.",
-    "style": "https://demotiles.maplibre.org/style.json"
+    "style": {
+      "version": 8,
+      "sources": {
+        "water": {
+          "type": "geojson",
+          "data": {
+            "type": "FeatureCollection",
+            "features": [
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "Polygon",
+                  "coordinates": [
+                    [
+                      [
+                        -90.0867,
+                        35.11
+                      ],
+                      [
+                        -90.07499999999999,
+                        35.11
+                      ],
+                      [
+                        -90.07499999999999,
+                        35.165
+                      ],
+                      [
+                        -90.08279999999999,
+                        35.165
+                      ],
+                      [
+                        -90.0867,
+                        35.11
+                      ]
+                    ]
+                  ]
+                }
+              }
+            ]
+          },
+          "attribution": "Synthetic test geometry; no real geography or navigation data"
+        },
+        "roads": {
+          "type": "geojson",
+          "data": {
+            "type": "FeatureCollection",
+            "features": [
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.12916666666666,
+                      35.11
+                    ],
+                    [
+                      -90.12916666666666,
+                      35.165
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.14,
+                      35.119166666666665
+                    ],
+                    [
+                      -90.07499999999999,
+                      35.119166666666665
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.11833333333333,
+                      35.11
+                    ],
+                    [
+                      -90.11833333333333,
+                      35.165
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.14,
+                      35.12833333333333
+                    ],
+                    [
+                      -90.07499999999999,
+                      35.12833333333333
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.10749999999999,
+                      35.11
+                    ],
+                    [
+                      -90.10749999999999,
+                      35.165
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.14,
+                      35.1375
+                    ],
+                    [
+                      -90.07499999999999,
+                      35.1375
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.09666666666666,
+                      35.11
+                    ],
+                    [
+                      -90.09666666666666,
+                      35.165
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.14,
+                      35.14666666666667
+                    ],
+                    [
+                      -90.07499999999999,
+                      35.14666666666667
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.08583333333333,
+                      35.11
+                    ],
+                    [
+                      -90.08583333333333,
+                      35.165
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.14,
+                      35.155833333333334
+                    ],
+                    [
+                      -90.07499999999999,
+                      35.155833333333334
+                    ]
+                  ]
+                }
+              }
+            ]
+          },
+          "attribution": "Synthetic test geometry"
+        }
+      },
+      "layers": [
+        {
+          "id": "land",
+          "type": "background",
+          "paint": {
+            "background-color": "#e9f2fa"
+          }
+        },
+        {
+          "id": "water",
+          "type": "fill",
+          "source": "water",
+          "paint": {
+            "fill-color": "#82b5dc",
+            "fill-opacity": 0.88
+          }
+        },
+        {
+          "id": "road-casing",
+          "type": "line",
+          "source": "roads",
+          "paint": {
+            "line-color": "#b7cadd",
+            "line-width": 2.6
+          }
+        },
+        {
+          "id": "roads",
+          "type": "line",
+          "source": "roads",
+          "paint": {
+            "line-color": "#ffffff",
+            "line-width": 1.7
+          }
+        }
+      ]
+    }
   },
   "developments": [],
   "properties": [],
