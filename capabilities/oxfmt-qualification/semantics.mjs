@@ -15,7 +15,24 @@ function syntax(text, filename) {
     if (ts.isParenthesizedExpression(node)) return visit(node.expression)
     const children = []; ts.forEachChild(node, child => { children.push(visit(child)) })
     const value = ts.isIdentifier(node) || ts.isLiteralExpression(node) || ts.isTemplateLiteralToken(node) ? node.text : null
-    return [ts.SyntaxKind[node.kind], value, children]
+    // forEachChild excludes these semantic scalars: unary/type operators,
+    // declaration kinds, chain continuation, type-only imports/exports and
+    // export-assignment/import-attribute/meta-property keyword variants.
+    const semantics = {
+      operator: typeof node.operator === 'number' ? ts.SyntaxKind[node.operator] : null,
+      declarationFlags: ts.isVariableDeclarationList(node) ? node.flags & ts.NodeFlags.BlockScoped : null,
+      optionalChain: Boolean(node.flags & ts.NodeFlags.OptionalChain),
+      typeOnly: typeof node.isTypeOnly === 'boolean' ? node.isTypeOnly : null,
+      exportEquals: typeof node.isExportEquals === 'boolean' ? node.isExportEquals : null,
+      keyword: typeof node.keywordToken === 'number' ? ts.SyntaxKind[node.keywordToken] : null,
+      attributeToken: typeof node.token === 'number' ? ts.SyntaxKind[node.token] : null,
+      // Tagged templates observe raw spelling, even when cooked text is equal.
+      templateRaw: ts.isTemplateLiteralToken(node) ? node.rawText ?? node.text : null,
+      // Escaped cooked "use strict" is not a strict-mode directive; quote style is.
+      strictDirective: ts.isStringLiteral(node) && ts.isExpressionStatement(node.parent) ?
+        node.getText(source).slice(1, -1) === 'use strict' : null
+    }
+    return [ts.SyntaxKind[node.kind], value, semantics, children]
   }
   return visit(source)
 }

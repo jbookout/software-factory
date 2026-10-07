@@ -37,7 +37,10 @@ distributions must produce identical bytes for their seven shared kinds.
 Each successful copied-file run must detect seeded EOF whitespace, change the
 copy, produce stable output over three fresh-process observations, be idempotent,
 and pass a final style check. JS/MJS/TS/TSX syntax trees retain literals/operators
-and declarations; TSX also compares compiler-emitted JSX calls. JSON/YAML compare
+and declarations, including unary/type operators, declaration-kind flags,
+optional-chain continuation and type-only/keyword forms omitted by AST child
+traversal. Raw tagged-template spelling and strict directives remain distinct;
+TSX also compares compiler-emitted JSX calls. JSON/YAML compare
 parsed values. CSS compares pinned Tailwind output for four declared candidates.
 HTML compares the existing task fixture's five rendered routes and blank-title,
 save, independent localStorage read and reload behavior using local Chromium.

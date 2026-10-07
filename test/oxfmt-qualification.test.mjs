@@ -75,6 +75,38 @@ test('semantic checks reject altered literals, operators, declarations and struc
   ]) await assert.rejects(assertSemanticParity(kind, before, after, name), `${kind} semantic mutation must fail`)
 })
 
+test('actual finance corpus rejects unary sign, loop update and declaration-kind mutations', async () => {
+  const source = await fs.readFile(new URL('../capabilities/client-presentation/assets/site/finance.js', import.meta.url), 'utf8')
+  for (const [before, after] of [['Math.pow(1 + r, -n)', 'Math.pow(1 + r, +n)'],
+    ['month++)', 'month--)'], ['const price =', 'let price =']]) {
+    assert(source.includes(before), `actual fixture lacks ${before}`)
+    const mutated = source.replace(before, after)
+    assert.notEqual(mutated, source)
+    await assert.rejects(assertSemanticParity('js', source, mutated, 'finance.js'), /deep-equal/)
+  }
+})
+
+test('semantic scalars retain optional-chain grouping, type-only forms and compiler keyword variants', async () => {
+  for (const [before, after] of [
+    ['const x=obj?.a.b;', 'const x=(obj?.a).b;'],
+    ['import type {X} from "x";', 'import {X} from "x";'],
+    ['import {type X} from "x";', 'import {X} from "x";'],
+    ['export type {X};', 'export {X};'],
+    ['export {type X};', 'export {X};'],
+    ['export = x;', 'export default x;'],
+    ['type X=keyof Thing[];', 'type X=readonly Thing[];'],
+    ['import x from "x" assert {type:"json"};', 'import x from "x" with {type:"json"};'],
+    ['using resource=open();', 'await using resource=open();']
+  ]) await assert.rejects(assertSemanticParity('ts', before, after, 'sample.mts'), /deep-equal/)
+})
+
+test('raw template spelling and actual strict-mode directives survive cooked-text normalization', async () => {
+  const slash = String.fromCharCode(92)
+  await assert.rejects(assertSemanticParity('js', 'String.raw`line'+slash+'n`;', 'String.raw`line'+String.fromCharCode(10)+'`;', 'sample.js'), /deep-equal/)
+  await assert.rejects(assertSemanticParity('js', "(function(){'use strict';return this;})();", "(function(){'use"+slash+"x20strict';return this;})();", 'sample.js'), /deep-equal/)
+  await assertSemanticParity('js', "(function(){'use strict';return this;})();", '(function(){"use strict";return this;})();', 'sample.js')
+})
+
 test('HTML fallback requires the native no-target error and an unchanged copied input', () => {
   const result = { code: 2, stdout: '', stderr: 'Expected at least one target file.' }
   assert(nativeHtmlUnsupported('html', result, true))
