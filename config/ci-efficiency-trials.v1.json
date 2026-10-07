@@ -14,11 +14,11 @@
       "sources": ["https://oxc.rs/docs/guide/usage/linter.html"]
     },
     {
-      "id": 2, "technique": "Oxfmt formatter", "status": "planned",
-      "entrypoints": ["existing repository check commands"],
-      "trial": "Pin Oxfmt and format a copied representative JS, MJS, TS, TSX, JSON, YAML, HTML and CSS corpus. Compare existing output where a formatter exists; otherwise qualify idempotence, parser validity and bounded existing-style changes without introducing Prettier or pnpm solely for comparison.",
+      "id": 2, "technique": "Oxfmt formatter", "status": "trial",
+      "entrypoints": ["software-factory/npm run check formatter"],
+      "trial": "Execute the pinned native and frozen-lock npm distributions on eight copied Factory fixtures, preserving .d.mts classification. Require real formatting, three output-stable observations, idempotence and semantic comparisons. Native HTML no-target exit alone requests the mandatory qualified npm fallback. Existing browser CI retains actual Linux receipts; no repository-wide formatting or hook activation.",
       "acceptance": "Idempotent output, unchanged runtime/contract tests, explicit supported-file inventory, measured cold/warm wall time and RSS; keep unsupported syntax on its current checker.",
-      "evidence": [], "reject_if": "A retained corpus demonstrates syntax, semantics or required-plugin incompatibility after the bounded configuration trial.",
+      "evidence": [{"entrypoint": "npm run check formatter", "artifact": "oxfmt-qualification", "receipt": "oxfmt-qualification/v1 inside factory-verification/v1", "scope": "Studio bounded eight-format fixture trial executed; committed-head and Linux hosted execution retained with the draft qualification. No adoption or repository-wide semantic claim."}], "reject_if": "A retained corpus demonstrates syntax, semantics or required-plugin incompatibility after the bounded configuration trial.",
       "sources": ["https://oxc.rs/docs/guide/usage/formatter.html"]
     },
     {
@@ -58,16 +58,16 @@
       "entrypoints": ["software-factory/npm run check"],
       "trial": "Reuse existing supervisor-bound leases with FIFO check tickets, a limit of three whole checks and inherited ownership for nested workers. Bind queue/wall time and owned-process RSS/CPU samples to existing verification receipts. Run deterministic fairness/cancellation/dead-owner/nesting fixtures and actual check entrypoint trials in multiple owned worktrees. Product-local adapters follow qualification without requiring the factory at product runtime.",
       "acceptance": "At most three admitted whole checks, FIFO registered waiters, cancellation retires its own claim, live owners are never age-evicted, dead owners recover, nested workers cannot free the outer slot, and receipts retain source/log integrity. Existing CARR gate pool four and app/factory Node pool two remain intact.",
-      "evidence": [], "reject_if": "Controlled trials show starvation, leaked/over-admitted leases, ownership errors or an unrepairable full-check regression.",
+      "evidence": [{"sourceCommit": "508c2bee616dd0622438f4f504710d9203186df3", "pr": "https://github.com/jbookout/software-factory/pull/65", "ci": "https://github.com/jbookout/software-factory/actions/runs/37661433243", "localNodeTests": 1026, "scope": "Factory whole-check admission only; product-local adapters remain planned."}], "reject_if": "Controlled trials show starvation, leaked/over-admitted leases, ownership errors or an unrepairable full-check regression.",
       "sources": []
     },
     {
-      "id": 8, "technique": "Direct official-release installer instead of npm tool bootstrap", "status": "planned",
-      "entrypoints": ["owned-worktree tool bootstrap"],
+      "id": 8, "technique": "Direct official-release installer instead of npm tool bootstrap", "status": "trial",
+      "entrypoints": ["software-factory/npm run check formatter"],
       "trial": "Use official pinned release artifacts for tools that publish them, verify supplied checksums/signatures and target architecture, and compare clean-cache install time with the current npm bootstrap. Install only into an owned trial tool directory; when an official binary is unavailable, trial the smallest official source/build equivalent and record the actual result.",
       "acceptance": "Identical pinned tool behavior, verified provenance/integrity, measured installation time and no global PATH, credentials or security-setting changes.",
-      "evidence": [], "reject_if": "The attempted official path has unavailable artifacts, unverifiable integrity or failed platform/behavior qualification.",
-      "sources": ["https://github.com/oxc-project/oxlint/releases", "https://github.com/microsoft/typescript-go", "https://docs.astral.sh/uv/getting-started/installation/"]
+      "evidence": [{"entrypoint": "capabilities/oxfmt-qualification/install.mjs", "artifact": "oxfmt-qualification", "scope": "Pinned Oxfmt official native archive and frozen npm lock; integrity, architecture and version checked. Fresh/reused owned caches measured. Host caches uncontrolled; other tools/platforms remain planned."}], "reject_if": "The attempted official path has unavailable artifacts, unverifiable integrity or failed platform/behavior qualification.",
+      "sources": ["https://github.com/oxc-project/oxlint/releases", "https://github.com/microsoft/typescript-go", "https://docs.astral.sh/uv/getting-started/installation/", "https://github.com/oxc-project/oxc/releases/tag/oxfmt_v0.72.0"]
     },
     {
       "id": 9, "technique": "Appropriately sized 16GB typecheck runner trial", "status": "planned",

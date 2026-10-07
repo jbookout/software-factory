@@ -77,6 +77,28 @@ jobs:
       - run: npx --no-install playwright install --with-deps chromium
         working-directory: capabilities/agentic-ui-evaluation/fixture
       - run: npm run e2e:qualify
+      - name: Qualify pinned Oxfmt on copied fixtures
+        env:
+          TMPDIR: ${{ runner.temp }}/oxfmt-evidence
+        run: |
+          mkdir -p "$TMPDIR"
+          npm run check formatter
+        timeout-minutes: 5
+      - name: Retain Oxfmt measurements and source-bound receipts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: oxfmt-qualification
+          path: |
+            ${{ runner.temp }}/oxfmt-evidence/factory-attempt-*/verification.json
+            ${{ runner.temp }}/oxfmt-evidence/factory-attempt-*/output.log
+            ${{ runner.temp }}/oxfmt-evidence/factory-attempt-*/oxfmt-*/receipt.json
+            ${{ runner.temp }}/oxfmt-evidence/factory-attempt-*/oxfmt-*/corpus/**
+            ${{ runner.temp }}/oxfmt-evidence/factory-attempt-*/oxfmt-*/invalid/**
+            ${{ runner.temp }}/oxfmt-evidence/factory-attempt-*/oxfmt-*/first-install/npm-install.log
+            ${{ runner.temp }}/oxfmt-evidence/factory-attempt-*/oxfmt-*/repeated-install/npm-install.log
+          retention-days: 7
+          if-no-files-found: error
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
