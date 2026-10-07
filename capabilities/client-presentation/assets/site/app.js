@@ -681,13 +681,10 @@
       const year = Math.min(Number($("#equity-year").value || assumptions.holdYears), assumptions.holdYears);
       $("#equity-year-label").textContent = String(year);
       const pointAt = (r, y) => r.years[Math.max(0, Math.min(y, r.years.length - 1))];
-      const maxValue = Math.max(...rows.map(({result}) => pointAt(result, year).value), 1);
+      const maxValue = Math.max(...rows.flatMap(({result}) => { const point = pointAt(result, year); return [point.value, point.balance]; }), 1);
       $("#equity-chart").innerHTML = rows.map(({property, result}) => {
         const point = pointAt(result, year);
-        const remaining = Math.max(0, point.balance / point.value * 100);
-        const principal = Math.max(0, point.principalRepaid / point.value * 100);
-        const appreciation = Math.max(0, point.appreciation / point.value * 100);
-        return `<button type="button" class="equity-row" data-preview="${esc(property.id)}"><div class="equity-row-top"><b>${esc(title(property))}</b><strong>${money(point.equity)} Equity</strong></div><div class="equity-value-bar" role="img" aria-label="${esc(title(property))}, year ${year}: value ${money(point.value)}, remaining loan ${money(point.balance)}, principal repaid ${money(point.principalRepaid)}, appreciation ${money(point.appreciation)}" style="width:${point.value / maxValue * 100}%"><span class="loan-segment" style="width:${remaining}%"></span><span class="principal-segment" style="width:${principal}%"></span><span class="appreciation-segment" style="width:${appreciation}%"></span></div><div class="equity-row-meta"><span>Value ${money(point.value)}</span><span>Loan ${money(point.balance)}</span></div></button>`;
+        return `<button type="button" class="equity-row" data-preview="${esc(property.id)}"><div class="equity-row-top"><b>${esc(title(property))}</b><strong>${money(point.equity)} Equity</strong></div><div class="equity-bar-line"><span>Property value</span><div class="equity-value-bar" role="img" aria-label="Value ${money(point.value)}" style="width:${point.value / maxValue * 100}%"></div></div><div class="equity-bar-line"><span>Remaining loan</span><div class="equity-loan-bar" role="img" aria-label="Remaining loan ${money(point.balance)}" style="width:${point.balance / maxValue * 100}%"></div></div><div class="equity-row-meta"><span>Value ${money(point.value)}</span><span>Loan ${money(point.balance)}</span><span>Principal repaid ${money(point.principalRepaid)}</span><span>Appreciation ${money(point.appreciation)}</span></div></button>`;
       }).join("");
       const lineView = $("#line-view").value;
       $("#line-property-control").hidden = lineView !== "carry";
@@ -697,11 +694,14 @@
       const chartSeries = lineView === "app"
         ? rows.map(({property, result}, i) => ({name: title(property), color: ["#f57f29", "#002f6c", "#147d56"][i % 3], values: years.map((y) => pointAt(result, y).appreciation)}))
         : (() => { const result = model(selected); return [{name: "Property Equity", color: "#147d56", values: years.map((y) => pointAt(result, y).equity)}, {name: "Cumulative Cash Carry", color: "#b42318", values: years.map((y) => pointAt(result, y).carry)}]; })();
-      const ceiling = Math.max(1, ...chartSeries.flatMap((series) => series.values.map((v) => Math.max(0, v))));
+      const values = chartSeries.flatMap((series) => series.values);
+      const floor = Math.min(0, ...values), ceiling = Math.max(0, ...values);
+      const range = ceiling - floor || 1;
       const x = (i) => left + (years.length <= 1 ? 0 : i / (years.length - 1)) * (svgW - left - right);
-      const y = (v) => svgH - bottom - Math.max(0, v) / ceiling * (svgH - top - bottom);
+      const y = (v) => svgH - bottom - (v - floor) / range * (svgH - top - bottom);
       let svg = `<svg class="ownership-line-svg" viewBox="0 0 ${svgW} ${svgH}" role="img" aria-label="${lineView === "app" ? "Appreciation" : "Equity and cash carry"} over ${assumptions.holdYears} years">`;
-      for (let i = 0; i <= 4; i++) { const value = ceiling * i / 4; svg += `<line x1="${left}" y1="${y(value)}" x2="${svgW-right}" y2="${y(value)}" stroke="#dce4ee"/><text x="${left-8}" y="${y(value)+4}" text-anchor="end">${money(value)}</text>`; }
+      for (let i = 0; i <= 4; i++) { const value = floor + (ceiling - floor) * i / 4; svg += `<line x1="${left}" y1="${y(value)}" x2="${svgW-right}" y2="${y(value)}" stroke="#dce4ee"/><text x="${left-8}" y="${y(value)+4}" text-anchor="end">${money(value)}</text>`; }
+      svg += `<line x1="${left}" y1="${y(0)}" x2="${svgW-right}" y2="${y(0)}" stroke="#8198b9" stroke-width="2"/>`;
       for (let i = 0; i < years.length; i++) svg += `<text x="${x(i)}" y="${svgH-bottom+22}" text-anchor="middle">${years[i]}</text>`;
       for (const series of chartSeries) { svg += `<polyline points="${series.values.map((value, i) => `${x(i)},${y(value)}`).join(" ")}" fill="none" stroke="${series.color}" stroke-width="3"/>`; for (let i=0;i<series.values.length;i++) svg += `<circle cx="${x(i)}" cy="${y(series.values[i])}" r="4" fill="white" stroke="${series.color}" stroke-width="2"><title>${esc(series.name)} · Year ${years[i]}: ${money(series.values[i])}</title></circle>`; }
       svg += "</svg>";

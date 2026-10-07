@@ -113,8 +113,23 @@ export async function acceptBrowserSite({directory,negativeChecks=true,screensho
         const before=await page.locator('#finance-results').innerText();
         await page.locator('input[name="tenant-ti-rate"][value="50"]').check();assert.notEqual(await page.locator('#finance-results').innerText(),before);
         await page.locator('#equity-year').focus();await page.keyboard.press('Home');await page.keyboard.press('ArrowRight');assert.equal(await page.locator('#equity-year-label').innerText(),'1');
+        const holdingBars=await page.locator('#equity-chart .equity-row').evaluateAll(nodes=>nodes.map(n=>({value:Number.parseFloat(n.querySelector('.equity-value-bar').style.width),loan:Number.parseFloat(n.querySelector('.equity-loan-bar')?.style.width)})));
+        assert.ok(holdingBars.every(b=>Number.isFinite(b.loan) && b.value<=100 && b.loan<=100),'property value and loan must have separate bounded bars');
+        const holdingAmounts=input.properties.map(property=>globalThis.PresentationFinance.compute(property,input.assumptions,50).years[1]);
+        for(const [i,bars] of holdingBars.entries())assert.ok(Math.abs(bars.value/bars.loan-holdingAmounts[i].value/holdingAmounts[i].balance)<1e-5,'value and loan bars use one scale within CSS serialization precision');
         await page.locator('#line-view').selectOption('carry');assert.equal(await page.locator('#line-property-control').isVisible(),true);
         assert.match(await page.locator('.ownership-line-svg').getAttribute('aria-label'),/Equity and cash carry/);
+        const cashCarry=await page.locator('.ownership-line-svg circle').evaluateAll(nodes=>nodes.filter(n=>n.querySelector('title').textContent.startsWith('Cumulative Cash Carry ·')).map(n=>({y:Number(n.getAttribute('cy')),label:n.querySelector('title').textContent})));
+        assert.ok(cashCarry.some(point=>point.label.includes('-$')),'fixture exercises negative cash carry');
+        for(const point of cashCarry.filter(point=>point.label.includes('-$')))assert.ok(point.y>cashCarry[0].y,'negative cash carry must plot below zero');
+        assert.ok((await page.locator('.ownership-line-svg text').allTextContents()).some(label=>label.startsWith('-$')),'signed chart has negative axis labels');
+        await page.evaluate(()=>window.PresentationData.assumptions.annualAppreciation=-0.02);
+        await page.locator('#line-view').selectOption('app');
+        const appreciation=await page.locator('.ownership-line-svg circle').evaluateAll(nodes=>nodes.map(n=>({y:Number(n.getAttribute('cy')),label:n.querySelector('title').textContent})));
+        assert.ok(appreciation.some(point=>point.label.includes('-$')),'declining-value control exercises negative appreciation');
+        for(const point of appreciation.filter(point=>point.label.includes('-$')))assert.ok(point.y>appreciation[0].y,'negative appreciation must plot below zero');
+        await page.evaluate(value=>window.PresentationData.assumptions.annualAppreciation=value,input.assumptions.annualAppreciation);
+        await page.locator('#line-view').selectOption('carry');
         await page.locator('#finance-property').selectOption(input.properties[1].id);assert.match(await page.locator('#strategy-table').innerText(),new RegExp(input.properties[1].name));
       }
       for(const id of ['home',transaction,...(input.strategy.mode==='owner_occupancy_30_70'?['strategy']:[]),'tour','demographics','sources']) {

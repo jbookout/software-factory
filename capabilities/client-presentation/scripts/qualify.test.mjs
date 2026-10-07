@@ -22,10 +22,11 @@ test('failed checks, expired research and failed browser acceptance cannot packa
   }
 });
 test('hosted adapter must bind deployment, auth and persistence evidence to packaged artifact',async()=>{
-  const options=await setup();
-  const hostedAdapter=async({artifactDigest})=>({deployment:{status:'deployed',artifactDigest,version:'synthetic-1'},hostedAuth:{status:'verified',unauthenticated:'denied',authenticated:'allowed',evidence:'synthetic-auth-observation'},persistence:{status:'verified',saveReload:'passed',conflict:'passed',evidence:'synthetic-storage-observation'}});
+  const options={...await setup(),clientUrl:'https://share.doctorcre.com/synthetic/'};
+  const hostedAdapter=async({artifactDigest,clientUrl})=>({deployment:{status:'deployed',artifactDigest,version:'synthetic-1',url:clientUrl},hostedAuth:{status:'verified',unauthenticated:'denied',authenticated:'allowed',evidence:'synthetic-auth-observation'},persistence:{status:'verified',saveReload:'passed',conflict:'passed',evidence:'synthetic-storage-observation'}});
   const result=await qualifyPresentation({...options,runChecks:passedChecks,browserCheck:passedBrowser,hostedAdapter});assert.equal(result.clientReady,false);assert.equal(result.deployment.version,'synthetic-1');
-  const bad=await setup();await assert.rejects(qualifyPresentation({...bad,runChecks:passedChecks,browserCheck:passedBrowser,hostedAdapter:async()=>({deployment:{status:'deployed',artifactDigest:'stale'}})}),/binding|evidence/);
+  assert.equal(result.requestedClientUrl,options.clientUrl);assert.equal(result.deployment.url,options.clientUrl);
+  const bad=await setup();await assert.rejects(qualifyPresentation({...bad,clientUrl:options.clientUrl,runChecks:passedChecks,browserCheck:passedBrowser,hostedAdapter:async()=>({deployment:{status:'deployed',artifactDigest:'stale'}})}),/binding|evidence/);
 });
 
 test('a symlinked output parent cannot package client input under the public source tree',async()=>{
@@ -33,4 +34,12 @@ test('a symlinked output parent cannot package client input under the public sou
   await fs.symlink(process.cwd(),alias,'dir');
   await assert.rejects(qualifyPresentation({...options,output:path.join(alias,'forbidden-package'),runChecks:passedChecks,browserCheck:passedBrowser}),/outside the public/);
   await assert.rejects(fs.stat(path.join(alias,'forbidden-package')),/ENOENT/);
+});
+
+test('hosted publication must verify the exact requested human-facing client URL',async()=>{
+  const options=await setup(),clientUrl='https://share.doctorcre.com/synthetic/';
+  const hostedAdapter=async({artifactDigest})=>({deployment:{status:'deployed',artifactDigest,version:'synthetic-1',url:'https://synthetic-provider.example/site'},hostedAuth:{status:'verified',unauthenticated:'denied',authenticated:'allowed',evidence:'synthetic-auth-observation'},persistence:{status:'verified',saveReload:'passed',conflict:'passed',evidence:'synthetic-storage-observation'}});
+  await assert.rejects(qualifyPresentation({...options,clientUrl,runChecks:passedChecks,browserCheck:passedBrowser,hostedAdapter}),/client URL/);
+  await assert.rejects(fs.stat(options.output),/ENOENT/);
+  for(const invalid of [undefined,'http://share.doctorcre.com/synthetic/','https://username@share.doctorcre.com/synthetic/'])await assert.rejects(qualifyPresentation({...options,clientUrl:invalid,runChecks:passedChecks,browserCheck:passedBrowser,hostedAdapter}),/client URL/);
 });

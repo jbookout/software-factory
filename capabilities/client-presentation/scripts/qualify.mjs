@@ -25,13 +25,19 @@ async function packageDigest(directory) {
   }
   await visit(directory);return digest(JSON.stringify(entries));
 }
-function hostedEvidence(value,artifactDigest) {
+function hostedEvidence(value,artifactDigest,clientUrl) {
   if(value?.deployment?.status!=='deployed' || value.deployment.artifactDigest!==artifactDigest || typeof value.deployment.version!=='string' || !value.deployment.version)throw new Error('hosted deployment binding evidence missing');
+  if(value.deployment.url!==clientUrl)throw new Error('hosted deployment must verify the exact requested client URL');
   if(value.hostedAuth?.status!=='verified' || value.hostedAuth.unauthenticated!=='denied' || value.hostedAuth.authenticated!=='allowed' || !value.hostedAuth.evidence)throw new Error('hosted authentication evidence failed');
   if(value.persistence?.status!=='verified' || value.persistence.saveReload!=='passed' || value.persistence.conflict!=='passed' || !value.persistence.evidence)throw new Error('hosted persistence evidence failed');
   return value;
 }
-export async function qualifyPresentation({input,output,sourceRoot=defaultRoot,today=new Date().toISOString().slice(0,10),runChecks=checkSource,browserCheck=acceptBrowserSite,hostedAdapter}={}) {
+export async function qualifyPresentation({input,output,sourceRoot=defaultRoot,today=new Date().toISOString().slice(0,10),runChecks=checkSource,browserCheck=acceptBrowserSite,hostedAdapter,clientUrl}={}) {
+  if(clientUrl!==undefined || hostedAdapter) {
+    let target;
+    try{target=new URL(clientUrl);}catch{throw new Error('requested client URL requires an absolute HTTPS URL');}
+    if(target.protocol!=='https:' || target.username || target.password || target.hash || /[\\\s]/.test(clientUrl))throw new Error('requested client URL requires an absolute HTTPS URL without credentials, fragment or whitespace');
+  }
   const requested=path.resolve(output),source=await verificationSource(sourceRoot);
   const destination=path.join(await fs.realpath(path.dirname(requested)),path.basename(requested)),realSource=await fs.realpath(sourceRoot);
   if(destination===realSource || destination.startsWith(realSource+path.sep))throw new Error('client packages must be outside the public factory checkout');
@@ -46,8 +52,8 @@ export async function qualifyPresentation({input,output,sourceRoot=defaultRoot,t
     if(browser.schema!=='presentation-browser-acceptance/v1' || !browser.results?.length || !['desktop','mobile'].every(device=>browser.results.some(result=>result.device===device && result.passed===true)) || browser.results.some(result=>result.passed!==true))throw new Error('browser acceptance failed');
     if(JSON.stringify(await verificationSource(sourceRoot))!==JSON.stringify(source) || digest(await fs.readFile(input))!==digest(bytes))throw new Error('qualification source binding changed');
     const artifactDigest=await packageDigest(stage);
-    const hosted=hostedAdapter?hostedEvidence(await hostedAdapter({artifactDigest,source}),artifactDigest):{deployment:{status:'not_deployed'},hostedAuth:{status:'not_checked'},persistence:{status:'not_checked'}};
-    const receipt={schema:'presentation-publication-qualification/v1',qualifiedAt:today,rendererVersion:3,source,inputDigest:digest(bytes),artifactDigest,checks,browser,...hosted,clientReady:Boolean(hostedAdapter) && !data.presentation.fictional};
+    const hosted=hostedAdapter?hostedEvidence(await hostedAdapter({artifactDigest,source,clientUrl}),artifactDigest,clientUrl):{deployment:{status:'not_deployed'},hostedAuth:{status:'not_checked'},persistence:{status:'not_checked'}};
+    const receipt={schema:'presentation-publication-qualification/v1',qualifiedAt:today,rendererVersion:3,source,inputDigest:digest(bytes),artifactDigest,checks,browser,requestedClientUrl:clientUrl??null,...hosted,clientReady:Boolean(hostedAdapter) && !data.presentation.fictional};
     await fs.mkdir(destination,{recursive:false});
     for(const entry of await fs.readdir(stage)) await fs.cp(path.join(stage,entry),path.join(destination,entry),{recursive:true,force:false,errorOnExist:true});
     await fs.writeFile(path.join(destination,'qualification.json'),JSON.stringify(receipt,null,2)+'\n',{flag:'wx'});
