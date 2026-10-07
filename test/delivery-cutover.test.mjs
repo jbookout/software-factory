@@ -178,3 +178,27 @@ test('interrupted rollback retains restored scripts when installation receipt ha
  assert.equal(await fs.readFile(path.join(old,'pr-loop.sh'),'utf8'),before)
  assert.equal(run('status').stdout.trim(),'mode: legacy')
 })
+
+test('PR63 repair: omitted stateDir survives isolated installed cutover and verification',async t=>{
+ const f=await orch(t),config=JSON.parse(await fs.readFile(f.config));delete config.stateDir
+ await fs.writeFile(f.config,JSON.stringify(config))
+ const flip=f.run('flip');assert.equal(flip.status,0,flip.stderr)
+ const receipt=JSON.parse(await fs.readFile(path.join(f.old,'.factory-orch.json')))
+ assert.equal(receipt.stateDir,path.join(await fs.realpath(f.root),'carr-delivery/state'))
+ const verify=spawnSync('sh',[path.join(f.old,'review-pr.sh'),'--factory-binding'],{encoding:'utf8',env:{...process.env,HOME:f.root}})
+ assert.equal(verify.status,0,verify.stderr)
+ assert.equal(JSON.parse(verify.stdout).stateDir,receipt.stateDir)
+ assert.equal(f.run('rollback').status,0)
+})
+
+test('PR63 repair: missing base.ref cannot activate the installed simulated cutover',async t=>{
+ const f=await orch(t)
+ const row={id:7,number:7,title:'Fixture',draft:false,head:{sha:'a'.repeat(40)},base:{sha:'b'.repeat(40),repo:{full_name:'jbookout/carr-system'}}}
+ await fs.writeFile(f.gh,'#!/bin/sh\nprintf \'HTTP/2.0 200 OK\\n\\n'+JSON.stringify([row])+'\\n\'\n',{mode:0o755})
+ const flip=f.run('flip');assert.notEqual(flip.status,0)
+ assert.match(flip.stderr,/invalid GitHub (?:observation shape|pull-list response)/)
+ assert.equal(f.run('status').stdout.trim(),'mode: legacy')
+ const record=JSON.parse(await fs.readFile(path.join(f.old,'delivery-cutover.json')))
+ assert.equal(record.phase,'rolled-back')
+ assert.doesNotMatch(await fs.readFile(path.join(f.old,'cutover-simulated.log'),'utf8'),/deliver .*--detach/)
+})

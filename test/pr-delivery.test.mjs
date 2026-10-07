@@ -131,9 +131,9 @@ if(['codex','claude'].includes(tool)) {
  if(s.moveDuringChecks && ++s.moveViewCount>1) {
  git('-C',s.checkout,'checkout','-q','topic');fs.writeFileSync(s.checkout+'/moved.txt','moved');git('-C',s.checkout,'add','moved.txt');git('-C',s.checkout,'commit','-qm','Move head');git('-C',s.checkout,'push','-q','origin','topic');
  s.headRefOid=git('--git-dir',s.remote,'rev-parse','refs/heads/topic');s.moveDuringChecks=false;save(); }
- save();respond({...pr(Number(route.split('/').at(-1))),...s.prOverrides});
+ save();respond({...pr(Number(route.split('/').at(-1))),...s.prOverrides,...(s.prFaultNumber===Number(route.split('/').at(-1))?{comments:'invalid'}:{})});
  } else if(route.includes('/pulls?')) {
- const prs=s.listCount?Array.from({length:s.listCount},(_,i)=>({...pr(),body:'x'.repeat(s.listBodyBytes??0),id:i+100,number:i===s.listCount-1?7:i+100,comments:i===s.listCount-1?s.comments.length:0})):[pr()];if(s.listOmitsComments) for(const row of prs) delete row.comments;respond(prs.slice((page-1)*pageSize,page*pageSize));
+ const prs=s.listCount?Array.from({length:s.listCount},(_,i)=>({...pr(),body:'x'.repeat(s.listBodyBytes??0),id:i+100,number:i===s.listCount-1?7:i+100,comments:i===s.listCount-1?s.comments.length:0})):[pr()];if(s.listOmitsComments) for(const row of prs) delete row.comments;if(s.listOmitBaseRef) for(const row of prs) delete row.base.ref;if(s.listReverse) prs.reverse();for(const row of prs) Object.assign(row,s.listOverrides??{});respond(prs.slice((page-1)*pageSize,page*pageSize));
  } else if(route.includes('/comments')) {
  const number=Number(/issues\\/([0-9]+)\\//.exec(route)[1]);
  if(s.missingCommentPage===page) respond([]); else respond(s.comments.filter(c=>(c.pr??7)===number).map((c,i)=>({id:i+1,created_at:new Date(1700000000000+i*1000).toISOString(),updated_at:new Date(1700000000000+i*1000).toISOString(),user:{login:c.author?.login??'reviewer'},...c})).slice((page-1)*pageSize,page*pageSize));
@@ -2471,4 +2471,90 @@ test('historical cancellation with a newer green check never retriggers CI', asy
  assert.equal(result.data.retriggered,false)
  const after=await f.read();assert.equal(after.headRefOid,f.head)
  assert.equal(after.ghCalls.filter(a=>a.includes('POST')&&a.some(v=>v.endsWith('/git/commits'))).length,0)
+})
+
+
+test('PR63 repair: omitted stateDir uses the documented default without creating state', async t => {
+ const f=await fixture(t,{}, {stateDir:undefined})
+ const config=await loadDeliveryConfig(f.config)
+ assert.equal(config.stateDir,path.join(os.homedir(),'carr-delivery/state'))
+})
+
+test('PR63 repair: checkout path skips missing unrelated repositories and retains ambiguity/origin guards', async t => {
+ const f=await fixture(t), config=JSON.parse(await fs.readFile(f.config))
+ config.repos['fixture/unavailable']={...config.repos[repo],checkout:path.join(f.root,'missing')}
+ await fs.writeFile(f.config,JSON.stringify(config))
+ const byName=await f.run('branch-wt',repo,'topic');ok(byName)
+ const byPath=await f.run('branch-wt',f.checkout,'topic');ok(byPath)
+ assert.equal(await fs.realpath(byPath.stdout.trim()),await fs.realpath(byName.stdout.trim()))
+ config.repos['fixture/alias']={...config.repos[repo]}
+ await fs.writeFile(f.config,JSON.stringify(config))
+ const ambiguous=await f.run('branch-wt',f.checkout,'topic')
+ assert.notEqual(ambiguous.code,0);assert.match(ambiguous.stderr,/ambiguous/)
+ delete config.repos['fixture/alias'];config.repos[repo].originUrl=path.join(f.root,'wrong-origin')
+ await fs.writeFile(f.config,JSON.stringify(config))
+ const origin=await f.run('branch-wt',f.checkout,'topic')
+ assert.notEqual(origin.code,0);assert.match(origin.stderr,/origin/i)
+})
+
+for(const fault of ['badCheckPage','checkFault']) test('PR63 repair: unapproved discovery persists all jobs without CI reads: '+fault, async t => {
+ const f=await fixture(t,{listOmitsComments:true,listCount:2,[fault]:true})
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const result=await adapter.execute('delivery-scan',{repo})
+ assert.equal(result.status,'pass',JSON.stringify(result))
+ assert.deepEqual(result.data.candidates,[{repo,pr:100},{repo,pr:7}])
+ const jobs=JSON.parse(await fs.readFile(path.join(f.stateDir,'inflight.json')))
+ assert.equal(jobs[keyFor(repo,100)].status,'pending');assert.equal(jobs[keyFor(repo,7)].status,'pending')
+ const state=await f.read()
+ assert.ok(state.ghCalls.every(a=>!a[1].includes('/check-runs')&&!a[1].includes('/statuses')))
+ assert.equal(state.calls.length,0)
+ const calls=state.ghCalls.length
+ const again=await adapter.execute('delivery-scan',{repo})
+ assert.deepEqual(again.data.candidates,result.data.candidates)
+ assert.ok(again.data.retryAt>Date.now());assert.equal((await f.read()).ghCalls.length,calls)
+})
+
+test('PR63 repair: approved CI read failure retains both pending jobs', async t => {
+ const f=await fixture(t,{listOmitsComments:true,listCount:2})
+ await f.approve()
+ const state=await f.read();state.badCheckPage=true;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(state))
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const result=await adapter.execute('delivery-scan',{repo})
+ assert.equal(result.status,'pass',JSON.stringify(result))
+ assert.deepEqual(result.data.candidates,[{repo,pr:100},{repo,pr:7}])
+ assert.deepEqual(result.data.observationErrors.map(e=>e.pr),[7])
+ const jobs=JSON.parse(await fs.readFile(path.join(f.stateDir,'inflight.json')))
+ assert.equal(jobs[keyFor(repo,7)].status,'pending')
+ assert.ok((await f.read()).ghCalls.some(a=>a[1].includes('/check-runs')))
+})
+
+test('PR63 repair: a later malformed PR observation retains earlier approved progress', async t => {
+ const f=await fixture(t,{listOmitsComments:true,listCount:2,listReverse:true})
+ await f.approve()
+ const state=await f.read();state.prFaultNumber=100;await fs.writeFile(f.env.FAKE_PR,JSON.stringify(state))
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const result=await adapter.execute('delivery-scan',{repo})
+ assert.equal(result.status,'pass',JSON.stringify(result))
+ assert.deepEqual(result.data.candidates,[{repo,pr:100}])
+ assert.deepEqual(result.data.observationErrors.map(e=>e.pr),[100])
+ const jobs=JSON.parse(await fs.readFile(path.join(f.stateDir,'inflight.json')))
+ assert.equal(jobs[keyFor(repo,100)].status,'pending');assert.equal(jobs[keyFor(repo,7)].status,'complete')
+})
+
+for(const overrides of [{listOmitBaseRef:true},{listOverrides:{title:null}},{listOverrides:{number:0}},{listOverrides:{draft:null}},{listOverrides:{head:{sha:'bad'}}}])
+ for(const step of ['delivery-smoke','delivery-scan'])
+ test('PR63 repair: incomplete pull list independently fails '+step+' and preserves pending intent: '+JSON.stringify(overrides),async t=>{
+ const f=await fixture(t,overrides)
+ await fs.mkdir(f.stateDir,{recursive:true})
+ const jobs={[keyFor(repo,999)]:{repo,pr:999,head:f.head,status:'pending',source:'discovery'}}
+ await fs.writeFile(path.join(f.stateDir,'inflight.json'),JSON.stringify(jobs))
+ const adapter=createPrDeliveryAdapter(await loadDeliveryConfig(f.config),{env:f.env})
+ const result=await adapter.execute(step,{repo})
+ assert.equal(result.status,'fail',JSON.stringify(result))
+ assert.match(result.data.message,/invalid GitHub (?:observation shape|pull-list response)/)
+ assert.deepEqual(JSON.parse(await fs.readFile(path.join(f.stateDir,'inflight.json'))),jobs)
+ await assert.rejects(fs.access(path.join(f.stateDir,'discovery',encodeURIComponent(repo)+'.json')),{code:'ENOENT'})
+ const state=await f.read();assert.equal(state.calls.length,0)
+ assert.ok(state.ghCalls.some(a=>a[0]==='api'&&a[1].includes('/pulls?state=open')), 'must read the malformed list, not stop at a prior hold')
+ assert.ok(state.ghCalls.every(a=>a[0]==='api'&&!a.includes('-X')))
 })
