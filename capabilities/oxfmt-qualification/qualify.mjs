@@ -27,6 +27,14 @@ export function nativeHtmlUnsupported(kind, result, unchanged) {
     (result.stdout + result.stderr).includes('Expected at least one target file')
 }
 
+export function peakRssBytes(report, platform) {
+  const pattern = platform === 'darwin' ? /^\s*(\d+)\s+maximum resident set size\s*$/gm :
+    /^[ \t]*Maximum resident set size \(kbytes\):[ \t]*(\d+)[ \t]*$/gm
+  const matches = [...report.matchAll(pattern)]
+  assert.equal(matches.length, 1, 'resource measurement missing or ambiguous')
+  return Number(matches[0][1]) * (platform === 'darwin' ? 1 : 1024)
+}
+
 async function measured(command, args, cwd, label) {
   const started = performance.now()
   const result = await runProcess(['/usr/bin/time', process.platform === 'darwin' ? '-l' : '-v',
@@ -34,10 +42,8 @@ async function measured(command, args, cwd, label) {
   { cwd, env: { PATH: process.env.PATH, LANG: 'C.UTF-8' }, timeoutMs: 30000 })
   const log = `${label}.log`, bytes = result.stdout + result.stderr
   await fs.writeFile(path.join(cwd, log), bytes, { flag: 'wx', mode: 0o600 })
-  const rss = result.stderr.match(process.platform === 'darwin' ? /^\s*(\d+)\s+maximum resident set size\s*$/m : /Maximum resident set size \(kbytes\): (\d+)/)
-  assert(rss, 'resource measurement missing')
   return { ...result, measurement: { exitCode: result.code, controllerWallMs: performance.now() - started,
-    peakRssBytes: Number(rss[1]) * (process.platform === 'darwin' ? 1 : 1024), log, logDigest: sha(bytes) } }
+    peakRssBytes: peakRssBytes(bytes, process.platform), log, logDigest: sha(bytes) } }
 }
 
 /** Execute a real formatter against a copy; unchanged/skipped files cannot pass. */

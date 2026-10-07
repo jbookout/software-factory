@@ -6,13 +6,22 @@ import os from 'node:os'
 import { execFileSync } from 'node:child_process'
 import { extractPinnedArchive, sha } from '../capabilities/oxfmt-qualification/install.mjs'
 import { assertSemanticParity } from '../capabilities/oxfmt-qualification/semantics.mjs'
-import { nativeHtmlUnsupported, qualifyFile } from '../capabilities/oxfmt-qualification/qualify.mjs'
+import { nativeHtmlUnsupported, peakRssBytes, qualifyFile } from '../capabilities/oxfmt-qualification/qualify.mjs'
 
 async function owned(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'oxfmt-test-'))
   t.after(() => fs.rm(root, { recursive: true, force: true }))
   return root
 }
+
+test('rusage parses the complete captured report and converts Linux KiB without treating Darwin bytes as KiB', () => {
+  // The first hosted npm check retained this GNU report on the combined stream.
+  const stdout = 'Checking formatting...\n\tMaximum resident set size (kbytes): 79536\n'
+  assert.equal(peakRssBytes(stdout + '', 'linux'), 79536 * 1024)
+  assert.equal(peakRssBytes('  8585216  maximum resident set size\n', 'darwin'), 8585216)
+  assert.throws(() => peakRssBytes('formatter output only', 'linux'), /missing or ambiguous/)
+  assert.throws(() => peakRssBytes(stdout + stdout, 'linux'), /missing or ambiguous/)
+})
 function archive(members) {
   return execFileSync('python3', ['-c', `import io,json,sys,tarfile
 buf=io.BytesIO()
