@@ -14,13 +14,12 @@ async function owned(t) {
   return root
 }
 
-test('rusage parses the complete captured report and converts Linux KiB without treating Darwin bytes as KiB', () => {
-  // The first hosted npm check retained this GNU report on the combined stream.
-  const stdout = 'Checking formatting...\n\tMaximum resident set size (kbytes): 79536\n'
-  assert.equal(peakRssBytes(stdout + '', 'linux'), 79536 * 1024)
+test('rusage converts Linux KiB without treating Darwin bytes as KiB and rejects incomplete reports', () => {
+  const report = '\tMaximum resident set size (kbytes): 79536\n'
+  assert.equal(peakRssBytes(report, 'linux'), 79536 * 1024)
   assert.equal(peakRssBytes('  8585216  maximum resident set size\n', 'darwin'), 8585216)
   assert.throws(() => peakRssBytes('formatter output only', 'linux'), /missing or ambiguous/)
-  assert.throws(() => peakRssBytes(stdout + stdout, 'linux'), /missing or ambiguous/)
+  assert.throws(() => peakRssBytes(report + report, 'linux'), /missing or ambiguous/)
 })
 function archive(members) {
   return execFileSync('python3', ['-c', `import io,json,sys,tarfile
@@ -91,6 +90,19 @@ async function fake(t, body, extension = 'js') {
   await fs.writeFile(cli, `const fs=require('node:fs');const file=process.argv.at(-1);const text=fs.readFileSync(file,'utf8');${body}`)
   return { root, source, command: [process.execPath, cli] }
 }
+
+test('dedicated rusage files stay complete and formatter stderr cannot impersonate measurements', async t => {
+  const fixture = await fake(t, `console.error('Maximum resident set size (kbytes): 1');
+console.error(' 1 maximum resident set size');
+const next=text.trimEnd()+String.fromCharCode(10);
+if(process.argv.includes('--check'))process.exit(text===next?0:1);fs.writeFileSync(file,next);`)
+  const directory = path.join(fixture.root, 'copy')
+  const row = await qualifyFile({ ...fixture, kind: 'js', distribution: 'npm', directory, samples: 1 })
+  assert.equal(row.status, 'fixture-qualified')
+  assert(row.observations[0].peakRssBytes > 1024)
+  const report = await fs.readFile(path.join(directory, row.observations[0].resourceReport))
+  assert.equal(sha(report), row.observations[0].resourceReportDigest)
+})
 
 test('copied input skipped by a successful checker is rejected', async t => {
   const fixture = await fake(t, 'process.exit(0)')

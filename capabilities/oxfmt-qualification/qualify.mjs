@@ -37,13 +37,17 @@ export function peakRssBytes(report, platform) {
 
 async function measured(command, args, cwd, label) {
   const started = performance.now()
-  const result = await runProcess(['/usr/bin/time', process.platform === 'darwin' ? '-l' : '-v',
+  const reportFile = path.join(cwd, `${label}.rusage`)
+  await fs.writeFile(reportFile, '', { flag: 'wx', mode: 0o600 })
+  const result = await runProcess(['/usr/bin/time', process.platform === 'darwin' ? '-l' : '-v', '-o', reportFile,
     ...command, '--disable-nested-config', '--threads=2', ...args],
   { cwd, env: { PATH: process.env.PATH, LANG: 'C.UTF-8' }, timeoutMs: 30000 })
   const log = `${label}.log`, bytes = result.stdout + result.stderr
   await fs.writeFile(path.join(cwd, log), bytes, { flag: 'wx', mode: 0o600 })
+  const report = await fs.readFile(reportFile, 'utf8')
   return { ...result, measurement: { exitCode: result.code, controllerWallMs: performance.now() - started,
-    peakRssBytes: peakRssBytes(bytes, process.platform), log, logDigest: sha(bytes) } }
+    peakRssBytes: peakRssBytes(report, process.platform), resourceReport: path.basename(reportFile),
+    resourceReportDigest: sha(report), log, logDigest: sha(bytes) } }
 }
 
 /** Execute a real formatter against a copy; unchanged/skipped files cannot pass. */

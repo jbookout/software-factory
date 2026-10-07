@@ -44,7 +44,9 @@ save, independent localStorage read and reload behavior using local Chromium.
 These are bounded fixture checks, not proofs for arbitrary application code.
 
 The nested `receipt.json` declares source, tool/lock digests, coverage, fallback,
-per-command log digests, controller wall time and OS rusage peak RSS. Its parent
+per-command log/report digests, controller wall time and OS rusage peak RSS.
+OS time writes its report to an exclusive owned file, independently of formatter
+stdout/stderr; incomplete or ambiguous reports fail. Its parent
 `factory-verification/v1` binds the producing command, entire source and captured
 log. Hosted artifacts retain both receipts and copied-corpus logs/files.
 
