@@ -94,6 +94,7 @@ jobs:
             ${{ runner.temp }}/oxfmt-evidence/factory-attempt-*/output.log
             ${{ runner.temp }}/oxfmt-evidence/factory-attempt-*/oxfmt-*/receipt.json
             ${{ runner.temp }}/oxfmt-evidence/factory-attempt-*/oxfmt-*/corpus/**
+            ${{ runner.temp }}/oxfmt-evidence/factory-attempt-*/oxfmt-*/invalid/**
             ${{ runner.temp }}/oxfmt-evidence/factory-attempt-*/oxfmt-*/first-install/npm-install.log
             ${{ runner.temp }}/oxfmt-evidence/factory-attempt-*/oxfmt-*/repeated-install/npm-install.log
           retention-days: 7
