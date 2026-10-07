@@ -115,7 +115,7 @@
       "id": "example-clinic-district",
       "name": "Example Clinic District",
       "location": "Fictional region",
-      "description": "Synthetic development record used to test map, table, and detail rendering.",
+      "description": "Synthetic development record used to test map, image cards, and detail rendering.",
       "status": "Fictional example",
       "locator": {
         "kind": "approximate",
@@ -123,7 +123,6 @@
         "lon": -90.12,
         "sourceId": "source-market-fixture"
       },
-      "artKey": "harbor",
       "image": null,
       "sourceId": "source-market-fixture",
       "noPhotoReason": "Synthetic fixture: no image provided."
@@ -147,7 +146,6 @@
       },
       "parkingSpaces": null,
       "parkingRatio": null,
-      "artKey": "grove",
       "image": null,
       "sourceId": "source-property-fixture",
       "noPhotoReason": "Synthetic fixture: no image provided."
@@ -169,7 +167,6 @@
       },
       "parkingSpaces": null,
       "parkingRatio": null,
-      "artKey": "grove",
       "image": null,
       "sourceId": "source-property-fixture",
       "noPhotoReason": "Synthetic fixture: no image provided."
@@ -191,7 +188,6 @@
       },
       "parkingSpaces": null,
       "parkingRatio": null,
-      "artKey": "grove",
       "image": null,
       "sourceId": "source-property-fixture",
       "noPhotoReason": "Synthetic fixture: no image provided."
@@ -213,7 +209,6 @@
       },
       "parkingSpaces": null,
       "parkingRatio": null,
-      "artKey": "grove",
       "image": null,
       "sourceId": "source-property-fixture",
       "noPhotoReason": "Synthetic fixture: no image provided."

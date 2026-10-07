@@ -41,23 +41,24 @@ export async function acceptBrowserSite({directory,negativeChecks=true,screensho
         response.end(JSON.stringify(state));return;
       }
       const pathname=new URL(request.url,'http://127.0.0.1').pathname;
-      const vendor=pathname==='/vendor/maplibre.js'?require.resolve('maplibre-gl/dist/maplibre-gl.js'):pathname==='/vendor/maplibre.css'?require.resolve('maplibre-gl/dist/maplibre-gl.css'):null;
+      const vendor=pathname.startsWith('/vendor/') && /^maplibre-gl(?:-worker|-shared)?\.(?:mjs|css)$/.test(path.basename(pathname))?require.resolve('maplibre-gl/dist/'+path.basename(pathname)):null;
       const filename=vendor || path.resolve(files,'.'+(pathname==='/'?'/index.html':pathname));
       if(!vendor && !filename.startsWith(files+path.sep)){response.writeHead(404);response.end();return;}
       let bytes=await fs.readFile(filename);
-      if(pathname==='/' || pathname==='/index.html')bytes=Buffer.from(bytes.toString().replace('https://unpkg.com/maplibre-gl@5.6.2/dist/maplibre-gl.js','/vendor/maplibre.js').replace('https://unpkg.com/maplibre-gl@5.6.2/dist/maplibre-gl.css','/vendor/maplibre.css'));
-      response.setHeader('Content-Type',filename.endsWith('.js')?'text/javascript':filename.endsWith('.css')?'text/css':filename.endsWith('.png')?'image/png':filename.endsWith('.json')?'application/json':'text/html');response.end(bytes);
+      if(pathname==='/' || pathname==='/index.html' || pathname==='/app.js')bytes=Buffer.from(bytes.toString().replace('https://unpkg.com/maplibre-gl@6.13.0/dist/maplibre-gl.mjs','/vendor/maplibre-gl.mjs').replace('https://unpkg.com/maplibre-gl@6.13.0/dist/maplibre-gl.css','/vendor/maplibre-gl.css'));
+      response.setHeader('Content-Type',/\.m?js$/.test(filename)?'text/javascript':filename.endsWith('.css')?'text/css':filename.endsWith('.png')?'image/png':filename.endsWith('.json')?'application/json':'text/html');response.end(bytes);
     }catch{response.writeHead(404);response.end();}
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   let browser;
-  const results=[];
+  const results=[],diagnostics=[];
   try {
     browser=await chromium.launch({headless:true,args:['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader']});
     for(const [device,viewport] of [['desktop',{width:1440,height:1000}],['mobile',{width:390,height:844}]]) {
       state={version:0,selected_ids:[],notes:'',property_notes:{},updated_at:null,csrf_token:'synthetic-csrf'};
       const context=await browser.newContext({viewport,reducedMotion:'reduce'});if(offlineFixture)await context.route('https://**',route=>route.abort());
-      const page=await context.newPage(), errors=[];page.on('pageerror',e=>errors.push(e.message));
+      const page=await context.newPage(), errors=[];page.on('pageerror',e=>{errors.push(e.message);diagnostics.push(`${device}: ${e.message}`);});
+      page.on('console',message=>{if(message.type()==='error')diagnostics.push(`${device}: ${message.text()}`);});
       await page.goto(`http://127.0.0.1:${server.address().port}`);
       assert.deepEqual(await page.locator('#site-nav a').allTextContents(),['Home',...(input.leases.length?['Leases']:[]),...(input.properties.length?['Purchases']:[]),...(input.sections.some(s=>s.id==='strategy' && s.visible!==false)?['Strategy']:[]),'Tour List','Demographics','Sources']);
       await page.locator('.home-actions a').click();await page.locator(input.properties.length?'#purchases':'#leases').waitFor({state:'visible'});
@@ -128,14 +129,14 @@ export async function acceptBrowserSite({directory,negativeChecks=true,screensho
       assert.equal(await page.locator('.property-jump').first().evaluate(n=>getComputedStyle(n).transitionDuration),'0s');
       if(negativeChecks && device==='desktop' && input.properties.length>1) {
         await page.locator('#site-nav a[href="#purchases"]').click();await page.evaluate(()=>document.querySelector('#purchase-map .map-pin').style.visibility='hidden');await assert.rejects(assertPins(page,'#purchase-map .map-pin'),/hidden, clipped or covered/);
-        await page.evaluate(()=>{const p=document.querySelectorAll('#purchase-map .map-pin');p[0].style.visibility='visible';p[1].style.transform=p[0].style.transform;});await assert.rejects(assertPins(page,'#purchase-map .map-pin'),/overlap|hidden, clipped or covered/);
+        await page.evaluate(()=>{const p=document.querySelectorAll('#purchase-map .map-pin');p[0].style.visibility='visible';const b=p[0].getBoundingClientRect();for(const [key,value] of Object.entries({position:'fixed',left:`${b.x}px`,top:`${b.y}px`,transform:'none',translate:'none'}))p[1].style.setProperty(key,value,'important');});await assert.rejects(assertPins(page,'#purchase-map .map-pin'),/overlap|hidden, clipped or covered/);
         results.push({device,check:'hidden-and-overlapping-pin-negative-controls',passed:true});
       }
       assert.deepEqual(errors,[],`${device} browser exceptions`);
       results.push({device,check:'navigation-grid-sticky-dialog-selection-demographics-reduced-motion',passed:true});await context.close();
     }
-  }finally{await browser?.close();await new Promise(resolve=>server.close(resolve));}
-  return{schema:'presentation-browser-acceptance/v1',engine:'playwright@1.63.0',runtime:'chromium',syntheticAdapter:true,results};
+  }catch(error){throw new Error(`${error.message}\nBrowser diagnostics: ${diagnostics.slice(-10).join(' | ')}`,{cause:error});}finally{await browser?.close();await new Promise(resolve=>server.close(resolve));}
+  return{schema:'presentation-browser-acceptance/v1',engine:'playwright@1.63.0',renderer:'maplibre-gl@6.13.0',runtime:'chromium',syntheticAdapter:true,results};
 }
 export async function qualifyFixtures({screenshots}={}) {
   const temporary=await fs.mkdtemp(path.join(os.tmpdir(),'presentation-browser-')),runs=[];

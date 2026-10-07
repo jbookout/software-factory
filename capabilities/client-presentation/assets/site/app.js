@@ -53,7 +53,7 @@
     ...(visibleSections.has("demographics") ? ["demographics"] : []),
     "sources",
   ];
-  let maps = {};
+  let maps = {}, maplibregl = null;
   let selected = {
     version: null,
     selected_ids: [],
@@ -304,7 +304,7 @@
   function initMap(id, items) {
     let el = document.getElementById(id);
     if (!el || maps[id]) return;
-    if (!window.maplibregl) {
+    if (!maplibregl) {
       el.textContent =
         "Map unavailable. The source-linked cards remain available.";
       return;
@@ -321,6 +321,7 @@
         "No basemap style configured. Entries remain listed without pins.";
       return;
     }
+    el.replaceChildren();
     let map = new maplibregl.Map({
       container: id,
       style,
@@ -420,6 +421,18 @@
     });
     map.on("moveend", layoutPins);
     map.on("resize", layoutPins);
+  }
+  async function loadMaps() {
+    try {
+      maplibregl = await import("https://unpkg.com/maplibre-gl@6.13.0/dist/maplibre-gl.mjs");
+      const view = $(".site-view:not([hidden])");
+      if (view.id === "home") initMap("development-map", projects);
+      if (view.id === "purchases") initMap("purchase-map", properties);
+    } catch {
+      for (const id of ["development-map", "purchase-map"]) {
+        $("#" + id).textContent = "Map unavailable. The source-linked cards remain available.";
+      }
+    }
   }
   function renderLeases() {
     const dir = $("#lease-directory");
@@ -943,6 +956,7 @@
     );
     window.addEventListener("hashchange", show);
     show();
+    loadMaps();
   }
   document.readyState === "loading"
     ? document.addEventListener("DOMContentLoaded", init)

@@ -12,6 +12,12 @@ test('research context retains factory constraints and loads its scoped referenc
   assert.ok(result.selectedBytes<result.catalogBytes);
   assert.ok(result.constraints[0].text.includes('deployment authority'));
 });
+test('unknown pointer types refuse before context is loaded', async () => {
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-context-type-'));await fs.mkdir(path.join(root,'config'));
+  const manifest=JSON.parse(await fs.readFile('config/task-context.v1.json','utf8'));
+  manifest.tasks['presentation-research'][0].type='unknown';await fs.writeFile(path.join(root,'config/task-context.v1.json'),JSON.stringify(manifest));
+  await assert.rejects(loadTaskContext({root,task:'presentation-research'}),/recognized pointer types/);
+});
 test('missing mandatory constraint or escaped pointer refuses the load', async () => {
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-context-'));await fs.mkdir(path.join(root,'config'));
   const manifest=JSON.parse(await fs.readFile('config/task-context.v1.json','utf8'));

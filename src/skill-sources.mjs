@@ -14,6 +14,7 @@ async function registry(root) {
   }
   for(const source of value.sources) {
     if(source.license!=='MIT' || !source.reuseVerified || !/^[a-f0-9]{40}$/.test(source.revision))throw new Error('verified reuse license and pinned revision required');
+    if(!Array.isArray(source.files) || !source.files.some(file=>file.path===source.licensePath))throw new Error('license must belong to the verified source file set');
     for(const file of source.files) {
       if(path.isAbsolute(file.path) || file.path.split(/[\\/]/).includes('..'))throw new Error('skill path escapes source');
       const location=await fs.realpath(path.join(root,file.path)),base=await fs.realpath(root);

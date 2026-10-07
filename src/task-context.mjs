@@ -19,6 +19,9 @@ export async function loadTaskContext({root,task}) {
   if(manifest.schema!=='factory-task-context/v1')throw new Error('unsupported task context manifest');
   if(!Array.isArray(manifest.constraints) || manifest.constraints.length!==Object.keys(required).length || Object.keys(required).some(id=>manifest.constraints.filter(p=>p.id===id).length!==1))throw new Error('mandatory constraint pointer missing or duplicated');
   for(const constraint of manifest.constraints) if(constraint.path!=="AGENTS.md" || constraint.section!==required[constraint.id]) throw new Error("mandatory constraint binding changed");
+  for(const pointers of Object.values(manifest.tasks || {})) {
+    if(!Array.isArray(pointers) || !pointers.length || pointers.some(pointer=>!['procedure','reference','contract','acceptance'].includes(pointer.type))) throw new Error('task context requires recognized pointer types');
+  }
   const pointers=manifest.tasks?.[task];
   if(!Array.isArray(pointers) || !pointers.length)throw new Error(`unknown task context: ${task}`);
   const constraints=await Promise.all(manifest.constraints.map(p=>readPointer(root,p)));
