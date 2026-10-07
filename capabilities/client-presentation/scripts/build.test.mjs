@@ -224,3 +224,13 @@ test("asset paths cannot escape through a symlinked parent directory", async (t)
   await fs.writeFile(input, JSON.stringify(data));
   await assert.rejects(build(input, path.join(root, "site")), /resolves outside/);
 });
+
+test("ownership modes require a non-context purchase candidate", async () => {
+  for (const name of ["owner-occupancy.json", "owner-occupancy-30-70.json"]) {
+    const data = await fixture(name);
+    data.properties.forEach(property => { property.status = "context"; });
+    assert.throws(() => validate(data), /requires a non-context purchase candidate/);
+    data.properties[0].status = "available";
+    assert.equal(validate(data), data);
+  }
+});

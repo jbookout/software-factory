@@ -198,8 +198,11 @@ export function validate(data) {
       );
     }
   } else {
+    if (!data.properties.some(property => property.status !== "context")) {
+      throw new Error(`${mode} requires a non-context purchase candidate`);
+    }
     if (
-      !data.properties.length || !visible("purchases") ||
+      !visible("purchases") ||
       (mode === "owner_occupancy_30_70" && (!visible("strategy") || !data.assumptions))
     ) {
       throw new Error(
