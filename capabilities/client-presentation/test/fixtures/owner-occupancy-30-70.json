@@ -8,14 +8,20 @@
     "logo": null
   },
   "presentation": {
-    "title": "Synthetic practice property review",
+    "title": "Fictional shared-owner example",
     "preparedFor": "Example Practice A",
     "scenarioDate": "October 2026",
     "summary": "Fictional example only. Replace the complete dataset with verified, source-backed client research before use.",
     "fictional": true
   },
   "strategy": {
-    "mode": "owner_occupancy"
+    "mode": "owner_occupancy_30_70",
+    "tiContributionPerSf": 50,
+    "tiRange": {
+      "min": 25,
+      "max": 75,
+      "step": 25
+    }
   },
   "sections": [
     {
@@ -25,9 +31,21 @@
       "visible": true
     },
     {
+      "id": "leases",
+      "label": "Leases",
+      "title": "Keep flexibility in the plan.",
+      "visible": true
+    },
+    {
       "id": "purchases",
       "label": "Purchases",
       "title": "Ownership gives the practice a stake in the future.",
+      "visible": true
+    },
+    {
+      "id": "strategy",
+      "label": "Strategy",
+      "title": "Make the space work harder.",
       "visible": true
     },
     {
@@ -106,9 +124,8 @@
       "lon": -90.1
     },
     "zoom": 11,
-    "disclaimer": "Fictional coordinates for interface testing only; not for navigation.",
-    "style": "https://demotiles.maplibre.org/style.json",
-    "label": "Fictional regional locator"
+    "disclaimer": "Fictional coordinates for interface testing only; do not use for navigation.",
+    "style": "https://demotiles.maplibre.org/style.json"
   },
   "developments": [
     {
@@ -131,8 +148,8 @@
   ],
   "properties": [
     {
-      "id": "example-property-1",
-      "name": "Example Purchase 1",
+      "id": "example-owner-property",
+      "name": "Example Owner Property",
       "location": "Fictional region",
       "type": "Purchase \u00b7 fictional",
       "price": 1250000,
@@ -157,58 +174,14 @@
       "name": "Example Purchase 2",
       "location": "Fictional region",
       "type": "Purchase \u00b7 fictional",
-      "price": 1375000,
-      "totalSf": 7000,
+      "price": 1500000,
+      "totalSf": 9000,
       "description": "Synthetic purchase record for testing complete practice occupancy.",
       "planningNote": "No external tenant strategy is represented in this example.",
       "locator": {
         "kind": "approximate",
         "lat": 35.12,
-        "lon": -90.08,
-        "sourceId": "source-property-fixture"
-      },
-      "parkingSpaces": null,
-      "parkingRatio": null,
-      "artKey": "grove",
-      "image": null,
-      "sourceId": "source-property-fixture",
-      "noPhotoReason": "Synthetic fixture: no image provided."
-    },
-    {
-      "id": "example-property-3",
-      "name": "Example Purchase 3",
-      "location": "Fictional region",
-      "type": "Purchase \u00b7 fictional",
-      "price": 1500000,
-      "totalSf": 7000,
-      "description": "Synthetic purchase record for testing complete practice occupancy.",
-      "planningNote": "No external tenant strategy is represented in this example.",
-      "locator": {
-        "kind": "approximate",
-        "lat": 35.125,
-        "lon": -90.085,
-        "sourceId": "source-property-fixture"
-      },
-      "parkingSpaces": null,
-      "parkingRatio": null,
-      "artKey": "grove",
-      "image": null,
-      "sourceId": "source-property-fixture",
-      "noPhotoReason": "Synthetic fixture: no image provided."
-    },
-    {
-      "id": "example-property-4",
-      "name": "Example Purchase 4",
-      "location": "Fictional region",
-      "type": "Purchase \u00b7 fictional",
-      "price": 1625000,
-      "totalSf": 7000,
-      "description": "Synthetic purchase record for testing complete practice occupancy.",
-      "planningNote": "No external tenant strategy is represented in this example.",
-      "locator": {
-        "kind": "approximate",
-        "lat": 35.125,
-        "lon": -90.085,
+        "lon": -90.09,
         "sourceId": "source-property-fixture"
       },
       "parkingSpaces": null,
@@ -219,7 +192,46 @@
       "noPhotoReason": "Synthetic fixture: no image provided."
     }
   ],
-  "leases": [],
+  "leases": [
+    {
+      "id": "example-comparator-lease",
+      "name": "Example Lease Comparator",
+      "location": "Fictional region",
+      "subtitle": "Synthetic comparison only",
+      "structure": "Example gross lease",
+      "planningNote": "No current availability or market rate is represented.",
+      "locator": {
+        "kind": "approximate",
+        "lat": 35.14,
+        "lon": -90.1,
+        "sourceId": "source-lease-fixture"
+      },
+      "parkingSpaces": null,
+      "parkingRatio": null,
+      "image": null,
+      "sourceId": "source-lease-fixture",
+      "noPhotoReason": "Synthetic fixture: no image provided.",
+      "totalSf": 5000,
+      "rentPerSf": 24
+    }
+  ],
+  "assumptions": {
+    "occupancyFraction": 0.3,
+    "downPaymentFraction": 0.25,
+    "annualInterest": 0.065,
+    "amortizationYears": 25,
+    "holdYears": 7,
+    "annualAppreciation": 0.02,
+    "annualRentPerSf": 24,
+    "collectionLoss": 0.08,
+    "fillMonths": 9,
+    "practiceBuildoutPerSf": 120,
+    "assumptionNotes": [
+      "All values are synthetic test inputs, not financing terms or forecasts.",
+      "The example models 30% practice occupancy and 70% outside-tenant area.",
+      "The model excludes ownership costs not explicitly included in these inputs."
+    ]
+  },
   "demographics": {
     "modelVersion": 1,
     "title": "Synthetic demographic research",

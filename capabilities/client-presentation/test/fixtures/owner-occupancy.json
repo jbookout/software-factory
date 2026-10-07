@@ -106,9 +106,8 @@
       "lon": -90.1
     },
     "zoom": 11,
-    "disclaimer": "Fictional coordinates for interface testing only; not for navigation.",
-    "style": "https://demotiles.maplibre.org/style.json",
-    "label": "Fictional regional locator"
+    "disclaimer": "Fictional coordinates for interface testing only; do not use for navigation.",
+    "style": "https://demotiles.maplibre.org/style.json"
   },
   "developments": [
     {

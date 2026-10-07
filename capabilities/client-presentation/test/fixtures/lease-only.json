@@ -1,21 +1,21 @@
 {
   "schemaVersion": 2,
   "brand": {
-    "name": "Example Practice A",
+    "name": "Example Practice B",
     "descriptor": "Healthcare Real Estate",
     "navy": "#002f6c",
     "orange": "#f57f29",
     "logo": null
   },
   "presentation": {
-    "title": "Synthetic practice property review",
-    "preparedFor": "Example Practice A",
+    "title": "Fictional lease comparison example",
+    "preparedFor": "Example Practice B",
     "scenarioDate": "October 2026",
     "summary": "Fictional example only. Replace the complete dataset with verified, source-backed client research before use.",
     "fictional": true
   },
   "strategy": {
-    "mode": "owner_occupancy"
+    "mode": "lease_only"
   },
   "sections": [
     {
@@ -25,9 +25,9 @@
       "visible": true
     },
     {
-      "id": "purchases",
-      "label": "Purchases",
-      "title": "Ownership gives the practice a stake in the future.",
+      "id": "leases",
+      "label": "Leases",
+      "title": "Keep flexibility in the plan.",
       "visible": true
     },
     {
@@ -52,24 +52,7 @@
   "market": {
     "title": "Fictional market snapshot",
     "summary": "These made-up market signals illustrate layout only. They are not local facts or forecasts.",
-    "developmentTitle": "Example projects in context",
-    "purchaseScreening": [
-      {
-        "label": "Practice occupancy",
-        "description": "Synthetic shortlist for the configured practice occupancy scenario. Confirm the clinical layout during due diligence.",
-        "sourceId": "source-property-fixture"
-      },
-      {
-        "label": "Reported space",
-        "description": "Synthetic reported areas are shown in each property card; verify measurements and usable space.",
-        "sourceId": "source-property-fixture"
-      },
-      {
-        "label": "Parking and access",
-        "description": "Parking is unverified in this synthetic shortlist. Review access, condition and availability before deciding.",
-        "sourceId": "source-property-fixture"
-      }
-    ]
+    "developmentTitle": "Example projects in context"
   },
   "metrics": [
     {
@@ -106,120 +89,34 @@
       "lon": -90.1
     },
     "zoom": 11,
-    "disclaimer": "Fictional coordinates for interface testing only; not for navigation.",
-    "style": "https://demotiles.maplibre.org/style.json",
-    "label": "Fictional regional locator"
+    "disclaimer": "Fictional coordinates for interface testing only; do not use for navigation.",
+    "style": "https://demotiles.maplibre.org/style.json"
   },
-  "developments": [
+  "developments": [],
+  "properties": [],
+  "leases": [
     {
-      "id": "example-clinic-district",
-      "name": "Example Clinic District",
+      "id": "example-comparator-lease",
+      "name": "Example Lease Comparator",
       "location": "Fictional region",
-      "description": "Synthetic development record used to test map, table, and detail rendering.",
-      "status": "Fictional example",
+      "subtitle": "Synthetic comparison only",
+      "structure": "Example gross lease",
+      "planningNote": "No current availability or market rate is represented.",
       "locator": {
         "kind": "approximate",
-        "lat": 35.1,
-        "lon": -90.12,
-        "sourceId": "source-market-fixture"
+        "lat": 35.14,
+        "lon": -90.1,
+        "sourceId": "source-lease-fixture"
       },
-      "artKey": "harbor",
+      "parkingSpaces": null,
+      "parkingRatio": null,
       "image": null,
-      "sourceId": "source-market-fixture",
-      "noPhotoReason": "Synthetic fixture: no image provided."
+      "sourceId": "source-lease-fixture",
+      "noPhotoReason": "Synthetic fixture: no image provided.",
+      "totalSf": 5000,
+      "rentPerSf": 24
     }
   ],
-  "properties": [
-    {
-      "id": "example-property-1",
-      "name": "Example Purchase 1",
-      "location": "Fictional region",
-      "type": "Purchase \u00b7 fictional",
-      "price": 1250000,
-      "totalSf": 7000,
-      "description": "Synthetic purchase record for testing complete practice occupancy.",
-      "planningNote": "No external tenant strategy is represented in this example.",
-      "locator": {
-        "kind": "approximate",
-        "lat": 35.12,
-        "lon": -90.08,
-        "sourceId": "source-property-fixture"
-      },
-      "parkingSpaces": null,
-      "parkingRatio": null,
-      "artKey": "grove",
-      "image": null,
-      "sourceId": "source-property-fixture",
-      "noPhotoReason": "Synthetic fixture: no image provided."
-    },
-    {
-      "id": "example-property-2",
-      "name": "Example Purchase 2",
-      "location": "Fictional region",
-      "type": "Purchase \u00b7 fictional",
-      "price": 1375000,
-      "totalSf": 7000,
-      "description": "Synthetic purchase record for testing complete practice occupancy.",
-      "planningNote": "No external tenant strategy is represented in this example.",
-      "locator": {
-        "kind": "approximate",
-        "lat": 35.12,
-        "lon": -90.08,
-        "sourceId": "source-property-fixture"
-      },
-      "parkingSpaces": null,
-      "parkingRatio": null,
-      "artKey": "grove",
-      "image": null,
-      "sourceId": "source-property-fixture",
-      "noPhotoReason": "Synthetic fixture: no image provided."
-    },
-    {
-      "id": "example-property-3",
-      "name": "Example Purchase 3",
-      "location": "Fictional region",
-      "type": "Purchase \u00b7 fictional",
-      "price": 1500000,
-      "totalSf": 7000,
-      "description": "Synthetic purchase record for testing complete practice occupancy.",
-      "planningNote": "No external tenant strategy is represented in this example.",
-      "locator": {
-        "kind": "approximate",
-        "lat": 35.125,
-        "lon": -90.085,
-        "sourceId": "source-property-fixture"
-      },
-      "parkingSpaces": null,
-      "parkingRatio": null,
-      "artKey": "grove",
-      "image": null,
-      "sourceId": "source-property-fixture",
-      "noPhotoReason": "Synthetic fixture: no image provided."
-    },
-    {
-      "id": "example-property-4",
-      "name": "Example Purchase 4",
-      "location": "Fictional region",
-      "type": "Purchase \u00b7 fictional",
-      "price": 1625000,
-      "totalSf": 7000,
-      "description": "Synthetic purchase record for testing complete practice occupancy.",
-      "planningNote": "No external tenant strategy is represented in this example.",
-      "locator": {
-        "kind": "approximate",
-        "lat": 35.125,
-        "lon": -90.085,
-        "sourceId": "source-property-fixture"
-      },
-      "parkingSpaces": null,
-      "parkingRatio": null,
-      "artKey": "grove",
-      "image": null,
-      "sourceId": "source-property-fixture",
-      "noPhotoReason": "Synthetic fixture: no image provided."
-    }
-  ],
-  "leases": [],
   "demographics": {
     "modelVersion": 1,
     "title": "Synthetic demographic research",

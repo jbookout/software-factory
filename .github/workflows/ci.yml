@@ -34,6 +34,9 @@ jobs:
           "$RUNNER_TEMP/factory-check/bin/python" -m pip install -r scripts/orch/requirements.txt
           echo "$RUNNER_TEMP/factory-check/bin" >> "$GITHUB_PATH"
         timeout-minutes: 5
+      - name: Install pinned Chromium for presentation acceptance
+        run: npx --no-install playwright install --with-deps chromium
+        timeout-minutes: 5
       - name: Run npm run check
         shell: bash
         env:
