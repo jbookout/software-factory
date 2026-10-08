@@ -35,7 +35,10 @@
     "factory": "node ./bin/factory.mjs",
     "design-cloud:qualify": "node ./bin/design-cloud-qualify.mjs",
     "e2e:qualify": "node ./capabilities/agentic-ui-evaluation/qualify.mjs",
-    "model-room:evidence": "node ./bin/model-room-evidence.mjs"
+    "model-room:evidence": "node ./bin/model-room-evidence.mjs",
+    "prepare": "python3 security/install_hook.py",
+    "leak:check": "python3 security/leak_guard.py --staged",
+    "leak:test": "python3 security/test_leak_guard.py"
   },
   "devDependencies": {
     "@shadcn/lint": "0.1.0",
