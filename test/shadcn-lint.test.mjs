@@ -41,3 +41,11 @@ test("the design-system fixture rejects drift with actionable diagnostics", asyn
     "expected repair guidance in at least one diagnostic"
   )
 })
+
+test("the sixth configured policy rejects unknown classes with repair guidance", async () => {
+  const [result] = await lint("unknown.tsx")
+  const diagnostic = result.messages.find(({ ruleId }) => ruleId === "shadcn/no-unknown-classes")
+  assert.equal(diagnostic?.severity, 2)
+  assert.match(diagnostic.message, /no CSS is generated/)
+  assert.match(diagnostic.message, /Use an existing component variant/)
+})

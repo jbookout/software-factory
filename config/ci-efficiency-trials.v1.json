@@ -6,12 +6,27 @@
   "coverage_policy": "Retain full required CI coverage, local compiler checks, existing producer/source/log receipt validation, all five shadcn diagnostic contract assertions and every configured lint rule.",
   "trials": [
     {
-      "id": 1, "technique": "Oxlint replacing applicable ESLint rules with diagnostic parity", "status": "planned",
-      "entrypoints": ["software-factory/npm run check", "software-factory/test/shadcn-lint.test.mjs"],
-      "trial": "Inventory the active rules and fixture diagnostics; pin Oxlint; compare normalized rule, severity, source range, message and repair guidance over clean and seeded-invalid fixtures. Trial native rules and supported JS plugins; retain the ESLint adapter for any unqualified custom rule.",
+      "id": 1,
+      "technique": "Oxlint replacing applicable ESLint rules with diagnostic parity",
+      "status": "trial",
+      "entrypoints": [
+        "software-factory/npm run check lint",
+        "software-factory/test/shadcn-lint.test.mjs"
+      ],
+      "trial": "Inventory the active rules and fixture diagnostics; pin Oxlint; compare normalized rule, severity, source range, message and repair guidance over clean and seeded-invalid fixtures. Trial native rules and supported JS plugins; retain the ESLint adapter for any unqualified custom rule. First bounded slice: execute official Oxlint 1.80.0 JS-plugin parity over fourteen copied/seeded Factory files with per-file resolved policy, clean/error exits, UI exemptions and Unicode/CRLF ranges. Native-rule and type-aware qualification remain pending; ESLint/full checks stay retained.",
       "acceptance": "No lost required diagnostic, unchanged clean acceptance, measured cold/warm time and RSS; replace only qualified rules. Test all six configured shadcn policies and all five current invalid-fixture assertions.",
-      "evidence": [], "reject_if": "An executed parity fixture proves a missing or incorrect required diagnostic that cannot be repaired in the bounded adapter trial.",
-      "sources": ["https://oxc.rs/docs/guide/usage/linter.html"]
+      "evidence": [
+        {
+          "entrypoint": "npm run check lint",
+          "artifact": "oxlint-qualification",
+          "receipt": "oxlint-qualification/v1 inside factory-verification/v1",
+          "scope": "Bounded source-only shadcn diagnostic trial; draft Darwin/Linux evidence and independent review required. No replacement or untried-track implementation claim."
+        }
+      ],
+      "reject_if": "An executed parity fixture proves a missing or incorrect required diagnostic that cannot be repaired in the bounded adapter trial.",
+      "sources": [
+        "https://oxc.rs/docs/guide/usage/linter.html"
+      ]
     },
     {
       "id": 2, "technique": "Oxfmt formatter", "status": "trial",

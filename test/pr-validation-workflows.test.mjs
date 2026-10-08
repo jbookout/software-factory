@@ -71,6 +71,22 @@ for (const file of files) {
     assert.ok(job['timeout-minutes'] >= setupMinutes + suiteMinutes + remainingValidationMinutes,
       'job deadline must leave time for installation, the full suite and subsequent validation');
   });
+  test(`${file}: explicit Oxlint qualification retains review evidence and fails on parity errors`, () => {
+    const job = parse(source).jobs['e2e-deterministic-qualification'];
+    const qualify = job.steps.find(step => /npm run check lint/.test(step.run ?? ''));
+    assert.ok(qualify, 'bounded lint class must execute in existing Linux job');
+    assert.equal(qualify['continue-on-error'], undefined);
+    assert.equal(job['continue-on-error'], undefined);
+    assert.equal(qualify.env.TMPDIR, '${{ runner.temp }}/oxlint-evidence');
+    const artifact = job.steps.find(step => step.with?.name === 'oxlint-qualification');
+    assert.equal(artifact.if, 'always()');
+    assert.equal(artifact.with['if-no-files-found'], 'error');
+    for (const suffix of ['verification.json', 'output.log', 'receipt.json', '*.rusage', '*.normalized.json', 'installer/install.log', 'corpus/.oxlintrc.json'])
+      assert.ok(artifact.with.path.includes(suffix), `missing retained evidence: ${suffix}`);
+    assert.doesNotMatch(artifact.with.path, /node_modules|installer\/cache|\*\*\/\*/);
+    assert.ok(job.steps.some(step => /npm run check formatter/.test(step.run ?? '')), 'existing formatter qualification remains');
+    assert.ok(job.steps.some(step => step.run === 'npm run e2e:qualify'), 'existing browser qualification remains');
+  });
   test(`${file}: required context identity is retained`, () => {
     assert.deepEqual(policy(source, context()).jobs, ["test", "e2e-deterministic-qualification"]);
   });

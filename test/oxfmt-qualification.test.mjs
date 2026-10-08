@@ -6,7 +6,8 @@ import os from 'node:os'
 import { execFileSync } from 'node:child_process'
 import { extractPinnedArchive, sha } from '../capabilities/oxfmt-qualification/install.mjs'
 import { assertSemanticParity } from '../capabilities/oxfmt-qualification/semantics.mjs'
-import { nativeHtmlUnsupported, peakRssBytes, qualifyFile } from '../capabilities/oxfmt-qualification/qualify.mjs'
+import { peakRssBytes } from '../src/rusage.mjs'
+import { nativeHtmlUnsupported, qualifyFile } from '../capabilities/oxfmt-qualification/qualify.mjs'
 
 async function owned(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'oxfmt-test-'))
