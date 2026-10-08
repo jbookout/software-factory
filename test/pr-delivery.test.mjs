@@ -14,7 +14,8 @@ const foregroundArgs = (name, args) => [...args, ...(["pr-loop", "deliver"].incl
 const fake = `#!/usr/bin/env node
 const fs = require('node:fs'), cp = require('node:child_process');
 const args = process.argv.slice(2), file = process.env.FAKE_PR;
-const diagnostic = value => fs.appendFileSync(file+'.transport.jsonl',JSON.stringify(value)+'\\n');
+const started=performance.now();
+const diagnostic = value => fs.appendFileSync(file+'.transport.jsonl',JSON.stringify({...value,at:new Date().toISOString(),elapsedMs:Math.round(performance.now()-started)})+'\\n');
 if(require('node:path').basename(process.argv[1])==='gh') {
  process.on('exit',code=>diagnostic({args,code}));
  process.on('uncaughtException',error=>{diagnostic({args,error:{code:error.code,message:error.message,status:error.status,signal:error.signal}});process.exit(1)});
@@ -189,6 +190,14 @@ async function fixture(t, overrides = {}, configOverrides = {}) {
    if(code) {
     const diagnostics=await fs.readFile(env.FAKE_PR+'.transport.jsonl','utf8').catch(()=>"")
     stderr+='\nFixture transport diagnostics:\n'+diagnostics.split('\n').slice(-5).join('\n')
+    const journal=await fs.readFile(path.join(stateDir,'delivery.jsonl'),'utf8').catch(()=>"")
+    const phases=journal.split('\n').filter(Boolean).flatMap(line=>{
+     try { const event=JSON.parse(line);return event.phase==='api'?[{at:event.at,status:event.status,code:event.code,durationMs:event.durationMs}]:[] }
+     catch { return [{diagnostic:'incomplete fixture phase journal'}] }
+    })
+    const policy=await fs.readFile(config,'utf8').then(JSON.parse).then(current=>({apiTimeoutMs:current.apiTimeoutMs??current.commandTimeoutMs})).catch(()=>({configObservation:'unreadable'}))
+    stderr+='\nFixture API phase diagnostics:\n'+JSON.stringify({...policy,phases:phases.slice(-5)})
+
    }
    resolve({code,stdout,stderr})
   })
@@ -2289,7 +2298,7 @@ test("FREEZE in merge-holds.txt leaves the queued entry untouched and merges not
 test("an unreadable merge-holds.txt line stops merging instead of dropping a hold",async t=>{
  const f=await tiered(t,{"feature.txt":1});await f.approve();ok(await f.run("merge-enqueue",repo,"7",f.head))
  await fs.writeFile(path.join(f.root,"merge-holds.txt"),repo+"\n")
- const r=await f.run("merge-queue","--once");assert.equal(r.code,75);assert.match(r.stderr,/MERGE HOLDS UNREADABLE: line 1/)
+ const r=await f.run("merge-queue","--once");assert.equal(r.code,75,JSON.stringify(r));assert.match(r.stderr,/MERGE HOLDS UNREADABLE: line 1/)
  assert.equal((await f.read()).state,"OPEN")
  const [queued]=JSON.parse(await fs.readFile(path.join(f.stateDir,"queue.json")))
  assert.equal(queued.state,"effect-requested");assert.equal(queued.owner,null);assert.equal(queued.lastResult.data.code,75)
@@ -2436,4 +2445,29 @@ test('historical cancellation with a newer green check never retriggers CI', asy
  assert.equal(result.data.retriggered,false)
  const after=await f.read();assert.equal(after.headRefOid,f.head)
  assert.equal(after.ghCalls.filter(a=>a.includes('POST')&&a.some(v=>v.endsWith('/git/commits'))).length,0)
+})
+
+
+test('fixture diagnostics distinguish API deadline from completed fake transport and quota hold',async t=>{
+ const f=await fixture(t)
+ const ready=await f.run('readiness',repo,'7');ok(ready)
+ const state=await f.read();state.apiHang='fetch';state.ghCalls=[];await fs.writeFile(f.env.FAKE_PR,JSON.stringify(state))
+ await fs.writeFile(f.config,JSON.stringify({...f.cfg,apiTimeoutMs:1000,attemptTimeoutMs:1800}))
+ const stopped=await f.run('readiness',repo,'7');assert.equal(stopped.code,142,JSON.stringify(stopped))
+ const match=/Fixture API phase diagnostics:\n([^\n]+)/.exec(stopped.stderr);assert.ok(match,stopped.stderr)
+ const trace=JSON.parse(match[1]);assert.equal(trace.apiTimeoutMs,1000)
+ assert.ok(trace.phases.some(p=>p.status==='stopped'&&p.code===142&&Number.isInteger(p.durationMs)),JSON.stringify(trace))
+ const completed=(await fs.readFile(f.env.FAKE_PR+'.transport.jsonl','utf8')).trim().split('\n').map(JSON.parse)
+ assert.ok(completed.some(p=>p.code===0&&Number.isFinite(p.elapsedMs)&&Number.isFinite(Date.parse(p.at))))
+ assert.equal((await f.read()).ghCalls.length,1,'timeout stops this observation without retry')
+ assert.equal((await f.read()).calls.length,0,'all model executables remain unused')
+ const quota=await fixture(t,{apiFailure:true})
+ const held=await quota.run('readiness',repo,'7');assert.equal(held.code,75,JSON.stringify(held))
+ assert.match(held.stderr,/GitHub quota hold/);assert.equal((await quota.read()).ghCalls.length,1)
+ const heldTrace=JSON.parse(/Fixture API phase diagnostics:\n([^\n]+)/.exec(held.stderr)[1])
+ assert.ok(heldTrace.phases.some(p=>p.status==='stopped'&&p.code===75),JSON.stringify(heldTrace))
+ await fs.writeFile(quota.config,'{broken')
+ const invalid=await quota.run('readiness',repo,'7');assert.equal(invalid.code,9,JSON.stringify(invalid))
+ const invalidTrace=JSON.parse(/Fixture API phase diagnostics:\n([^\n]+)/.exec(invalid.stderr)[1])
+ assert.equal(invalidTrace.configObservation,'unreadable','diagnostic capture must preserve the original config failure')
 })
