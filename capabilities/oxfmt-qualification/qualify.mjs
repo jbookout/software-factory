@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runProcess } from '../../src/process-runner.mjs'
+import { peakRssBytes } from '../../src/rusage.mjs'
 import { verificationSource } from '../../src/local-verification.mjs'
 import { installOxfmt, sha, VERSION } from './install.mjs'
 import { assertSemanticParity } from './semantics.mjs'
@@ -25,14 +26,6 @@ const json = (file, value) => fs.writeFile(file, JSON.stringify(value, null, 2) 
 export function nativeHtmlUnsupported(kind, result, unchanged) {
   return kind === 'html' && result.code === 2 && unchanged &&
     (result.stdout + result.stderr).includes('Expected at least one target file')
-}
-
-export function peakRssBytes(report, platform) {
-  const pattern = platform === 'darwin' ? /^\s*(\d+)\s+maximum resident set size\s*$/gm :
-    /^[ \t]*Maximum resident set size \(kbytes\):[ \t]*(\d+)[ \t]*$/gm
-  const matches = [...report.matchAll(pattern)]
-  assert.equal(matches.length, 1, 'resource measurement missing or ambiguous')
-  return Number(matches[0][1]) * (platform === 'darwin' ? 1 : 1024)
 }
 
 async function measured(command, args, cwd, label) {

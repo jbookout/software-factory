@@ -77,6 +77,33 @@ jobs:
       - run: npx --no-install playwright install --with-deps chromium
         working-directory: capabilities/agentic-ui-evaluation/fixture
       - run: npm run e2e:qualify
+      - name: Qualify pinned Oxlint diagnostic parity
+        env:
+          TMPDIR: ${{ runner.temp }}/oxlint-evidence
+        run: |
+          mkdir -p "$TMPDIR"
+          npm run check lint
+        timeout-minutes: 5
+      - name: Retain Oxlint policy, diagnostic and resource evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: oxlint-qualification
+          path: |
+            ${{ runner.temp }}/oxlint-evidence/factory-attempt-*/verification.json
+            ${{ runner.temp }}/oxlint-evidence/factory-attempt-*/output.log
+            ${{ runner.temp }}/oxlint-evidence/factory-attempt-*/oxlint-*/receipt.json
+            ${{ runner.temp }}/oxlint-evidence/factory-attempt-*/oxlint-*/*.log
+            ${{ runner.temp }}/oxlint-evidence/factory-attempt-*/oxlint-*/*.rusage
+            ${{ runner.temp }}/oxlint-evidence/factory-attempt-*/oxlint-*/*.normalized.json
+            ${{ runner.temp }}/oxlint-evidence/factory-attempt-*/oxlint-*/installer/install.log
+            ${{ runner.temp }}/oxlint-evidence/factory-attempt-*/oxlint-*/corpus/src/**
+            ${{ runner.temp }}/oxlint-evidence/factory-attempt-*/oxlint-*/corpus/.oxlintrc.json
+            ${{ runner.temp }}/oxlint-evidence/factory-attempt-*/oxlint-*/corpus/eslint.config.mjs
+            ${{ runner.temp }}/oxlint-evidence/factory-attempt-*/oxlint-*/corpus/components.json
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: error
       - name: Qualify pinned Oxfmt on copied fixtures
         env:
           TMPDIR: ${{ runner.temp }}/oxfmt-evidence

@@ -8,6 +8,7 @@ const classes = {
 }
 const defaultClasses=Object.keys(classes)
 classes.formatter=[process.execPath,'capabilities/oxfmt-qualification/qualify.mjs']
+classes.lint=[process.execPath,'capabilities/oxlint-qualification/qualify.mjs']
 const args=process.argv.slice(2)
 const focused=args[0]==='node' && args.length>1 && !args.slice(1).every(name=>Object.hasOwn(classes,name))
 const selected=focused?['node']:args
