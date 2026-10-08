@@ -8,7 +8,7 @@ import {runProcess} from '../../src/process-runner.mjs'
 import {verificationSource} from '../../src/local-verification.mjs'
 import {peakRssBytes} from '../../src/rusage.mjs'
 import {installOxlint,sha,VERSION} from './install.mjs'
-import {normalizeEslint,normalizeOxlint,assertDiagnosticParity} from './diagnostics.mjs'
+import {normalizeEslint,normalizeOxlint,assertDiagnosticParity,assertParserFailure} from './diagnostics.mjs'
 import {SEEDS} from './corpus.mjs'
 const sourceRoot=fileURLToPath(new URL('../../',import.meta.url))
 const fixture=path.join(sourceRoot,'capabilities/tailwind-design-system-lint/fixture')
@@ -105,7 +105,8 @@ export async function runQualification(){
   receipt.parserFailureControls=[]
   for(const [name,command,args] of [['baseline',baselineCommand,baselineArgs],['candidate',installer.command,candidateArgs]]){
    const run=await measure(command,[...args,'src/broken-control.tsx'],corpus,directory,'parser-'+name)
-   assert.notEqual(run.code,0,'parser failure ignored');receipt.parserFailureControls.push({engine:name,...run.measurement})
+   const diagnostic=await assertParserFailure(name,run,corpus)
+   receipt.parserFailureControls.push({engine:name,...run.measurement,diagnostic})
   }
   receipt.parserFailureDigest=sha(broken)
   assert.deepEqual(await verificationSource(sourceRoot),receipt.source,'source changed during qualification')

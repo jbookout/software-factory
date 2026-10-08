@@ -58,3 +58,32 @@ export function assertDiagnosticParity(expected,actual){
  const sorted=rows=>rows.map(row=>JSON.stringify(row)).sort()
  assert.deepEqual(sorted(actual),sorted(expected),'diagnostic parity differs (rule/severity/range/message/multiplicity)')
 }
+
+export async function assertParserFailure(engine,result,corpus){
+ assert.equal(result.code,1,engine+' parser-control exit must be 1')
+ assert.equal(result.stderr.trim(),'','parser control produced unrelated stderr')
+ const raw=JSON.parse(result.stdout)
+ let diagnostic,filename,start,end
+ if(engine==='baseline'){
+  assert(Array.isArray(raw)&&raw.length===1,'parser baseline must report one input')
+  const row=raw[0];assert.equal(row.messages?.length,1,'parser baseline must report one diagnostic')
+  diagnostic=row.messages[0];filename=row.filePath
+  assert.equal(row.errorCount,1);assert.equal(row.fatalErrorCount,1);assert.equal(row.warningCount,0)
+  assert.equal(diagnostic.ruleId,null);assert.equal(diagnostic.fatal,true);assert.equal(diagnostic.severity,2)
+  assert.equal(diagnostic.message,'Parsing error: Variable declaration expected.')
+  assert.equal(diagnostic.line,1);assert.equal(diagnostic.column,6);start=5
+ }else{
+  assert.equal(engine,'candidate','unknown parser engine')
+  assert.equal(raw.number_of_files,1);assert.equal(raw.number_of_rules,6);assert.equal(raw.threads_count,2)
+  assert.equal(raw.diagnostics?.length,1,'parser candidate must report one diagnostic')
+  diagnostic=raw.diagnostics[0];filename=diagnostic.filename
+  assert.equal(diagnostic.code,undefined,'expected parser diagnostic, not lint rule')
+  assert.equal(diagnostic.severity,'error');assert.equal(diagnostic.message,'Unexpected token')
+  assert.equal(diagnostic.labels?.length,1)
+  assert.deepEqual(diagnostic.labels[0].span,{offset:6,length:1,line:1,column:7});start=6;end=7
+ }
+ const input=await source(corpus,filename)
+ assert.equal(input.file,'src/broken-control.tsx','parser diagnostic is for a different input')
+ assert.equal(input.text,'const = ;\n','parser-control input changed')
+ return {file:input.file,kind:'parser',severity:2,start,...(end===undefined?{}:{end}),message:diagnostic.message}
+}

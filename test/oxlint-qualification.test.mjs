@@ -4,7 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {validateToolLock,sha} from '../capabilities/oxlint-qualification/install.mjs'
-import {normalizeEslint,normalizeOxlint,assertDiagnosticParity} from '../capabilities/oxlint-qualification/diagnostics.mjs'
+import {normalizeEslint,normalizeOxlint,assertDiagnosticParity,assertParserFailure} from '../capabilities/oxlint-qualification/diagnostics.mjs'
 import {measure} from '../capabilities/oxlint-qualification/qualify.mjs'
 async function owned(t){
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'oxlint-test-'));t.after(()=>fs.rm(root,{recursive:true,force:true}))
@@ -50,4 +50,40 @@ test('checker stderr cannot forge dedicated resource evidence and failure exit r
  const result=await measure([process.execPath,cli],[],root,root,'failure');assert.equal(result.code,1);assert(result.measurement.peakRssBytes>1024)
  assert.equal(sha(await fs.readFile(path.join(root,'failure.rusage'))),result.measurement.resourceReportDigest)
  assert.equal(sha(await fs.readFile(path.join(root,'failure.log'))),result.measurement.logDigest)
+})
+
+function parserResult(engine,file){
+ const raw=engine==='baseline'?[{filePath:file,messages:[{ruleId:null,fatal:true,severity:2,message:'Parsing error: Variable declaration expected.',line:1,column:6}],errorCount:1,fatalErrorCount:1,warningCount:0}]:
+  {diagnostics:[{filename:'src/broken-control.tsx',message:'Unexpected token',severity:'error',labels:[{span:{offset:6,length:1,line:1,column:7}}]}],number_of_files:1,number_of_rules:6,threads_count:2}
+ return {code:1,stdout:JSON.stringify(raw),stderr:''}
+}
+test('parser controls require genuine bound diagnostics, not merely a nonzero exit',async t=>{
+ const root=await owned(t),file=path.join(root,'src/broken-control.tsx');await fs.writeFile(file,'const = ;\n')
+ for(const engine of ['baseline','candidate']){
+  const valid=parserResult(engine,await fs.realpath(file))
+  const diagnostic=await assertParserFailure(engine,valid,root);assert.equal(diagnostic.kind,'parser')
+  for(const code of [0,2,137])await assert.rejects(assertParserFailure(engine,{...valid,code},root),/exit must be 1/)
+  await assert.rejects(assertParserFailure(engine,{...valid,stdout:'not JSON'},root))
+  await assert.rejects(assertParserFailure(engine,{...valid,stderr:'configuration invalid'},root),/unrelated stderr/)
+  const unrelated=JSON.parse(valid.stdout)
+  if(engine==='baseline')unrelated[0].messages[0].message='Configuration error'
+  else unrelated.diagnostics[0].message='Configuration error'
+  await assert.rejects(assertParserFailure(engine,{...valid,stdout:JSON.stringify(unrelated)},root))
+  const wrongFile=JSON.parse(valid.stdout)
+  if(engine==='baseline')wrongFile[0].filePath=path.join(root,'src/a.tsx')
+  else wrongFile.diagnostics[0].filename='src/a.tsx'
+  await fs.writeFile(path.join(root,'src/a.tsx'),'const = ;\n')
+  await assert.rejects(assertParserFailure(engine,{...valid,stdout:JSON.stringify(wrongFile)},root),/different input/)
+ }
+})
+test('actual checker crashes and configuration-error exits cannot qualify parser controls',async t=>{
+ const root=await owned(t);await fs.writeFile(path.join(root,'src/broken-control.tsx'),'const = ;\n')
+ for(const [fault,script] of [['crash',"throw new Error('simulated checker crash')"],['config',"console.error('invalid checker configuration');process.exit(2)"]]){
+  const cli=path.join(root,fault+'.cjs');await fs.writeFile(cli,script)
+  for(const engine of ['baseline','candidate']){
+   const run=await measure([process.execPath,cli],[],root,root,engine+'-'+fault)
+   assert.equal(run.code,fault==='crash'?1:2)
+   await assert.rejects(assertParserFailure(engine,run,root))
+  }
+ }
 })
