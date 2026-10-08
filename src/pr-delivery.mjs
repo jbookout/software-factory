@@ -8,6 +8,7 @@ import { AsyncLocalStorage } from "node:async_hooks"
 import { Deadline, DeadlineError, waitForCondition, validDuration } from "./deadline.mjs"
 import fs from "node:fs/promises"
 import path from "node:path"
+import os from "node:os"
 import { fileURLToPath } from "node:url"
 import { createHash, randomUUID } from "node:crypto"
 import { reserveCompute } from "./process-capacity.mjs"
@@ -66,7 +67,7 @@ export async function loadDeliveryConfig(file) {
     if (typeof p !== "string" || !p.trim()) throw new DeliveryError("config path is required", 9)
     return path.resolve(base, p)
   }
-  const config = { ...value, configFile: path.resolve(file), stateDir: absolute(value.stateDir),
+  const config = { ...value, configFile: path.resolve(file), stateDir: absolute(value.stateDir ?? path.join(os.homedir(), 'carr-delivery/state')),
     repos: Object.fromEntries(Object.entries(value.repos).map(([repo, local]) => {
       if (!REPO.test(repo)) throw new DeliveryError("invalid repository in config", 9)
       if (!Array.isArray(local.trustedReviewers) || !local.trustedReviewers.length || local.trustedReviewers.some(login => typeof login !== "string" || !/^[A-Za-z0-9-]+(?:\[bot\])?$/.test(login)))
@@ -142,6 +143,18 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
   const getRepo = repo => {
     if (!Object.hasOwn(config.repos, repo)) throw new DeliveryError(`UNKNOWN REPO ${repo}: add checkout and worktreeRoot to config.repos`, 9)
     return config.repos[repo]
+  }
+  async function branchRepository(input) {
+    if (Object.hasOwn(config.repos, input)) return input
+    if (typeof input === 'string' && path.isAbsolute(input)) {
+      const checkout = await fs.realpath(input).catch(error => {if (error.code === 'ENOENT') return null; throw error})
+      const matches = []
+      if (checkout) for (const [repo, local] of Object.entries(config.repos))
+        if (await fs.realpath(local.checkout) === checkout) matches.push(repo)
+      if (matches.length === 1) return matches[0]
+      if (matches.length > 1) throw new DeliveryError('ambiguous configured checkout for branch-wt', 9)
+    }
+    getRepo(input)
   }
   async function command(argv, cwd, { allowFailure = false, timeoutMs = config.commandTimeoutMs, input = "", env: childEnv, ...streamOptions } = {}) {
     budget()?.check()
@@ -1276,7 +1289,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     const holds = await readHolds(config.holdsFile)
     const ready = new Set()
     for (const raw of open) {
-      if (!raw.comments || holdFor(holds, repo, raw.title)) continue
+      if (raw.comments === 0 || holdFor(holds, repo, raw.title)) continue
       const current = await view(repo, raw.number)
       if (current.review?.verdict === "APPROVE" && current.review.sha === current.headRefOid && current.ci.state === "success") ready.add(raw.number)
     }
@@ -1331,8 +1344,9 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     },
     async execute(step, request = {}) {
       return inAttempt(async () => {
-        const { repo, pr, head, worktree, note } = request
+        let { repo, pr, head, worktree, note } = request
         try {
+          if (step === 'branch-wt') repo = await branchRepository(repo)
           if (repo) getRepo(repo)
           let data
           switch (step) {
@@ -1393,6 +1407,14 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
             }); break
             case "auto-enqueue": data = await enqueueOwner(() => autoEnqueue(repo ? [repo] : Object.keys(config.repos))); break
             case "delivery-scan": data = await discoverDelivery(repo); break
+            case 'delivery-smoke': {
+              const pulls = await provider.pages(repo, 'pulls?state=open', {validateRow: row => {
+                if (!Number.isSafeInteger(row.number) || row.number <= 0 || typeof row.draft !== 'boolean' ||
+                    row.base?.repo?.full_name !== repo || !SHA.test(row.head?.sha ?? '') || !SHA.test(row.base?.sha ?? ''))
+                  throw new DeliveryError('invalid GitHub pull-list response')
+              }})
+              data = {repo, pulls:pulls.length}; break
+            }
             case "import-legacy": data = await importLegacy(request.root); break
             case "merge-one-core":
               data = await integrationLane(repo, lane => prWriter(repo, pr, writer => mergeOne(repo, pr, head, note ?? "", [lane, writer]))); break
