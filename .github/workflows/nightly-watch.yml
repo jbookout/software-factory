@@ -1,0 +1,30 @@
+name: Nightly observations (shadow)
+on:
+  schedule:
+    - cron: "43 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  observe:
+    if: vars.FIX30_NIGHTLY_SHADOW == '1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+      - run: node scripts/nightly-watch.mjs .nightly/diagnoses jbookout/software-factory
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: nightly-observations-${{ github.run_id }}
+          path: .nightly/diagnoses/*.json
+          if-no-files-found: error
+          retention-days: 7
