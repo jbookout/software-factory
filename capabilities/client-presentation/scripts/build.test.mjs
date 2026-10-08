@@ -1,60 +1,236 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
-import vm from 'node:vm';
-import {build,validate} from './build.mjs';
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import vm from "node:vm";
+import { build, validate } from "./build.mjs";
 
-const sample=()=>fs.readFile(new URL('../assets/site/presentation.json',import.meta.url),'utf8').then(JSON.parse);
-test('a new client builds an independent package, with inert text and matching canonical data',async()=>{
-  const root=await fs.mkdtemp(path.join(os.tmpdir(),'client-presentation-test-'));
-  const d=await sample();d.presentation.preparedFor='Juniper Dental <script>alert(1)</script>';
-  d.presentation.title='Juniper search review';
-  const input=path.join(root,'input.json'),out=path.join(root,'site');
-  await fs.writeFile(input,JSON.stringify(d));
-  assert.equal(await build(input,out),path.join(out,'index.html'));
-  const context={window:{}};
-  vm.runInNewContext(await fs.readFile(path.join(out,'data.js'),'utf8'),context);
-  assert.equal(context.window.PresentationData.presentation.preparedFor,d.presentation.preparedFor);
-  assert.ok(!(await fs.readFile(path.join(out,'data.js'),'utf8')).includes('<script>'));
-  for(const file of ['index.html','app.js','styles.css','finance.js','data.js'])assert.ok((await fs.stat(path.join(out,file))).size>0);
-  const stored=JSON.parse(await fs.readFile(path.join(out,'presentation.json'),'utf8'));
-  assert.deepEqual(stored,d);
-  await assert.rejects(build(input,out),/EEXIST/);
-});
-test('client identity, stable IDs and evidence are required before client generation',async()=>{
-  const d=await sample();d.presentation.fictional=false;
-  assert.throws(()=>validate(d),/source date/);
-  const dup=await sample();dup.leases[0].id=dup.properties[0].id;
-  assert.throws(()=>validate(dup),/duplicate item ID/);
-});
-test('only named local assets are copied and rewritten',async()=>{
-  const root=await fs.mkdtemp(path.join(os.tmpdir(),'client-presentation-media-'));
-  const d=await sample();d.properties[0].image='example.png';
-  const bytes=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aTfkAAAAASUVORK5CYII=','base64');
-  await fs.writeFile(path.join(root,'example.png'),bytes);
-  await fs.writeFile(path.join(root,'not-requested.txt'),'must not be exported');
-  const input=path.join(root,'input.json'),out=path.join(root,'site');
-  await fs.writeFile(input,JSON.stringify(d));await build(input,out);
-  const stored=JSON.parse(await fs.readFile(path.join(out,'presentation.json'),'utf8'));
-  assert.match(stored.properties[0].image,/^media\/[a-f0-9]+\.png$/);
-  assert.deepEqual(await fs.readFile(path.join(out,stored.properties[0].image)),bytes);
-  await assert.rejects(fs.stat(path.join(out,'not-requested.txt')),/ENOENT/);
+const fixtureRoot = new URL("../test/fixtures/", import.meta.url);
+const fixture = (name) =>
+  fs.readFile(new URL(name, fixtureRoot), "utf8").then(JSON.parse);
+const makeTemp = () =>
+  fs.mkdtemp(path.join(os.tmpdir(), "client-presentation-test-"));
+
+for (
+  const [file, mode] of [
+    ["owner-occupancy.json", "owner_occupancy"],
+    ["owner-occupancy-30-70.json", "owner_occupancy_30_70"],
+    ["lease-only.json", "lease_only"],
+  ]
+) {
+  test(`${mode} config builds a deterministic portable package with only its configured strategy`, async () => {
+    const root = await makeTemp();
+    const data = await fixture(file);
+    const input = path.join(root, "input.json");
+    const output = path.join(root, "site");
+    await fs.writeFile(input, JSON.stringify(data));
+    assert.equal(await build(input, output), path.join(output, "index.html"));
+    const stored = JSON.parse(
+      await fs.readFile(path.join(output, "presentation.json"), "utf8"),
+    );
+    assert.equal(stored.strategy.mode, mode);
+    assert.equal(stored.brand.name, data.brand.name);
+    assert.equal(stored.market.summary, data.market.summary);
+    assert.ok(!JSON.stringify(stored).includes("/private/tmp/"));
+    const context = { window: {} };
+    vm.runInNewContext(
+      await fs.readFile(path.join(output, "data.js"), "utf8"),
+      context,
+    );
+    assert.equal(context.window.PresentationData.strategy.mode, mode);
+    assert.ok(
+      (await fs.readFile(path.join(output, "index.html"), "utf8")).includes(
+        "selection-adapter.js",
+      ),
+    );
+    assert.ok(
+      (await fs.readFile(path.join(output, "index.html"), "utf8")).includes(
+        "fonts.googleapis.com",
+      ),
+    );
+    if (mode === "lease_only") {
+      assert.equal(stored.properties.length, 0);
+      assert.equal(stored.assumptions, undefined);
+      assert.ok(
+        !stored.sections.some((section) =>
+          ["purchases", "strategy"].includes(section.id)
+        ),
+      );
+    } else if (mode === "owner_occupancy") {
+      assert.equal(stored.assumptions, undefined);
+      const html = await fs.readFile(path.join(output, "index.html"), "utf8");
+      assert.match(html, /id="finance-section"/);
+    } else {
+      assert.equal(stored.assumptions.occupancyFraction, 0.3);
+      const result = globalThis.PresentationFinance.compute(
+        stored.properties[0],
+        stored.assumptions,
+        stored.strategy.tiContributionPerSf,
+      );
+      assert.equal(
+        result.practiceSf,
+        Math.ceil(stored.properties[0].totalSf * 0.3),
+      );
+      assert.equal(
+        result.tenantSf,
+        stored.properties[0].totalSf - result.practiceSf,
+      );
+      assert.ok(result.outsideRent > 0);
+      assert.ok(result.tenantTi >= 0);
+      assert.match(await fs.readFile(path.join(output, "index.html"), "utf8"), /id="equity-year"/);
+    }
+    await assert.rejects(build(input, output), /EEXIST/);
+  });
+}
+
+test("real client config requires complete source-backed records and a verified locator", async () => {
+  const data = await fixture("owner-occupancy-30-70.json");
+  data.presentation.fictional = false;
+  const missingSources = structuredClone(data);
+  missingSources.currentPractice = null;
+  missingSources.demographics = null;
+  missingSources.sections.find((section) => section.id === "demographics").visible = false;
+  assert.throws(
+    () => validate({ ...missingSources, sources: [] }),
+    /client presentations require sources/,
+  );
+  for (
+    const item of [...data.properties, ...data.leases, ...data.developments]
+  ) item.noPhotoReason = "No synthetic image supplied.";
+
+  assert.equal(validate(data), data);
+  delete data.properties[0].locator;
+  data.properties[0].noPinReason = "No source-backed coordinate supplied.";
+  assert.equal(validate(data), data);
 });
 
-test('client generation rejects unsourced or missing basemaps and missing marker coordinates',async()=>{
-  const d=await sample();d.presentation.fictional=false;
-  d.sources.forEach(s=>{s.date='2026-10-02';s.title='Verified source';});
-  [...d.properties,...d.leases,...d.developments].forEach(x=>{x.image='photo.png';x.sourceId=d.sources[0].id;});
-  assert.throws(()=>validate(d),/client locator image/);
-  d.locator.image='map.png';d.locator.sourceId=d.sources[0].id;
-  assert.equal(validate(d),d);
-  delete d.leases[0].locator;
-  assert.throws(()=>validate(d),/verified locator coordinates/);
+test("strategy allocation, sections and same-origin feedback configuration are enforced", async () => {
+  const full = await fixture("owner-occupancy.json");
+  assert.equal(validate(full), full);
+  const unsourcedScreening = structuredClone(full);
+  unsourcedScreening.market.purchaseScreening[0].sourceId = "unknown";
+  assert.throws(() => validate(unsourcedScreening), /purchase screening requires a declared sourceId/);
+  const invalidAllocation = await fixture("owner-occupancy-30-70.json");
+  invalidAllocation.assumptions.occupancyFraction = 1;
+  assert.throws(() => validate(invalidAllocation), /occupancyFraction 0.3/);
+  const lease = await fixture("lease-only.json");
+  lease.properties.push({ id: "stale-purchase", name: "Stale example" });
+  lease.sections.push({
+    id: "purchases",
+    label: "Purchases",
+    title: "Purchase options",
+    visible: true,
+  });
+  assert.throws(() => validate(lease), /cannot include purchase records/);
+  const shared = await fixture("owner-occupancy-30-70.json");
+  shared.feedback = {
+    mode: "shared",
+    endpoint: "https://example.test/api/selection",
+  };
+  assert.throws(() => validate(shared), /same-origin endpoint/);
+  shared.feedback.endpoint = "/api/selection";
+  assert.equal(validate(shared), shared);
+  const unsafeColors = structuredClone(shared);
+  unsafeColors.brand.orange = "#bead11";
+  assert.throws(() => validate(unsafeColors), /fixed to CARR/);
 });
 
-test('a property review can omit ownership analysis and its assumptions',async()=>{
-  const d=await sample();d.sections=d.sections.filter(s=>s.id!=='strategy');delete d.assumptions;
-  assert.equal(validate(d),d);
+test("financial controls and demographic evidence fail closed on incomplete inputs", async () => {
+  const data = await fixture("owner-occupancy-30-70.json");
+  const zeroStep = structuredClone(data);
+  zeroStep.strategy.tiRange.step = 0;
+  assert.throws(() => validate(zeroStep), /tiRange/);
+  const excessiveOptions = structuredClone(data);
+  excessiveOptions.strategy.tiRange = {min: 0, max: 500, step: 1};
+  excessiveOptions.strategy.tiContributionPerSf = 50;
+  assert.throws(() => validate(excessiveOptions), /tiRange/);
+  const missingGeography = structuredClone(data);
+  missingGeography.demographics.geography.label = "";
+  assert.throws(() => validate(missingGeography), /geography/);
+  const missingPeriod = structuredClone(data);
+  missingPeriod.demographics.income.period = "";
+  assert.throws(() => validate(missingPeriod), /period/);
+  const unlinkedCard = structuredClone(data);
+  unlinkedCard.demographics.income.sourceId = "missing-source";
+  assert.throws(() => validate(unlinkedCard), /sourceId/);
+  const unsafeURL = structuredClone(data);
+  unsafeURL.sources[0].url = "javascript:alert(1)";
+  assert.throws(() => validate(unsafeURL), /HTTPS URL/);
+});
+
+test("local assets are copied by content hash and cannot escape the input directory", async () => {
+  const root = await makeTemp();
+  const data = await fixture("owner-occupancy.json");
+  const bytes = Buffer.from("synthetic image bytes");
+  await fs.writeFile(path.join(root, "example.jpg"), bytes);
+  data.properties[0].image = "example.jpg";
+  const input = path.join(root, "input.json");
+  const output = path.join(root, "site");
+  await fs.writeFile(input, JSON.stringify(data));
+  await build(input, output);
+  const stored = JSON.parse(
+    await fs.readFile(path.join(output, "presentation.json"), "utf8"),
+  );
+  assert.match(stored.properties[0].image, /^media\/[a-f0-9]+\.jpg$/);
+  assert.deepEqual(
+    await fs.readFile(path.join(output, stored.properties[0].image)),
+    bytes,
+  );
+  assert.ok(!JSON.stringify(stored).includes("example.jpg"));
+
+  const escape = await fixture("owner-occupancy.json");
+  escape.properties[0].image = "../outside.jpg";
+  assert.doesNotThrow(() => validate(escape)); // Build enforces local asset containment.
+  const escapeInput = path.join(root, "escape.json");
+  await fs.writeFile(escapeInput, JSON.stringify(escape));
+  await assert.rejects(
+    build(escapeInput, path.join(root, "escape-site")),
+    /stay inside the input directory/,
+  );
+});
+
+test("dangerous markup is inert in generated data", async () => {
+  const root = await makeTemp();
+  const data = await fixture("owner-occupancy.json");
+  data.presentation.preparedFor = "<script>synthetic()</script>";
+  const input = path.join(root, "input.json");
+  const output = path.join(root, "site");
+  await fs.writeFile(input, JSON.stringify(data));
+  await build(input, output);
+  const js = await fs.readFile(path.join(output, "data.js"), "utf8");
+  assert.ok(!js.includes("<script>"));
+  const context = { window: {} };
+  vm.runInNewContext(js, context);
+  assert.equal(
+    context.window.PresentationData.presentation.preparedFor,
+    data.presentation.preparedFor,
+  );
+});
+
+test("asset paths cannot escape through a symlinked parent directory", async (t) => {
+  const root = await makeTemp();
+  const outside = await makeTemp();
+  await fs.writeFile(path.join(outside, "synthetic.jpg"), "synthetic outside bytes");
+  try {
+    await fs.symlink(outside, path.join(root, "alias"), "dir");
+  } catch (error) {
+    if (["EPERM", "EACCES"].includes(error.code)) return t.skip("symlink creation unavailable");
+    throw error;
+  }
+  const data = await fixture("owner-occupancy.json");
+  data.properties[0].image = "alias/synthetic.jpg";
+  const input = path.join(root, "input.json");
+  await fs.writeFile(input, JSON.stringify(data));
+  await assert.rejects(build(input, path.join(root, "site")), /resolves outside/);
+});
+
+test("ownership modes require a non-context purchase candidate", async () => {
+  for (const name of ["owner-occupancy.json", "owner-occupancy-30-70.json"]) {
+    const data = await fixture(name);
+    data.properties.forEach(property => { property.status = "context"; });
+    assert.throws(() => validate(data), /requires a non-context purchase candidate/);
+    data.properties[0].status = "available";
+    assert.equal(validate(data), data);
+  }
 });

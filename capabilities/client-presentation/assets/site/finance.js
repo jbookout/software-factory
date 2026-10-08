@@ -37,7 +37,7 @@
       const equity = value - balance, carry = mortgagePayments - outsideRent;
       const avoidedPracticeRent = practiceSf * a.annualRentPerSf * year;
       const extraCashRequired = downPayment + carry + tenantTi - avoidedPracticeRent;
-      return {year, practiceSf, tenantSf, loan, downPayment, payment, balance, value,
+      return {year, practiceSf, tenantSf, loan, downPayment, payment, stabilizedMonthlyRent:rent, balance, value,
         appreciation: value - price, principalRepaid: loan - balance, equity,
         outsideRent, mortgagePayments, carry, avoidedPracticeRent, tenantTi,
         practiceBuildout, combinedBudget: practiceBuildout + tenantTi,

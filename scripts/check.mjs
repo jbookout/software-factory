@@ -3,6 +3,7 @@ import { reserveCheck } from '../src/check-admission.mjs'
 import { Deadline } from '../src/deadline.mjs'
 const classes = {
   node:[process.execPath,'--test','--test-concurrency=2'],
+  presentation:[process.execPath,'capabilities/client-presentation/scripts/browser-acceptance.mjs'],
   browser:['python3','capabilities/jev-browser-select/test_select.py'],
   orchestration:['python3','-m','unittest','discover','-s','test/orch','-p','test_*.py','-v']
 }

@@ -35,14 +35,19 @@
     "factory": "node ./bin/factory.mjs",
     "design-cloud:qualify": "node ./bin/design-cloud-qualify.mjs",
     "e2e:qualify": "node ./capabilities/agentic-ui-evaluation/qualify.mjs",
-    "model-room:evidence": "node ./bin/model-room-evidence.mjs"
+    "model-room:evidence": "node ./bin/model-room-evidence.mjs",
+    "presentation:qualify": "node capabilities/client-presentation/scripts/qualify.mjs",
+    "factory:context": "node bin/task-context.mjs",
+    "factory:skills": "node bin/skill-sources.mjs"
   },
   "devDependencies": {
     "@shadcn/lint": "0.1.0",
     "@types/node": "22.18.11",
     "@typescript-eslint/parser": "8.70.0",
     "eslint": "10.10.0",
+    "maplibre-gl": "6.13.0",
     "marked": "18.0.14",
+    "playwright": "1.63.0",
     "tailwindcss": "4.3.3",
     "typescript": "6.0.3"
   },

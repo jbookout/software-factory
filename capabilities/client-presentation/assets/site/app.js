@@ -1,926 +1,974 @@
-(function () {
-  'use strict';
-
-  const data = window.PresentationData;
-  const doc = document;
-  const ns = 'http://www.w3.org/2000/svg';
-  const money = new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD', maximumFractionDigits: 0});
-  const number = new Intl.NumberFormat('en-US', {maximumFractionDigits: 0});
-  const byId = (id) => doc.getElementById(id);
-  const make = (tag, className, text) => {
-    const node = doc.createElement(tag);
-    if (className) node.className = className;
-    if (text !== undefined && text !== null) node.textContent = String(text);
-    return node;
+(() => {
+  "use strict";
+  const d = window.PresentationData,
+    $ = (s) => document.querySelector(s),
+    $$ = (s) => [...document.querySelectorAll(s)];
+  const esc = (x) =>
+    String(x ?? "").replace(
+      /[&<>"']/g,
+      (c) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      }[c]),
+    );
+  const money = (x) =>
+    Number.isFinite(Number(x))
+      ? new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+        maximumFractionDigits: 0,
+      }).format(Number(x))
+      : "Not verified";
+  const number = (x) =>
+    Number.isFinite(Number(x))
+      ? new Intl.NumberFormat("en-US").format(Number(x))
+      : "Not verified";
+  const properties = (d.properties || []).filter((p) => p.status !== "context"),
+    contextProperties = (d.properties || []).filter((p) =>
+      p.status === "context"
+    ),
+    leases = d.leases || [],
+    projects = d.developments || [],
+    entities = [...properties, ...leases],
+    allProperties = d.properties || [],
+    byId = Object.fromEntries(
+      allProperties.concat(leases).map((x) => [x.id, x]),
+    );
+  const visibleSections = new Set(
+    (d.sections || []).filter((s) => s.visible !== false).map((s) => s.id),
+  );
+  const navIds = [
+    "home",
+    ...(leases.length && visibleSections.has("leases") ? ["leases"] : []),
+    ...(properties.length && visibleSections.has("purchases")
+      ? ["purchases"]
+      : []),
+    ...(d.strategy?.mode === "owner_occupancy_30_70" && visibleSections.has("strategy")
+      ? ["strategy"]
+      : []),
+    "tour",
+    ...(visibleSections.has("demographics") ? ["demographics"] : []),
+    "sources",
+  ];
+  let maps = {}, maplibregl = null;
+  let selected = {
+    version: null,
+    selected_ids: [],
+    notes: "",
+    property_notes: {},
+    csrf_token: null,
+    dirty: false,
+    busy: false,
+    ready: false,
+    conflict: false,
   };
-  const svgEl = (tag, attrs = {}) => {
-    const node = doc.createElementNS(ns, tag);
-    for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, String(value));
-    return node;
+  let adapter = null, dialogReturn = null, projectReturn = null;
+  const txt = (id, value) => {
+    const e = document.getElementById(id);
+    if (e) e.textContent = String(value ?? "");
   };
-  const present = (value) => value !== undefined && value !== null && value !== '';
-  const showValue = (value, formatter = String) => present(value) && Number.isFinite(Number(value)) ? formatter(Number(value)) : 'Not verified';
-  const compactMoney = (value) => {
-    if (!Number.isFinite(Number(value))) return 'Not verified';
-    const amount = Number(value);
-    return amount >= 1000000 ? `$${(amount / 1000000).toFixed(2)}M` : money.format(amount);
-  };
-  const percentFormat = new Intl.NumberFormat('en-US', {maximumFractionDigits: 2});
-  const percent = (value) => Number.isFinite(Number(value)) ? `${percentFormat.format(Number(value) * 100)}%` : 'Not verified';
-  const displayCarry = (value) => Number(value) < 0 ? `Surplus ${money.format(Math.abs(Number(value)))}` : money.format(Number(value));
-  const safeImageSource = (value) => {
-    if (typeof value !== 'string' || !value.trim()) return null;
-    const source = value.trim();
-    if (/^https:\/\//i.test(source)) {
-      try { return new URL(source).protocol === 'https:' ? source : null; } catch { return null; }
-    }
-    if (/^(?:\.\/)?(?:assets|media)\/[a-zA-Z0-9_./-]+$/.test(source) && !source.split('/').includes('..')) return source;
-    return null;
-  };
-  const sampleMode = Boolean(data && data.presentation && data.presentation.fictional);
-  const properties = Array.isArray(data && data.properties) ? data.properties : [];
-  const leases = Array.isArray(data && data.leases) ? data.leases : [];
-  const developments = Array.isArray(data && data.developments) ? data.developments : [];
-  const sources = Array.isArray(data && data.sources) ? data.sources : [];
-  let selectedProperty = properties[0] || null;
-  let lastTrigger = null;
-  let lastTriggerInfo = null;
-  let financeCalculation = null;
-  let handlingHistory = false;
-
-  function setText(id, value) {
-    const target = byId(id);
-    if (target) target.textContent = present(value) ? String(value) : '';
+  function title(p) {
+    return p.name || p.address || p.id;
   }
-
-  function setSignedSummary(id, value, costMetric) {
-    const target = byId(id);
-    const amount = Number(value);
-    if (!target || !Number.isFinite(amount)) { if (target) target.textContent = 'Not verified'; return; }
-    target.textContent = money.format(amount);
-    target.classList.remove('finance-positive','finance-negative','finance-benefit-positive','finance-benefit-negative');
-    if (costMetric) {
-      if (id === 'extra-cash' && amount < 0) target.textContent = `Savings vs. leasing ${money.format(Math.abs(amount))}`;
-      target.classList.add(amount < 0 ? 'finance-positive' : 'finance-negative');
-    }
-    else target.classList.add(amount >= 0 ? 'finance-benefit-positive' : 'finance-benefit-negative');
+  function sourceLine(p) {
+    const s = (d.sources || []).find((x) => x.id === p.sourceId);
+    return s
+      ? `${s.title} · ${s.date}${p.sourcePage ? ` · p. ${p.sourcePage}` : ""}`
+      : "Source not configured";
   }
-
-  function art(key, alt, imageSource) {
-    const wrapper = make('span', 'property-art');
-    const source = safeImageSource(imageSource);
-    if (source) {
-      const img = make('img');
-      img.src = source;
-      img.alt = alt || 'Property image';
-      img.loading = 'lazy';
-      wrapper.append(img);
-    } else {
-      const palette = {
-        harbor: ['#dce9ef', '#f57f29', '#70a3bc', '#f8fafb'],
-        grove: ['#e6eee8', '#f57f29', '#80a9b5', '#f8faf7'],
-        summit: ['#e2eaf1', '#f57f29', '#79a5bb', '#f8fafb']
-      }[key] || ['#dce9ef', '#f57f29', '#70a3bc', '#f8fafb'];
-      const picture = svgEl('svg', {viewBox: '0 0 420 180', role: 'img', 'aria-label': alt || 'Architectural illustration'});
-      const add = (tag, attrs) => picture.append(svgEl(tag, attrs));
-      add('rect', {width: 420, height: 180, fill: palette[0]});
-      add('circle', {cx: 340, cy: 38, r: 26, fill: '#f2bd8c'});
-      add('path', {d: 'M0 148h420v32H0z', fill: '#b8ccd4'});
-      add('path', {d: 'M62 148V76h296v72z', fill: palette[3]});
-      add('path', {d: 'M49 80h322l-25-28H74z', fill: palette[1]});
-      add('rect', {x: 84, y: 92, width: 252, height: 54, rx: 2, fill: palette[2]});
-      add('path', {d: 'M145 92v54m66-54v54m66-54v54m-193-27h252', stroke: '#edf5f7', 'stroke-width': 6});
-      add('rect', {x: 188, y: 119, width: 44, height: 29, fill: '#174b78'});
-      add('path', {d: 'M210 123v21m-8-14h16', stroke: '#fff', 'stroke-width': 4});
-      for (const [x, y, r] of [[31, 126, 17], [389, 129, 18]]) {
-        add('circle', {cx: x, cy: y, r, fill: '#75977e'});
-        add('path', {d: `M${x} ${y + 13}v21`, stroke: '#64836c', 'stroke-width': 6});
-      }
-      wrapper.append(picture);
-      const label = make('span', 'image-caption', sampleMode ? 'ILLUSTRATION · FICTIONAL PLACEHOLDER' : 'ILLUSTRATION · NOT A PROPERTY PHOTO');
-      wrapper.append(label);
-    }
-    return wrapper;
-  }
-
-  function renderHeaderAndText() {
-    const presentation = data.presentation || {};
-    const brand = data.brand || {};
-    const split = String(presentation.title || 'A place to grow with purpose.').match(/^(.*?)(?:\s+(with|for|and)\s+)(.*)$/i);
-    const title = byId('hero-title');
-    if (title) {
-      title.replaceChildren();
-      title.append(doc.createTextNode(split ? split[1] : String(presentation.title || '')));
-      if (split) {
-        title.append(doc.createElement('br'));
-        const accent = make('em', '', `${split[2]} ${split[3]}`);
-        title.append(accent);
-      }
-    }
-    setText('hero-intro', presentation.summary || (sampleMode
-      ? 'A clear view of lease and ownership paths for a growing independent practice. Names, figures, locations, and sources in this example are fictional.'
-      : 'A clear view of lease and ownership paths for a growing independent practice.'));
-    setText('prepared-for', presentation.preparedFor);
-    setText('scenario-date', presentation.scenarioDate);
-    setText('footer-brand', brand.name || 'Practice Real Estate');
-    setText('footer-descriptor', brand.descriptor || 'Client presentation');
-    setText('header-brand', brand.name || 'Practice Real Estate');
-    setText('footer-mark', String(brand.name || 'P').trim().charAt(0).toUpperCase());
-    setText('header-descriptor', brand.descriptor || 'Client presentation');
-    setText('brand-mark', String(brand.name || 'P').trim().charAt(0).toUpperCase());
-    doc.title = `${brand.name || 'Practice Real Estate'} | ${presentation.title || 'Client presentation'}`;
-    setText('presentation-kicker', sampleMode ? 'Real estate strategy · Illustrative scenario' : 'Real estate strategy');
-    setText('hero-growth-value', `${data.metrics?.[0]?.value ?? ''}${data.metrics?.[0]?.suffix || ''}`);
-    setText('hero-growth-label', data.metrics?.[0]?.label || 'Growth indicator');
-    setText('growth-period', data.metrics?.[0]?.note || '');
-    setText('overview-intro', sampleMode
-      ? 'This example compares fictional ownership opportunities with a lease path, using one consistent set of planning assumptions.'
-      : 'Compare ownership opportunities with a lease path using one consistent set of planning assumptions.');
-    setText('sources-intro', sampleMode
-      ? 'This example uses fictional placeholder figures. Replace them with current, verifiable evidence before presenting a recommendation.'
-      : 'Review the current sources, geography, and retrieval dates behind each market or property claim.');
-    const a = data.assumptions || {};
-    const assumptionsLine = `Owner allocation ${percent(a.occupancyFraction)}; purchase financing ${percent(1 - Number(a.downPaymentFraction))}; estimated interest ${percent(a.annualInterest)}; ${showValue(a.amortizationYears, (n) => `${number.format(n)}-year amortization`)}; ${showValue(a.annualAppreciation, percent)} annual appreciation; ${showValue(a.annualRentPerSf, (n) => `${money.format(n)}/SF/year`)} base rent; ${showValue(a.collectionLoss, percent)} collection allowance; ${showValue(a.fillMonths, (n) => `${number.format(n)}-month linear fill`)}; ${showValue(a.practiceBuildoutPerSf, (n) => `${money.format(n)}/SF practice buildout`)}; ${showValue(a.holdYears, (n) => `${number.format(n)}-year hold`)}.`;
-    setText('strategy-footnote', `${sampleMode ? 'Fictional planning inputs: ' : 'Planning inputs: '}${assumptionsLine} Practice area rounds up to the next whole square foot. Mortgage payments you fund equal modeled mortgage payments less collected outside rent; a negative amount is a surplus. Rent avoided is practice area × base rent × hold years. Extra cash vs. leasing is down payment + carry + tenant improvements − practice rent avoided; modeled benefit is hold-year equity − extra cash vs. leasing. Excludes closing and selling costs, taxes, commissions, reserves, repairs, capital expenditures, unreimbursed ownership expenses, and opportunity cost unless added. Equity is not liquid cash or sale proceeds. NNN base rent does not prove all owner expenses are reimbursed. These are planning assumptions, not a lender offer or forecast.`);
-    setText('summary-caveat', 'Provisional, undiscounted illustration. Excludes closing and selling costs, taxes, commissions, reserves, repairs, capital expenditures, unreimbursed ownership expenses, and opportunity cost unless entered. Equity is not liquid cash or sale proceeds. NNN base rent does not prove all owner expenses are reimbursed.');
-    setText('locator-disclaimer', data.locator?.disclaimer || (sampleMode
-      ? 'Fictional Locator Schematic. No real roads, places, or distances are shown.'
-      : 'Locator diagram uses the coordinates in this presentation. Verify the projection and site placement.'));
-    setText('locator-svg-title', sampleMode ? (data.locator?.label || 'Fictional Locator Schematic') : (data.locator?.label || 'Development locator'));
-    const legend = doc.querySelector('.locator-legend');
-    if (legend) legend.hidden = !sampleMode;
-    setText('locator-svg-desc', data.locator?.disclaimer || 'A schematic showing the configured development projects.');
-    setText('map-caption', sampleMode ? 'FICTIONAL LOCATOR SCHEMATIC · NOT TO SCALE' : 'LOCATOR SCHEMATIC · VERIFY SITE PLACEMENT');
-    setText('demographic-note', sampleMode
-      ? 'Illustrative values only · verify source and geography'
-      : 'Confirm the source, geography, methodology, and date for each measure');
-    setText('demo-kicker', data.demographics?.title || 'Demographic trend');
-    const demoNote = byId('demographic-note');
-    if (demoNote) demoNote.hidden = !sampleMode;
-    for (const el of doc.querySelectorAll('[data-fictional-only]')) el.hidden = !sampleMode;
-    if (brand.navy) doc.documentElement.style.setProperty('--navy', brand.navy);
-    if (brand.orange) doc.documentElement.style.setProperty('--orange', brand.orange);
-  }
-
-  function renderMetrics() {
-    const grid = byId('metric-grid');
-    if (!grid) return;
-    grid.replaceChildren();
-    const metrics = Array.isArray(data.metrics) ? data.metrics : [];
-    metrics.forEach((metric, index) => {
-      const card = make('article', `metric-card${index === metrics.length - 1 ? ' metric-card-accent' : ''} scroll-reveal`);
-      card.append(make('span', 'metric-index', String(index + 1).padStart(2, '0')));
-      const value = make('span', 'metric-value');
-      value.append(doc.createTextNode(String(metric.value ?? '—')));
-      value.append(make('span', '', metric.suffix || ''));
-      card.append(value, make('span', 'metric-label', metric.label || ''), make('span', 'metric-note', metric.note || ''));
-      const trend = Array.isArray(metric.trend) ? metric.trend.map(Number).filter(Number.isFinite) : [];
-      if (trend.length > 1) {
-        const chart = svgEl('svg', {viewBox: '0 0 120 34', 'aria-hidden': 'true'});
-        const min = Math.min(...trend), max = Math.max(...trend), span = max - min || 1;
-        const points = trend.map((v, i) => `${2 + i * (116 / (trend.length - 1))},${29 - ((v - min) / span) * 24}`).join(' ');
-        chart.append(svgEl('polyline', {points, fill: 'none', stroke: 'currentColor', 'stroke-width': 2.2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round'}));
-        card.append(chart);
-      }
-      grid.append(card);
+  function buildNav() {
+    let n = $("#site-nav");
+    n.replaceChildren();
+    const labels = {
+      home: "Home",
+      leases: "Leases",
+      purchases: "Purchases",
+      strategy: "Strategy",
+      demographics: "Demographics",
+      tour: "Tour List",
+      sources: "Sources",
+    };
+    navIds.forEach((id) => {
+      const a = document.createElement("a");
+      a.href = "#" + id;
+      a.textContent = labels[id];
+      n.append(a);
     });
   }
-
-  function renderDevelopmentMap() {
-    const map = doc.querySelector('.locator-svg');
-    const rows = byId('development-rows');
-    const cards = byId('development-grid');
-    if (!map || !rows || !cards) return;
-    rows.replaceChildren();
-    cards.replaceChildren();
-    const baseSource = safeImageSource(data.locator?.image);
-    if (baseSource) {
-      const base = svgEl('image', {x: 0, y: 0, width: 820, height: 330, preserveAspectRatio: 'none'});
-      base.setAttribute('href', baseSource);
-      map.insertBefore(base, map.children[1] || null);
-    }
-    if (!sampleMode) {
-      map.querySelectorAll('.schematic-road,.schematic-block,.schematic-landscape').forEach((node) => node.remove());
-      if (!baseSource) {
-        const label = svgEl('text', {x: 410, y: 170, 'text-anchor': 'middle', class: 'map-caption'});
-        label.textContent = 'VERIFIED BASEMAP REQUIRED';
-        map.append(label);
-      }
-    }
-    const sourceById = new Map(sources.map((source) => [source.id, source]));
-    developments.forEach((development, index) => {
-      const coords = development.locator || {};
-      const pointX = Number(coords.x), pointY = Number(coords.y);
-      const hasPoint = Number.isFinite(pointX) && Number.isFinite(pointY) && pointX >= 0 && pointX <= 100 && pointY >= 0 && pointY <= 100;
-      if (hasPoint && (sampleMode || baseSource)) {
-        const x = pointX / 100 * 820;
-        const y = pointY / 100 * 330;
-        const marker = svgEl('g', {class: 'map-marker', 'data-development-id': development.id, tabindex: 0, role: 'button', 'aria-label': `Open ${development.name} details`});
-        marker.append(svgEl('circle', {cx: x, cy: y, r: 20}));
-        const label = svgEl('text', {x, y: y + 4});
-        label.textContent = String(index + 1).padStart(2, '0');
-        marker.append(label, svgEl('circle', {class: 'marker-pulse', cx: x, cy: y, r: 29}));
-        map.append(marker);
-      }
-
-      const row = doc.createElement('tr');
-      row.dataset.developmentId = development.id;
-      const ordinal = make('th', '', String(index + 1)); ordinal.scope = 'row'; ordinal.dataset.label = '#';
-      const project = doc.createElement('td');
-      const open = make('button', 'dev-open', development.name || 'Development');
-      open.type = 'button';
-      open.dataset.developmentId = development.id;
-      project.append(open);
-      const place = make('td', '', development.location || 'Not verified');
-      const status = make('td', '', development.status || 'Not verified');
-      const evidence = make('td', '', sourceById.get(development.sourceId)?.title || 'Source needed');
-      row.append(ordinal, project, place, status, evidence);
-      rows.append(row);
-
-      const tile = make('button', 'property-card property-tile development-tile scroll-reveal');
-      tile.type = 'button';
-      tile.dataset.developmentId = development.id;
-      tile.setAttribute('aria-haspopup', 'dialog');
-      tile.append(art(development.artKey, `${development.name || 'Development'} concept illustration`, development.image));
-      const head = make('span', 'property-tile-head');
-      head.append(make('span', 'property-type', development.status || 'Development'), make('span', 'property-arrow', '↗'));
-      tile.append(head, make('span', 'property-title', development.name || 'Development'), make('span', 'property-location', development.location || 'Not verified'));
-      tile.append(make('span', 'property-preview-line', 'Open project details →'));
-      cards.append(tile);
-    });
-    const heads = doc.querySelectorAll('.locator-table thead th');
-    ['#', 'Development project', 'Location', 'Scenario', 'Source'].forEach((label, index) => { if (heads[index]) heads[index].textContent = label; });
-    if (developments.length === 0) cards.append(make('p', 'empty-state', 'No development projects have been added.'));
+  function show() {
+    const id = (location.hash || "#home").slice(1),
+      target = navIds.includes(id) ? document.getElementById(id) : $("#home");
+    $$(".site-view").forEach((x) => x.hidden = x !== target);
+    $$(".site-nav a").forEach((a) =>
+      a.setAttribute(
+        "aria-current",
+        a.hash === "#" + target.id ? "page" : "false",
+      )
+    );
+    $("#sticky-page-title").textContent = target.dataset.title ||
+      d.sections?.find((s) => s.id === target.id)?.title ||
+      ({
+        home: "Overview",
+        purchases: "Purchase Options",
+        leases: "Lease Options",
+        strategy: "Strategy",
+        demographics: "Market Context",
+        tour: "Review List",
+        sources: "Sources",
+      }[target.id] || "");
+    window.scrollTo({ top: 0, behavior: "instant" });
+    if (target.id === "home") initMap("development-map", projects);
+    if (target.id === "purchases") initMap("purchase-map", properties);
+    maps[target.id === "home" ? "development-map" : "purchase-map"]?.resize();
   }
-
-  function renderOptionLocator(kind, items, host) {
-    if (!host) return;
-    host.replaceChildren();
-    if (!items.length) return;
-    const title = make('h3', 'option-map-title', kind === 'lease' ? 'Lease locator' : 'Purchase locator');
-    const svg = svgEl('svg', {viewBox: '0 0 680 220', role: 'group', 'aria-label': `${kind === 'lease' ? 'Lease' : 'Purchase'} option locator schematic`});
-    svg.append(svgEl('rect', {width: 680, height: 220, rx: 14, fill: '#eaf1f5'}));
-    const mapImage = safeImageSource(data.locator?.image);
-    if (mapImage) svg.append(svgEl('image', {href: mapImage, x: 0, y: 0, width: 680, height: 220, preserveAspectRatio: 'none'}));
-    else if (sampleMode) {
-      svg.append(svgEl('path', {d: 'M-10 165c150-95 240-60 342-4s211 54 368-75', fill: 'none', stroke: '#fff', 'stroke-width': 28, 'stroke-linecap': 'round'}));
-      svg.append(svgEl('path', {d: 'M140 -20c27 93 94 126 181 155s143 69 173 109', fill: 'none', stroke: '#fff', 'stroke-width': 22, 'stroke-linecap': 'round'}));
+  function setBrand() {
+    const b = d.brand || {}, p = d.presentation || {};
+    for (const id of ["brand-name", "home-brand", "footer-brand"]) {
+      txt(id, b.name || "Practice");
     }
-    items.forEach((item, index) => {
-      const point = item.locator || {};
-      const pointX = Number(point.x), pointY = Number(point.y);
-      const hasPoint = Number.isFinite(pointX) && Number.isFinite(pointY) && pointX >= 0 && pointX <= 100 && pointY >= 0 && pointY <= 100;
-      const key = kind === 'lease' ? 'lease-id' : 'property-id';
-      if (hasPoint && (sampleMode || mapImage)) {
-        const x = pointX / 100 * 680, y = pointY / 100 * 220;
-        const marker = svgEl('g', {class: 'map-marker option-marker', [`data-${key}`]: item.id, tabindex: 0, role: 'button', 'aria-label': `Open ${item.name || 'option'} details`});
-        marker.append(svgEl('circle', {cx: x, cy: y, r: 18}));
-        const label = svgEl('text', {x, y: y + 4}); label.textContent = String(index + 1).padStart(2, '0'); marker.append(label);
-        svg.append(marker);
+    for (const id of ["brand-descriptor", "home-descriptor"]) {
+      txt(id, b.descriptor || "Healthcare Property Review");
+    }
+    txt(
+      "presentation-meta",
+      `${p.preparedFor || ""} · ${p.scenarioDate || ""}`,
+    );
+    document.title = `${b.name || "Practice"} | ${
+      p.title || "Property Review"
+    }`;
+    document.documentElement.style.setProperty(
+      "--brand-primary",
+      "#002f6c",
+    );
+    document.documentElement.style.setProperty(
+      "--brand-primary-dark",
+      "#002f6c",
+    );
+    document.documentElement.style.setProperty(
+      "--brand-accent",
+      "#f57f29",
+    );
+    for (const id of ["brand-logo", "home-logo"]) {
+      const img = $("#" + id);
+      if (b.logo) {
+        img.src = b.logo;
+        img.alt = `${b.name} logo`;
+        img.hidden = false;
       }
-    });
-    const note = make('p', 'option-map-note', mapImage
-      ? 'Coordinates use the configured image projection. Verify each point against its source.'
-      : sampleMode ? 'Fictional locator schematic · not to scale' : 'A verified basemap is required before site locations can be shown.');
-    host.append(title, svg, note);
+    }
   }
-
-  function renderLeaseRows() {
-    const body = byId('lease-rows');
-    if (!body) return;
-    body.replaceChildren();
-    const cards = byId('lease-grid');
-    cards?.replaceChildren();
-    leases.forEach((lease) => {
-      const row = doc.createElement('tr');
-      row.dataset.leaseId = lease.id;
-      const first = doc.createElement('th');
-      first.scope = 'row';
-      first.dataset.label = 'Lease scenario';
-      const open = make('button', 'row-title data-open', lease.name || 'Lease option');
-      open.type = 'button';
-      open.dataset.leaseId = lease.id;
-      open.setAttribute('aria-haspopup', 'dialog');
-      first.append(open, make('span', 'row-subtitle', lease.subtitle || ''));
-      const location = make('td', '', lease.location || 'Not verified');
-      location.dataset.label = 'Location';
-      const area = make('td', '', showValue(lease.areaSf, (value) => `${number.format(value)} SF`));
-      area.dataset.label = 'Area';
-      const rent = make('td', '', showValue(lease.annualRentPerSf, (value) => `${money.format(value)} / SF / year`));
-      rent.dataset.label = 'Base rent';
-      const structure = make('td', '', lease.structure || 'Not verified');
-      structure.dataset.label = 'Structure';
-      const parking = make('td', '', `${showValue(lease.parkingSpaces, number.format)}${present(lease.parkingRatio) ? ` · ${lease.parkingRatio}` : ''}`);
-      parking.dataset.label = 'Parking';
-      row.append(first, location, area, rent, parking, structure);
-      body.append(row);
-      if (cards) {
-        const tile = make('button', 'property-card property-tile lease-tile scroll-reveal');
-        tile.type = 'button'; tile.dataset.leaseId = lease.id; tile.setAttribute('aria-haspopup', 'dialog');
-        tile.append(art(lease.artKey || 'grove', `${lease.name || 'Lease option'} illustration`, lease.image));
-        const head = make('span', 'property-tile-head');
-        head.append(make('span', 'property-type', lease.structure || 'LEASE OPTION'), make('span', 'property-arrow', '↗'));
-        const stats = make('span', 'property-stats');
-        for (const [label, value] of [['AREA', showValue(lease.areaSf, (n) => `${number.format(n)} SF`)], ['BASE RENT', showValue(lease.annualRentPerSf, (n) => `${money.format(n)} / SF / year`)]]) {
-          const fact = make('span'); fact.append(make('small', '', label), make('strong', '', value)); stats.append(fact);
-        }
-        tile.append(head, make('span', 'property-title', lease.name || 'Lease option'), make('span', 'property-location', lease.location || lease.subtitle || 'Not verified'), stats, make('span', 'property-location parking-line', `Parking: ${showValue(lease.parkingSpaces, number.format)} spaces`), make('span', 'property-preview-line', 'Open lease details →'));
-        cards.append(tile);
-      }
-    });
-    renderOptionLocator('lease', leases, byId('lease-locator'));
+  function image(p, alt) {
+    return p.image
+      ? `<img class="listing-photo" src="${esc(p.image)}" alt="${
+        esc(alt || title(p))
+      }" loading="lazy">`
+      : `<div class="image-placeholder" role="img" aria-label="${
+        esc(p.noPhotoReason || "No verified image supplied")
+      }">${esc(p.noPhotoReason || "No verified image supplied")}</div>`;
   }
-
-  function renderPurchaseProperties() {
-    const grid = byId('property-grid');
-    if (!grid) return;
-    grid.replaceChildren();
-    const purchases = properties;
-    const body = byId('purchase-rows');
-    body?.replaceChildren();
-    purchases.forEach((property, index) => {
-      const tile = make('button', 'property-card property-tile scroll-reveal');
-      tile.type = 'button';
-      tile.dataset.propertyId = property.id;
-      tile.setAttribute('aria-haspopup', 'dialog');
-      if (selectedProperty && property.id === selectedProperty.id) tile.setAttribute('aria-pressed', 'true');
-      tile.append(art(property.artKey, `${property.name || 'Property'} concept illustration`, property.image));
-      const head = make('span', 'property-tile-head');
-      head.append(make('span', 'property-type', `${String(index + 1).padStart(2, '0')} · ${property.status || 'PURCHASE OPTION'}`), make('span', 'property-arrow', '↗'));
-      tile.append(head, make('span', 'property-title', property.name || 'Property option'), make('span', 'property-location', property.location || 'Not verified'));
-      const stats = make('span', 'property-stats');
-      for (const [label, value] of [['AREA', showValue(property.totalSf, (n) => `${number.format(n)} SF`)], ['PRICE', showValue(property.price, money.format)]]) {
-        const fact = make('span');
-        fact.append(make('small', '', label), make('strong', '', value));
-        stats.append(fact);
-      }
-      const parking = make('span', 'property-location parking-line', `Parking: ${showValue(property.parkingSpaces, number.format)} spaces${present(property.parkingRatio) ? ` · ${property.parkingRatio}` : ''}`);
-      tile.append(stats, parking, make('span', 'property-preview-line', 'Open property details →'));
-      grid.append(tile);
-      if (body) {
-        const row = doc.createElement('tr'); row.dataset.propertyId = property.id;
-        const name = doc.createElement('th'); name.scope = 'row'; name.dataset.label = 'Purchase option';
-        const open = make('button', 'row-title data-open', property.name || 'Purchase option'); open.type = 'button'; open.dataset.propertyId = property.id; open.setAttribute('aria-haspopup', 'dialog'); name.append(open);
-        const location = make('td', '', property.location || 'Not verified'); location.dataset.label = 'Location';
-        const area = make('td', '', showValue(property.totalSf, (n) => `${number.format(n)} SF`)); area.dataset.label = 'Area';
-        const price = make('td', '', showValue(property.price, money.format)); price.dataset.label = 'Price';
-        const parkingCell = make('td', '', `${showValue(property.parkingSpaces, number.format)}${present(property.parkingRatio) ? ` · ${property.parkingRatio}` : ''}`); parkingCell.dataset.label = 'Parking';
-        row.append(name, location, area, price, parkingCell); body.append(row);
-      }
-    });
-    renderOptionLocator('purchase', purchases, byId('purchase-locator'));
-    const select = byId('property-select');
-    if (select) {
-      select.replaceChildren();
-      purchases.forEach((property) => {
-        const option = make('option', '', property.name || 'Property option');
-        option.value = property.id;
-        select.append(option);
+  function facts(p) {
+    return [["Asking", Number.isFinite(p.price) ? money(p.price) : null], [
+      "Base rent",
+      Number.isFinite(p.rentPerSf) ? `${money(p.rentPerSf)}/SF/year` : null,
+    ], [
+      "Building area",
+      Number.isFinite(p.totalSf) ? `${number(p.totalSf)} SF` : null,
+    ], [
+      "Reported parking",
+      p.parkingSpaces === null
+        ? "Unknown"
+        : p.parkingSpaces === undefined
+        ? null
+        : number(p.parkingSpaces),
+    ], ...(p.details || []).map(detail => [esc(detail.label), esc(detail.value)])].filter((x) => x[1]).map(([a, b]) =>
+      `<div><span>${a}</span><strong>${b}</strong></div>`
+    ).join("");
+  }
+  function article(p, i) {
+    const links = p.floorplan
+      ? `<a class="button secondary" href="${esc(p.floorplan)}" target="_blank" rel="noopener">View supplied floor plan ↗</a>`
+      : "";
+    return `<article class="property-page"><div class="property-topline"><a href="https://carr.us" target="_blank" rel="noopener" aria-label="CARR website"><img class="carr-logo" src="carr-logo.png" alt="CARR"></a>${
+      d.brand.logo
+        ? `<img class="brand-logo" src="${esc(d.brand.logo)}" alt="${
+          esc(d.brand.name)
+        } logo">`
+        : ``
+    }<span class="brand-wordmark"><strong>${esc(d.brand.name)}</strong><small>${
+      esc(d.brand.descriptor)
+    }</small></span></div><div class="property-top"><figure>${
+      image(p, `${title(p)} property image`)
+    }<figcaption>${
+      esc(sourceLine(p))
+    }</figcaption></figure><div><span class="property-number">OPTION ${
+      String(i + 1).padStart(2, "0")
+    }</span><h2 id="property-dialog-title">${
+      esc(title(p))
+    }</h2><p>${esc(p.location || "")}</p><div class="property-facts">${
+      facts(p)
+    }</div></div></div><h3>Property review</h3><p>${
+      esc(p.description || "")
+    }</p>${
+      p.planningNote
+        ? `<div class="review-box"><h4>Planning question</h4><p>${
+          esc(p.planningNote)
+        }</p></div>`
+        : ""
+    }${
+      p.availabilityNote
+        ? `<p class="note"><strong>Availability:</strong> ${
+          esc(p.availabilityNote)
+        }</p>`
+        : ""
+    }${
+      p.conflicts?.length
+        ? `<div class="review-box"><h4>Source conflicts</h4><ul>${
+          p.conflicts.map((x) => `<li>${esc(x)}</li>`).join("")
+        }</ul></div>`
+        : ""
+    }<p class="note">Verify condition, availability, clinical layout, access and measurements during due diligence.</p><div class="property-links">${links}</div><p class="source-caption">Source: ${
+      esc(sourceLine(p))
+    }</p><button class="button add-to-tour" type="button" data-toggle="${
+      esc(p.id)
+    }" aria-pressed="false">Add to review list</button></article>`;
+  }
+  function openProperty(id, trigger) {
+    let p = byId[id];
+    if (!p) return;
+    dialogReturn = trigger;
+    $("#property-dialog-content").innerHTML = article(
+      p,
+      entities.indexOf(p),
+    );
+    syncButtons();
+    $("#property-dialog").showModal();
+  }
+  function renderProperties() {
+    const dir = $("#property-directory");
+    dir.replaceChildren();
+    const screening = $("#purchase-screening");
+    screening.replaceChildren();
+    for (const criterion of d.market.purchaseScreening || []) {
+      const source = d.sources.find(item => item.id === criterion.sourceId);
+      const card = document.createElement("article");
+      card.innerHTML = `<strong>${esc(criterion.label)}</strong><p>${esc(criterion.description)}</p><small>${esc(source.title)} · ${esc(source.date)}</small>`;
+      screening.append(card);
+    }
+    $("#purchase-screening-section").hidden = !screening.childElementCount;
+    properties.forEach((p, i) => {
+      let tile = document.createElement("a");
+      tile.className = "property-jump";
+      tile.href = "#purchases";
+      tile.innerHTML = `<span>${String(i + 1).padStart(2, "0")}</span>${
+        image(p, title(p))
+      }<div><strong>${esc(title(p))}</strong><small>${
+        Number.isFinite(p.price) ? money(p.price) : "Price not listed"
+      } · ${
+        Number.isFinite(p.totalSf)
+          ? `${number(p.totalSf)} SF`
+          : "Area not verified"
+      }</small><small>${
+        esc(p.planningNote || "")
+      }</small></div><b aria-hidden="true">↗</b>`;
+      tile.addEventListener("click", (e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        e.preventDefault();
+        openProperty(p.id, tile);
       });
-      if (selectedProperty) select.value = selectedProperty.id;
-    }
+      dir.append(tile);
+    });
+    let context = $("#market-context");
+    context.replaceChildren();
+    contextProperties.forEach((p) => {
+      let el = document.createElement("article");
+      el.className = "market-context-card";
+      el.innerHTML = `${image(p, title(p))}<div><strong>${
+        esc(title(p))
+      }</strong><p>${esc(p.description || "")}</p><span>${
+        esc(sourceLine(p))
+      }</span></div>`;
+      context.append(el);
+    });
+  }
+  function openCurrentPractice(trigger) {
+    const current = d.currentPractice;
+    if (!current) return;
+    dialogReturn = trigger;
+    $("#property-dialog-content").innerHTML = `<article class="property-page"><div class="property-topline"><a href="https://carr.us" target="_blank" rel="noopener" aria-label="CARR website"><img class="carr-logo" src="carr-logo.png" alt="CARR"></a>${d.brand.logo ? `<img class="brand-logo" src="${esc(d.brand.logo)}" alt="${esc(d.brand.name)} logo">` : ""}<span class="brand-wordmark"><strong>${esc(d.brand.name)}</strong><small>${esc(d.brand.descriptor)}</small></span></div><span class="property-number">CURRENT PRACTICE · CONTEXT</span><h2 id="property-dialog-title">${esc(current.name)}</h2><p>${esc(current.location)}</p><p>${esc(current.description)}</p><p class="note">The locator is approximate and is not an entrance or navigation destination.</p><p class="source-caption">${esc(sourceLine(current))}</p></article>`;
+    $("#property-dialog").showModal();
   }
 
-  function renderDemographics() {
-    const chart = byId('demographic-chart');
-    if (!chart) return;
-    const years = Array.isArray(data.demographics?.years) ? data.demographics.years : [];
-    const values = Array.isArray(data.demographics?.index) ? data.demographics.index : [];
-    const title = make('title', '', data.demographics?.title || 'Population index');
-    title.id = 'demo-chart-title';
-    const desc = make('desc', '', sampleMode ? 'Fictional illustrative index values.' : 'Population index values from the configured presentation data.');
-    desc.id = 'demo-chart-desc';
-    chart.replaceChildren(title, desc);
-    const reportLink=byId('demographic-report');
-    const reportUrl=safeImageSource(data.demographics?.reportPath) || safeWebSource(data.demographics?.reportPath);
-    if(reportLink){reportLink.hidden=!reportUrl;if(reportUrl){reportLink.href=reportUrl;reportLink.target='_blank';reportLink.rel='noopener noreferrer';}}
-    const pairs = years.map((year, index) => ({year, raw:values[index], value:Number(values[index])}));
-    if (pairs.some((entry)=>!present(entry.raw)||!present(entry.year)||!Number.isFinite(entry.value)||!Number.isFinite(Number(entry.year)))) {
-      const placeholder=svgEl('text',{x:310,y:140,'text-anchor':'middle',class:'axis-label'}); placeholder.textContent='Not verified'; chart.append(placeholder); return;
-    }
-    if (pairs.length < 2) {
-      const placeholder = svgEl('text', {x: 310, y: 140, 'text-anchor': 'middle', class: 'axis-label'});
-      placeholder.textContent = 'Not verified';
-      chart.append(placeholder);
-      const reportLink=byId('demographic-report'); const reportUrl=safeImageSource(data.demographics?.reportPath)||safeWebSource(data.demographics?.reportPath);
-      if(reportLink){reportLink.hidden=!reportUrl;if(reportUrl){reportLink.href=reportUrl;reportLink.target='_blank';reportLink.rel='noopener noreferrer';}}
+  function initMap(id, items) {
+    let el = document.getElementById(id);
+    if (!el || maps[id]) return;
+    if (!maplibregl) {
+      el.textContent =
+        "Map unavailable. The source-linked cards remain available.";
       return;
     }
-    const min = Math.min(...pairs.map((p) => p.value));
-    const max = Math.max(...pairs.map((p) => p.value));
-    const span = max - min || 1;
-    const x0 = 68, dx = 500 / (pairs.length - 1);
-    const yFor = (value) => 190 - ((value - min) / span) * 140;
-    for (let step = 0; step < 4; step++) chart.append(svgEl('path', {d: `M52 ${50 + step * 46}h536`, class: 'demo-grid'}));
-    chart.append(svgEl('path', {d: 'M52 26v190h536', fill: 'none', stroke: '#d9e2e9', 'stroke-width': 1.5}));
-    const path = pairs.map((p, index) => `${index ? 'L' : 'M'}${x0 + index * dx} ${yFor(p.value)}`).join(' ');
-    chart.append(svgEl('path', {d: path, class: 'demo-line'}));
-    pairs.forEach((point, index) => {
-      const x = x0 + index * dx, y = yFor(point.value);
-      chart.append(svgEl('circle', {cx: x, cy: y, r: 5, fill: '#fff', stroke: '#f57f29', 'stroke-width': 3}));
-      const label = svgEl('text', {x, y: 239, 'text-anchor': 'middle', class: 'axis-label'});
-      label.textContent = String(point.year);
-      chart.append(label);
-    });
-    [min, min + span / 2, max].forEach((value, index) => {
-      const label = svgEl('text', {x: 13, y: 194 - index * 70, class: 'axis-label'});
-      label.textContent = number.format(Math.round(value));
-      chart.append(label);
-    });
-    const questions = byId('demographic-questions');
-    questions?.querySelectorAll('article').forEach((node) => node.remove());
-    (data.demographics?.questions || []).forEach((question, index) => {
-      const article = make('article');
-      article.append(make('span', 'question-number', String(index + 1).padStart(2, '0')));
-      const copy = make('div');
-      copy.append(make('h3', '', question.title || 'Question'), make('p', '', question.body || ''));
-      article.append(copy);
-      questions?.insertBefore(article, questions.querySelector('.text-link'));
-    });
-  }
-
-  function renderSources() {
-    const grid = byId('sources-grid');
-    if (!grid) return;
-    grid.replaceChildren();
-    sources.forEach((source, index) => {
-      const card = make('article', 'source-card');
-      card.append(make('span', 'source-index', String.fromCharCode(65 + (index % 26))), make('h3', '', source.title || 'Source'));
-      card.append(make('p', '', [source.geography, source.date, source.notes].filter(present).join(' · ') || (sampleMode ? 'Source details have not been added.' : 'Source details not verified.')));
-      const url = safeImageSource(source.url) || safeWebSource(source.url);
-      const reportPath=safeImageSource(source.reportPath) || safeWebSource(source.reportPath);
-      if (reportPath) { const report=make('a','report-link','Open supporting report ↗'); report.href=reportPath; report.target='_blank'; report.rel='noopener noreferrer'; card.append(report); }
-      if (url) {
-        const link = make('a', '', 'Open source ↗');
-        link.href = url;
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-        link.setAttribute('aria-label', `Open source: ${source.title || 'source'}`);
-        card.append(link);
-      }
-      card.append(make('span', 'source-status', url ? 'SOURCE LINKED' : sampleMode ? 'SOURCE NEEDED' : 'VERIFY SOURCE'));
-      grid.append(card);
-    });
-  }
-
-  function safeWebSource(value) {
-    if (typeof value !== 'string' || !value.trim()) return null;
-    try {
-      const url = new URL(value.trim());
-      return url.protocol === 'https:' ? url.href : null;
-    } catch { return null; }
-  }
-
-  function routeTo(id, updateHistory = false) {
-    const firstVisible = (data.sections || []).find((section) => section.visible !== false && byId(section.id))?.id || 'home';
-    const valid = new Set((data.sections || []).filter((section) => section.visible !== false && byId(section.id)).map((section) => section.id));
-    const targetId = valid.has(id) ? id : firstVisible;
-    setActiveRecord(null);
-    doc.querySelectorAll('.presentation-view').forEach((view) => {
-      const active = view.dataset.view === targetId;
-      view.hidden = !active;
-      view.dataset.active = String(active);
-    });
-    const section = data.sections?.find((item) => item.id === targetId);
-    const label = section?.title || section?.label || targetId[0].toUpperCase() + targetId.slice(1);
-    setText('sticky-page-title', label);
-    doc.querySelectorAll('.section-nav a').forEach((link) => {
-      if (link.hash === `#${targetId}`) link.setAttribute('aria-current', 'page');
-      else link.removeAttribute('aria-current');
-    });
-    if (updateHistory && location.hash !== `#${targetId}`) history.pushState({view: targetId}, '', `#${targetId}`);
-    window.scrollTo({top: 0, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'});
-    const heading = byId(targetId)?.querySelector('h1,h2');
-    if (heading && targetId !== 'home') { heading.tabIndex = -1; heading.focus({preventScroll: true}); }
-  }
-
-  function installSectionTitles() {
-    (data.sections || []).forEach((section) => {
-      const view = byId(section.id);
-      if (!view) return;
-      if (section.visible === false && section.id !== 'home') view.hidden = true;
-      const heading = view.querySelector('h1,h2');
-      if (heading && present(section.title)) heading.textContent = section.title;
-    });
-    const firstVisible = (data.sections || []).find((section) => section.visible !== false && byId(section.id))?.id || 'home';
-    doc.querySelectorAll('a[href^="#"]').forEach((link) => {
-      const target = link.hash.slice(1);
-      const section = data.sections.find((item) => item.id === target);
-      if (['home','leases','purchases','strategy','demographics','sources'].includes(target) && (!section || section.visible === false)) link.hidden = true;
-      if (link.classList.contains('wordmark')) { link.href = `#${firstVisible}`; link.hidden = false; }
-    });
-    const nav = doc.querySelector('.section-nav');
-    if (nav && data.sections) {
-      nav.querySelectorAll('a[href^="#"]').forEach((link) => {
-        const section = data.sections.find((item) => `#${item.id}` === link.hash);
-        link.hidden = !section || section.visible === false;
-      });
-      data.sections.forEach((section) => {
-        const link = nav.querySelector(`a[href="#${CSS.escape(section.id)}"]`);
-        if (!link) return;
-        link.textContent = section.label || section.id;
-        link.hidden = section.visible === false;
-      });
-    }
-  }
-
-  function stableTriggerClasses(value) {
-    const classes = typeof value === 'string' ? value : value?.baseVal || '';
-    return classes.split(/\s+/).filter((name) => name && !['is-active','is-selected','is-visible'].includes(name)).sort().join(' ');
-  }
-
-  function showDetail(kind, id, trigger, writeLocation = true) {
-    const collection = kind === 'development' ? developments : kind === 'lease' ? leases : properties;
-    const item = collection.find((entry) => entry.id === id);
-    if (!item) return;
-    lastTrigger = trigger || null;
-    const dialog = byId('detail-dialog');
-    const parentView = trigger?.closest?.('.presentation-view')?.dataset.view || doc.querySelector('.presentation-view[data-active="true"]')?.dataset.view || 'home';
-    const triggerEntity = trigger ? entityFor(trigger) : null;
-    lastTriggerInfo = trigger && triggerEntity ? {
-      parentView, kind: triggerEntity.kind, id: triggerEntity.id,
-      tagName: trigger.tagName, className: stableTriggerClasses(trigger.className)
-    } : null;
-    const deepLink = `#${kind === 'property' ? 'property' : kind}-${encodeURIComponent(id)}`;
-    dialog.dataset.parentView = parentView;
-    dialog.dataset.entityHash = deepLink;
-    const isDevelopment = kind === 'development';
-    const isLease = kind === 'lease';
-    setText('dialog-type', isDevelopment ? item.status : isLease ? 'LEASE OPTION' : item.status || 'PURCHASE OPTION');
-    setText('dialog-title', item.name || 'Details');
-    setText('dialog-description', item.description || item.planningNote || item.subtitle || 'Details not verified.');
-    setText('dialog-fact1-label', isDevelopment ? 'LOCATION' : 'AREA');
-    setText('dialog-area', isDevelopment ? item.location || 'Not verified' : showValue(isLease ? item.areaSf : item.totalSf, (value) => `${number.format(value)} SF`));
-    setText('dialog-fact2-label', isDevelopment ? 'SCENARIO' : isLease ? 'ANNUAL BASE RENT' : sampleMode ? 'SAMPLE PRICE' : 'ASKING PRICE');
-    setText('dialog-price', isDevelopment ? item.status || 'Not verified' : isLease ? showValue(item.annualRentPerSf, (value) => `${money.format(value)} / SF / year`) : showValue(item.price, money.format));
-    setText('dialog-fact3-label', isDevelopment ? 'SOURCE' : 'PARKING');
-    const source = sources.find((entry) => entry.id === item.sourceId);
-    setText('dialog-parking', isDevelopment ? source?.title || 'Source needed' : `${showValue(item.parkingSpaces, number.format)} spaces${present(item.parkingRatio) ? ` · ${item.parkingRatio}` : ''}`);
-    setText('dialog-note', isDevelopment
-      ? (sampleMode ? 'Fictional civic development concept. It does not represent an announced or approved project.' : 'Confirm the project status, timing, and source before using it in a recommendation.')
-      : (sampleMode ? 'Fictional planning example. Confirm price, condition, parking, financing, and all transaction terms.' : item.planningNote || 'Confirm property details and transaction terms.'));
-    const imageBox = byId('dialog-illustration');
-    imageBox.replaceChildren(art(item.artKey, `${item.name || 'Property'} illustration`, item.image));
-    setText('dialog-kicker', sampleMode ? 'FICTIONAL SCENARIO · DETAILS' : 'PROPERTY DETAILS');
-    setActiveRecord(null);
-    dialog.showModal();
-    if (writeLocation && location.hash !== deepLink) history.pushState({detail: id, parentView}, '', deepLink);
-    byId('dialog-close')?.focus();
-  }
-
-  function installDialog() {
-    const dialog = byId('detail-dialog');
-    const close = dialog?.querySelector('.dialog-close');
-    close?.addEventListener('click', () => dialog.close());
-    dialog?.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
-    dialog?.addEventListener('close', () => {
-      if (!handlingHistory && location.hash === dialog.dataset.entityHash) {
-        const parentView = dialog.dataset.parentView || 'home';
-        history.replaceState({view: parentView}, '', `#${parentView}`);
-        routeTo(parentView);
-      }
-      const restore = (lastTrigger && lastTrigger.isConnected) ? lastTrigger : findLastTriggerCounterpart();
-      if (restore) restore.focus();
-    });
-    dialog?.addEventListener('keydown', (event) => {
-      if (event.key !== 'Tab') return;
-      const focusable = [...dialog.querySelectorAll('button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])')];
-      if (!focusable.length) return;
-      const first = focusable[0], last = focusable[focusable.length - 1];
-      if (event.shiftKey && doc.activeElement === first) { event.preventDefault(); last.focus(); }
-      else if (!event.shiftKey && doc.activeElement === last) { event.preventDefault(); first.focus(); }
-    });
-  }
-
-  function syncLocation() {
-    const hash = location.hash || '#home';
-    const detail = hash.match(/^#(property|lease|development)-(.+)$/);
-    const dialog = byId('detail-dialog');
-    if (detail) {
-      const kind = detail[1], id = decodeURIComponent(detail[2]);
-      const parent = kind === 'property' ? 'purchases' : kind === 'lease' ? 'leases' : 'home';
-      routeTo(parent);
-      if (!dialog.open || dialog.dataset.entityHash !== hash) showDetail(kind, id, null, false);
+    const center = d.locator?.center;
+    if (!center) {
+      el.textContent =
+        "No map center configured. Entries remain listed without pins.";
       return;
     }
-    if (dialog.open) {
-      handlingHistory = true;
-      dialog.close();
-      handlingHistory = false;
-    }
-    const requested = hash.slice(1);
-    const visible = data.sections?.find((section)=>section.id===requested && section.visible!==false);
-    const firstVisible = data.sections?.find((section)=>section.visible!==false && byId(section.id))?.id || 'home';
-    const target = visible ? requested : firstVisible;
-    if (`#${target}` !== hash) history.replaceState({view:target},'',`#${target}`);
-    routeTo(target);
-  }
-
-  function entityFor(node) {
-    if (node.dataset.developmentId) return {kind:'development', id:node.dataset.developmentId, item:developments.find((x)=>x.id===node.dataset.developmentId)};
-    if (node.dataset.leaseId) return {kind:'lease', id:node.dataset.leaseId, item:leases.find((x)=>x.id===node.dataset.leaseId)};
-    if (node.dataset.propertyId) return {kind:'property', id:node.dataset.propertyId, item:properties.find((x)=>x.id===node.dataset.propertyId)};
-    return null;
-  }
-
-  function findLastTriggerCounterpart() {
-    if (!lastTriggerInfo) return null;
-    const view = doc.querySelector(`.presentation-view[data-view="${CSS.escape(lastTriggerInfo.parentView)}"][data-active="true"]`);
-    if (!view) return null;
-    const attribute = lastTriggerInfo.kind === 'development' ? 'data-development-id' : lastTriggerInfo.kind === 'lease' ? 'data-lease-id' : 'data-property-id';
-    return [...view.querySelectorAll(`[${attribute}]`)].find((node) => {
-      return node.dataset[ lastTriggerInfo.kind === 'development' ? 'developmentId' : lastTriggerInfo.kind === 'lease' ? 'leaseId' : 'propertyId' ] === lastTriggerInfo.id
-        && node.tagName === lastTriggerInfo.tagName && stableTriggerClasses(node.className) === lastTriggerInfo.className
-        && !node.closest('[hidden]') && node.getClientRects().length > 0;
-    }) || null;
-  }
-
-  function setActiveRecord(record) {
-    doc.querySelectorAll('[data-development-id],[data-lease-id],[data-property-id]').forEach((node) => {
-      const item = entityFor(node);
-      node.classList.toggle('is-active', Boolean(record && item && item.kind===record.kind && item.id===record.id));
-    });
-    const preview = byId('entity-preview');
-    if (!preview) return;
-    if (!record || !record.item) {
-      preview.setAttribute('aria-hidden','true');
-      doc.querySelectorAll('[aria-describedby="entity-preview"]').forEach((node)=>node.removeAttribute('aria-describedby'));
+    let style = d.locator.style;
+    if (!style) {
+      el.textContent =
+        "No basemap style configured. Entries remain listed without pins.";
       return;
     }
-    setText('preview-title', record.item.name || 'Details');
-    setText('preview-description', record.item.location || record.item.subtitle || record.item.description || 'Details not verified.');
-    const artHost = byId('preview-art');
-    artHost?.replaceChildren(art(record.item.artKey, `${record.item.name || 'Place'} illustration`, record.item.image));
-    preview.setAttribute('aria-hidden','false');
-    doc.querySelectorAll('[data-development-id],[data-lease-id],[data-property-id]').forEach((node)=>{
-      const linked=entityFor(node);
-      if(linked && linked.kind===record.kind && linked.id===record.id) node.setAttribute('aria-describedby','entity-preview');
-      else node.removeAttribute('aria-describedby');
+    el.replaceChildren();
+    let map = new maplibregl.Map({
+      container: id,
+      style,
+      center: [center.lon, center.lat],
+      zoom: d.locator.zoom || 10,
+      attributionControl: true,
+      scrollZoom: false,
     });
-  }
-
-  function installInteractions() {
-    doc.querySelector('.section-nav')?.addEventListener('click', (event) => {
-      const link = event.target.closest('a[href^="#"]');
-      if (!link) return;
-      event.preventDefault();
-      routeTo(link.hash.slice(1), true);
+    map.addControl(
+      new maplibregl.NavigationControl({ showCompass: false }),
+      "top-right",
+    );
+    maps[id] = map;
+    const preview = new maplibregl.Popup({closeButton:false,closeOnClick:false,maxWidth:"240px",offset:20,className:"map-pin-preview"});
+    const bindMarkerPreview = (button, point, record) => {
+      const showPreview = () => preview.setLngLat(point).setHTML(`${image(record,title(record))}<strong class="map-preview-title">${esc(title(record))}</strong><span>Approximate area locator · Open for full details</span>`).addTo(map);
+      button.addEventListener("mouseenter", showPreview);
+      button.addEventListener("focus", showPreview);
+      for (const event of ["mouseleave", "blur", "click"]) button.addEventListener(event, () => preview.remove());
+    };
+    const markers = [];
+    const coordinates = [];
+    let pins = 0;
+    items.forEach((p, i) => {
+      if (!p.locator) return;
+      let button = document.createElement("button");
+      button.type = "button";
+      button.className = "map-pin";
+      button.innerHTML = `<span class="pin-stem" hidden></span><span class="pin-number">${i + 1}</span>`;
+      button.dataset.entityId = p.id;
+      button.title = `${title(p)} · approximate locator`;
+      button.setAttribute(
+        "aria-label",
+        `${title(p)} approximate area locator, not a navigation destination`,
+      );
+      button.addEventListener(
+        "click",
+        () => byId[p.id] ? openProperty(p.id, button) : openProject(p, button),
+      );
+      const marker = new maplibregl.Marker({ element: button }).setLngLat([
+        p.locator.lon,
+        p.locator.lat,
+      ]).addTo(map);
+      markers.push({marker, button, point: [p.locator.lon, p.locator.lat]});
+      bindMarkerPreview(button,[p.locator.lon,p.locator.lat],p);
+      coordinates.push([p.locator.lon, p.locator.lat]);
+      pins++;
     });
-    window.addEventListener('popstate', syncLocation);
-    window.addEventListener('hashchange', () => {
-      syncLocation();
-    });
-    doc.addEventListener('click', (event) => {
-      const development = event.target.closest('[data-development-id]');
-      if (development) {
-        showDetail('development', development.dataset.developmentId, development);
-        return;
-      }
-      const lease = event.target.closest('[data-lease-id]');
-      if (lease) { showDetail('lease', lease.dataset.leaseId, lease); return; }
-      const property = event.target.closest('[data-property-id]');
-      if (property) {
-        selectedProperty = properties.find((entry) => entry.id === property.dataset.propertyId) || selectedProperty;
-        const select = byId('property-select');
-        if (select && selectedProperty) select.value = selectedProperty.id;
-        doc.querySelectorAll('[data-property-id][aria-pressed]').forEach((node) => node.setAttribute('aria-pressed', String(node.dataset.propertyId === selectedProperty.id)));
-        showDetail('property', property.dataset.propertyId, property);
-        updateFinance();
-      }
-    });
-    doc.addEventListener('keydown', (event) => {
-      const marker = event.target.closest?.('.map-marker[role="button"]');
-      if (marker && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); marker.dispatchEvent(new MouseEvent('click', {bubbles: true})); }
-    });
-    doc.addEventListener('pointerover', (event) => {
-      const node = event.target.closest('[data-development-id],[data-lease-id],[data-property-id]');
-      if (node) setActiveRecord(entityFor(node));
-    });
-    doc.addEventListener('pointerout', (event) => {
-      const node = event.target.closest('[data-development-id],[data-lease-id],[data-property-id]');
-      if (node && !node.contains(event.relatedTarget)) setActiveRecord(null);
-    });
-    doc.addEventListener('focusin', (event) => {
-      const node = event.target.closest('[data-development-id],[data-lease-id],[data-property-id]');
-      if (node) setActiveRecord(entityFor(node));
-    });
-    doc.addEventListener('focusout', (event) => {
-      const node = event.target.closest('[data-development-id],[data-lease-id],[data-property-id]');
-      if (node && !node.contains(event.relatedTarget)) setActiveRecord(null);
-    });
-    const slider = byId('ti-slider');
-    slider?.addEventListener('input', () => updateFinance());
-    byId('property-select')?.addEventListener('change', (event) => {
-      selectedProperty = properties.find((property) => property.id === event.target.value) || selectedProperty;
-      renderPurchaseProperties();
-      updateFinance();
-    });
-  }
-
-  function renderOwnershipMechanism(results) {
-    const grid = byId('ownership-property-grid');
-    if (!grid) return;
-    grid.replaceChildren();
-    if (!results.length) {
-      ['mechanism-structure','mechanism-buildings','mechanism-cash','mechanism-equity'].forEach((id)=>setText(id,'Not available'));
-      setText('why-structure-copy','Modeled figures are unavailable for this presentation.');
-      return;
+    const current = d.currentPractice;
+    if (current?.locator) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "map-practice";
+      button.innerHTML = `<span class="pin-stem" hidden></span><span class="pin-number">P</span>`;
+      button.title = `${current.name} · approximate locator`;
+      button.setAttribute("aria-label", `${current.name}, approximate current-practice context locator, not a navigation destination`);
+      button.addEventListener("click", () => openCurrentPractice(button));
+      button.dataset.entityId = "current-practice";
+      const marker = new maplibregl.Marker({element: button}).setLngLat([current.locator.lon, current.locator.lat]).addTo(map);
+      markers.push({marker, button, point: [current.locator.lon, current.locator.lat]});
+      coordinates.push([current.locator.lon, current.locator.lat]);
+      pins++;
     }
-    const a = data.assumptions || {};
-    setText('mechanism-structure', `${percent(a.occupancyFraction)} practice · ${percent(1-Number(a.occupancyFraction))} outside tenants`);
-    setText('mechanism-buildings', `${number.format(results.length)} purchase ${results.length===1?'option':'options'}`);
-    setText('mechanism-cash', `${percent(1-Number(a.downPaymentFraction))} financed · ${percent(a.annualInterest)} · ${number.format(a.amortizationYears)} years`);
-    setText('mechanism-cash-note', `Outside rent: ${money.format(Number(a.annualRentPerSf))}/SF/year; ${percent(a.collectionLoss)} collection loss; ${number.format(a.fillMonths)}-month linear fill. Collected rent offsets modeled mortgage payments.`);
-    const current = results.find((entry)=>entry.property.id===selectedProperty?.id) || results[0];
-    const held = (current.result.years||[]).find((row)=>row.year===Number(a.holdYears)) || current.result;
-    setText('mechanism-equity', `${number.format(a.holdYears)}-year equity ${money.format(held.equity)}`);
-    const cash = Number(held.extraCashRequired);
-    const cashText = cash < 0 ? `Savings vs. leasing ${money.format(Math.abs(cash))}` : `Extra cash vs. leasing ${money.format(cash)}`;
-    setText('mechanism-equity-note', `${cashText}; modeled benefit ${money.format(held.benefit)}. Equity is not liquid cash or sale proceeds.`);
-    results.forEach(({property,result},index)=>{
-      const card=make('button','mechanism-property'); card.type='button'; card.dataset.propertyId=property.id; card.setAttribute('aria-haspopup','dialog');
-      card.append(art(property.artKey,`${property.name||'Purchase option'} illustration`,property.image));
-      const copy=make('span','mechanism-property-copy');
-      copy.append(make('strong','',`${String(index+1).padStart(2,'0')} · ${property.name||'Purchase option'}`),make('small','',property.location||'Not verified'),make('span','',`${number.format(result.practiceSf)} SF practice · ${number.format(result.tenantSf)} SF outside tenants`));
-      card.append(copy); grid.append(card);
-    });
-    const selected= current.property.name || 'Selected option';
-    const year=number.format(a.holdYears);
-    const benefit=Number(held.benefit);
-    const assessment=benefit>=0
-      ? `Under the current assumptions, ${selected} models ${money.format(held.equity)} in hold-year equity against ${cashText}, for an estimated ${year}-year benefit of ${money.format(benefit)}. Outside tenant collections reduce mortgage payments you fund after the modeled collection allowance and lease-up period.`
-      : `Under the current assumptions, ${selected} models ${money.format(held.equity)} in hold-year equity against ${cashText}, resulting in a modeled ${year}-year benefit of ${money.format(benefit)}. Outside tenant collections reduce mortgage payments you fund after the modeled collection allowance and lease-up period; verify the inputs before drawing a conclusion.`;
-    setText('why-structure-copy',assessment);
-  }
-
-  function updateFinance() {
-    const strategy = data.sections?.find((section) => section.id === 'strategy' && section.visible !== false);
-    if (!strategy) return;
-    const slider = byId('ti-slider');
-    const tiPerSf = slider ? Number(slider.value) : 25;
-    setText('ti-output', `$${number.format(tiPerSf)}/SF`);
-    setText('ti-range-current', `$${number.format(tiPerSf)}/SF`);
-    if (slider) slider.style.background = `linear-gradient(90deg,var(--orange) ${(tiPerSf - 25) / 50 * 100}%,#ffffff36 ${(tiPerSf - 25) / 50 * 100}%)`;
-    const helper = window.PresentationFinance;
-    const purchases = properties;
-    if (!helper || typeof helper.compute !== 'function' || purchases.length === 0) {
-      financeCalculation = null;
-      ['buildout-value', 'ti-value', 'combined-budget', 'extra-cash', 'ten-year-benefit'].forEach((id) => setText(id, 'Not available'));
-      const status = byId('finance-status');
-      if (status) status.textContent = 'Ownership scenario is not available for this presentation.';
-      renderFinanceComparison([]);
-      renderFinanceChart([]);
-      renderOwnershipMechanism([]);
-      return;
+    const status = id === "purchase-map" ? $("#purchase-map-status") : null;
+    if (status) {
+      const total = items.length + (current?.locator ? 1 : 0);
+      status.textContent =
+        `${pins} of ${total} entries have source-backed approximate locators. Unpinned entries remain in the cards. Locators are not entrances or navigation destinations.`;
     }
-    try {
-      const results = purchases.map((property) => ({property, result: helper.compute({price: property.price, totalSf: property.totalSf}, data.assumptions, tiPerSf)}));
-      financeCalculation = results.find((entry) => entry.property.id === selectedProperty?.id)?.result || results[0].result;
-      selectedProperty = results.find((entry) => entry.property.id === selectedProperty?.id)?.property || results[0].property;
-      setText('buildout-value', money.format(financeCalculation.practiceBuildout));
-      setText('ti-value', money.format(financeCalculation.tenantTi));
-      setText('combined-budget', money.format(financeCalculation.combinedBudget));
-      setSignedSummary('extra-cash', financeCalculation.extraCashRequired, true);
-      setSignedSummary('ten-year-benefit', financeCalculation.benefit, false);
-      setText('summary-period-label', `${number.format(data.assumptions.holdYears)}-YEAR SUMMARY`);
-      setText('summary-period', `${number.format(data.assumptions.holdYears)} YEARS`);
-      const budget = Math.max(0, financeCalculation.combinedBudget);
-      const practicePct = budget > 0 ? financeCalculation.practiceBuildout / budget * 100 : 0;
-      const tiPct = budget > 0 ? financeCalculation.tenantTi / budget * 100 : 0;
-      byId('buildout-bar').style.width = `${Math.max(0, Math.min(100, practicePct))}%`;
-      byId('ti-bar').style.width = `${Math.max(0, Math.min(100, tiPct))}%`;
-      const status = byId('finance-status');
-      if (status) status.textContent = `Scenario shown for ${selectedProperty.name || 'selected property'} with a $${number.format(tiPerSf)}/SF landlord TI contribution added to project budget.`;
-      renderFinanceComparison(results);
-      renderFinanceChart(financeCalculation.years || []);
-      renderOwnershipMechanism(results);
-    } catch (error) {
-      financeCalculation = null;
-      ['buildout-value', 'ti-value', 'combined-budget', 'extra-cash', 'ten-year-benefit'].forEach((id) => setText(id, 'Not verified'));
-      const status = byId('finance-status');
-      if (status) status.textContent = 'Review the property and planning assumptions before calculating this scenario.';
-      renderFinanceComparison([]);
-      renderFinanceChart([]);
-      renderOwnershipMechanism([]);
-    }
-  }
-
-  function renderFinanceComparison(entries) {
-    const head = byId('finance-compare-head');
-    const body = byId('finance-compare-body');
-    if (!head || !body) return;
-    head.replaceChildren();
-    body.replaceChildren();
-    const header = doc.createElement('tr');
-    const lead = make('th', '', 'Planning measure'); lead.scope = 'col'; header.append(lead);
-    entries.forEach(({property}) => {
-      const th = doc.createElement('th'); th.scope = 'col';
-      const open = make('button', 'row-title data-open', property.name || 'Property');
-      open.type = 'button'; open.dataset.propertyId = property.id; open.setAttribute('aria-haspopup', 'dialog');
-      th.append(open); header.append(th);
-    });
-    head.append(header);
-    const rows = [
-      ['Minimum practice area', (r) => `${number.format(r.practiceSf)} SF`],
-      ['Outside tenant area', (r) => `${number.format(r.tenantSf)} SF`],
-      ['Purchase price', (r, p) => money.format(p.price)],
-      ['Monthly principal and interest', (r) => money.format(r.payment)],
-      ['Practice buildout', (r) => money.format(r.practiceBuildout)],
-      ['Landlord TI contribution', (r) => money.format(r.tenantTi)],
-      ['Combined project budget', (r) => money.format(r.combinedBudget)],
-      ['Appreciation at hold', (r) => money.format(r.appreciation)],
-      ['Principal repaid at hold', (r) => money.format(r.principalRepaid)],
-      ['Remaining loan balance', (r) => money.format(r.balance)],
-      ['Owner equity at hold', (r) => money.format(r.equity)],
-      ['Mortgage payments you fund', (r) => displayCarry(r.carry)],
-      ['Practice rent avoided', (r) => money.format(r.avoidedPracticeRent)],
-      ['Extra cash vs. leasing', (r) => Number(r.extraCashRequired) < 0 ? `Savings vs. leasing ${money.format(Math.abs(r.extraCashRequired))}` : money.format(r.extraCashRequired)],
-      ['Estimated financial benefit vs. leasing', (r) => money.format(r.benefit)]
-    ];
-    rows.forEach(([label, valueFor]) => {
-      const row = doc.createElement('tr');
-      const th = make('th', '', label); th.scope = 'row'; th.dataset.label = 'Planning measure'; row.append(th);
-      entries.forEach(({property, result}) => {
-        const end = (result.years || []).find((point) => point.year === Number(data.assumptions.holdYears)) || result;
-        const cell = make('td', '', valueFor(end, property));
-        cell.dataset.label = property.name || 'Property';
-        const field = label.includes('benefit') ? 'benefit' : label.includes('Extra cash') ? 'extraCashRequired' : label.includes('payments you fund') ? 'carry' : null;
-        if (field) {
-          const amount = Number(end[field]);
-          if (Number.isFinite(amount)) {
-            if (field === 'benefit') cell.classList.add(amount >= 0 ? 'finance-benefit-positive' : 'finance-benefit-negative');
-            else if (field === 'carry' && amount < 0) { cell.textContent = `Surplus ${money.format(Math.abs(amount))}`; cell.classList.add('finance-carry-surplus'); }
-            else cell.classList.add(amount >= 0 ? 'finance-negative' : 'finance-positive');
+    const layoutPins = () => {
+      const placed = [];
+      const width = el.clientWidth, height = el.clientHeight;
+      for (const {marker, button, point} of markers) {
+        const projected = map.project(point);
+        let position;
+        for (let ring = 0; ring < 15 && !position; ring++) {
+          const candidates = ring === 0 ? [[0, 0]] : Array.from({length: ring * 8}, (_, i) => [Math.cos(i / (ring * 8) * Math.PI * 2) * ring * 38, Math.sin(i / (ring * 8) * Math.PI * 2) * ring * 38]);
+          for (const [dx, dy] of candidates) {
+            const candidate = {x: Math.max(24, Math.min(width - 24, projected.x + dx)), y: Math.max(24, Math.min(height - 24, projected.y + dy))};
+            if (placed.every(p => Math.abs(p.x - candidate.x) >= 36 || Math.abs(p.y - candidate.y) >= 36)) { position = candidate; break; }
           }
         }
-        row.append(cell);
-      });
-      body.append(row);
+        if (!position) { button.hidden = true; continue; }
+        button.hidden = false;
+        const offset = [position.x - projected.x, position.y - projected.y];
+        marker.setOffset(offset);
+        const stem = button.querySelector(".pin-stem");
+        if (stem) {
+          const distance = Math.hypot(...offset);
+          stem.hidden = distance < 2;
+          stem.style.width = `${distance}px`;
+          stem.style.transform = `rotate(${Math.atan2(-offset[1], -offset[0])}rad)`;
+        }
+        placed.push(position);
+      }
+    };
+    map.on("load", () => {
+      map.resize();
+      if (coordinates.length) {
+        const bounds = coordinates.reduce((b, coordinate) => b.extend(coordinate), new maplibregl.LngLatBounds(coordinates[0], coordinates[0]));
+        map.fitBounds(bounds, {padding: 60, maxZoom: 13, duration: 0});
+      }
+      layoutPins();
+      el.dataset.mapReady = "true";
     });
+    map.on("moveend", layoutPins);
+    map.on("resize", layoutPins);
   }
+  async function loadMaps() {
+    try {
+      maplibregl = await import("https://unpkg.com/maplibre-gl@6.13.0/dist/maplibre-gl.mjs");
+      const view = $(".site-view:not([hidden])");
+      if (view.id === "home") initMap("development-map", projects);
+      if (view.id === "purchases") initMap("purchase-map", properties);
+    } catch {
+      for (const id of ["development-map", "purchase-map"]) {
+        $("#" + id).textContent = "Map unavailable. The source-linked cards remain available.";
+      }
+    }
+  }
+  function renderLeases() {
+    const dir = $("#lease-directory");
+    dir.replaceChildren();
+    leases.forEach((p, i) => {
+      const tile = document.createElement("a");
+      tile.className = "property-jump";
+      tile.href = "#leases";
+      tile.innerHTML = `<span>${String(i + 1).padStart(2, "0")}</span>${
+        image(p, title(p))
+      }<div><strong>${esc(title(p))}</strong><small>${
+        Number.isFinite(p.rentPerSf)
+          ? `${money(p.rentPerSf)}/SF/year`
+          : "Rent not listed"
+      } · ${
+        Number.isFinite(p.totalSf)
+          ? `${number(p.totalSf)} SF`
+          : "Area not verified"
+      }</small></div>`;
+      tile.addEventListener("click", (e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        e.preventDefault();
+        openProperty(p.id, tile);
+      });
+      dir.append(tile);
+    });
+    if (!leases.length) $("#leases").hidden = true;
+  }
+  function renderProjects() {
+    const dir = $("#development-directory");
+    dir.replaceChildren();
+    projects.forEach((p, i) => {
+      const tile = document.createElement("button");
+      tile.type = "button";
+      tile.className = "development-tile";
+      tile.dataset.project = p.id;
+      tile.innerHTML = `${image(p, p.name)}<span class="development-number">${String(i + 1).padStart(2, "0")}</span><div><h4>${esc(p.name)}</h4><p>${esc(p.location || "")}</p><p>${esc(p.status || "Status not verified")}</p><span class="tile-action">View project details ↗</span></div>`;
+      dir.append(tile);
+    });
+    $$("[data-project]").forEach((el) =>
+      el.addEventListener(
+        "click",
+        () =>
+          openProject(projects.find((p) => p.id === el.dataset.project), el),
+      )
+    );
+  }
+  function openProject(p, trigger) {
+    if (!p) return;
+    projectReturn = trigger || document.activeElement;
+    let src = (d.sources || []).filter((s) =>
+      p.sourceId === s.id || p.sourceIds?.includes(s.id)
+    );
+    $("#project-dialog-content").innerHTML = `<h2 id="project-dialog-title">${
+      esc(p.name)
+    }</h2>${image(p, p.name)}<p><strong>Location:</strong> ${
+      esc(p.location || "Not specified")
+    }</p><p><strong>Map:</strong> ${
+      p.locator
+        ? "Approximate area locator"
+        : "No source-backed point; no map pin."
+    }</p><p><strong>Status:</strong> ${esc(p.status || "Not verified")}</p><p>${
+      esc(p.description || "")
+    }</p><h3>Sources</h3><ul>${
+      src.map((s) =>
+        `<li>${
+          s.url
+            ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${
+              esc(s.title)
+            } · ${esc(s.date)} ↗</a>`
+            : `${esc(s.title)} · ${esc(s.date)}`
+        }</li>`
+      ).join("")
+    }</ul><p class="note">Map locators are not boundaries or navigation destinations. Development announcements do not establish patient demand.</p>`;
+    $("#project-dialog").showModal();
+  }
+  function renderMarket() {
+    let m = d.market || {}, p = d.presentation || {};
+    txt("market-title", m.title || p.title || "Market and property review");
+    txt("market-summary", m.summary);
+    txt("market-note", m.note);
+    const snapshot = $("#home-demographics");
+    snapshot.hidden = !navIds.includes("demographics");
+    if (!snapshot.hidden) {
+      const model = window.PresentationDemographics.derive(d.demographics);
+      const population = model.population.values.at(-1);
+      const source = d.sources.find(item => item.id === model.population.sourceId);
+      const incomeSource = d.sources.find(item => item.id === model.income.sourceId);
+      $("#home-demographic-overview").innerHTML = `<a href="#demographics"><strong>${number(population.value)}</strong><span>Population · ${esc(population.label)} · people</span><small>${esc(source.title)}</small></a><a href="#demographics"><strong>${number(model.income.total)}</strong><span>Households · ${esc(model.income.period)}</span><small>${esc(incomeSource.title)}</small></a><a href="#demographics"><strong>${money(model.income.median.value)}</strong><span>Median household income · USD/year</span><small>${esc(model.income.period)} · ${esc(incomeSource.title)}</small></a>`;
+    }
+    const next = $(".home-actions a");
+    next.href = properties.length ? "#purchases" : "#leases";
+    next.textContent = properties.length ? "Review purchase options ↗" : "Review lease options ↗";
+    txt("development-title", m.developmentTitle || "Projects in context");
 
-  function renderFinanceChart(years) {
-    const chart = byId('finance-chart');
-    if (!chart) return;
-    const title = make('title', '', 'Owner equity and mortgage payments you fund by year');
-    title.id = 'chart-title';
-    const desc = make('desc', '', years.length ? `Equity and mortgage payments funded by outside rent, with dollar values by year. Negative carry is a surplus.` : 'Scenario values are not available.');
-    desc.id = 'chart-desc';
-    chart.replaceChildren(title, desc);
-    const points = years.filter((row) => Number.isFinite(Number(row.carry)) && Number.isFinite(Number(row.equity)));
-    if (points.length < 2) {
-      const placeholder = svgEl('text', {x: 450, y: 125, 'text-anchor': 'middle', class: 'chart-placeholder'});
-      placeholder.textContent = 'Scenario values not available';
-      chart.append(placeholder);
+  }
+  function renderDemographics() {
+    txt("demographics-title", d.demographics?.title || "Demographic context");
+    let charts = $("#demographic-charts");
+    charts.replaceChildren();
+    if (!d.demographics) return;
+    const model = window.PresentationDemographics.derive(d.demographics);
+    const freshness = document.createElement("p");
+    freshness.id = "demographic-freshness";
+    freshness.className = "note";
+    freshness.textContent = `Research as of ${model.asOfDate} · ${model.geography.label} · ${window.PresentationDemographics.freshness(model, new Date().toISOString().slice(0, 10))}`;
+    charts.append(freshness);
+    for (const s of model.series) {
+      const source = d.sources.find(item => item.id === s.sourceId);
+      const c = document.createElement("article");
+      c.className = "visual-card";
+      const max = Math.max(1, ...s.values.map(x => x.value));
+      c.innerHTML = `<h3>${esc(s.name)}</h3><p class="visual-subtitle">${esc(model.geography.label)} · ${esc(s.period)} · ${esc(s.unit)}</p>${s.values.map(x => `<div class="bar-row"><span>${esc(x.label)}</span><div><i style="width:${x.value / max * 100}%"></i></div><strong>${number(x.value)}${x.share == null ? "" : ` (${(x.share * 100).toFixed(1)}%)`}</strong></div>`).join("")}<p class="source-caption">${esc(source.title)} · ${esc(source.date)}</p>`;
+      charts.append(c);
+    }
+    const income = document.createElement("article");
+    income.className = "visual-card income-summary";
+    income.innerHTML = `<h3>${esc(model.income.median.label)}</h3><strong>${money(model.income.median.value)}/year</strong><p>${number(model.income.total)} households · ${esc(model.income.period)} · ${esc(model.geography.label)}</p><p class="source-caption">${esc(d.sources.find(s => s.id === model.income.sourceId).title)}</p>`;
+    charts.append(income);
+    let extra = $("#demographics-additional");
+    extra.replaceChildren();
+    for (const x of d.demographics?.cards || []) {
+      const source = (d.sources || []).find((item) => item.id === x.sourceId);
+      let c = document.createElement("article");
+      c.className = "demo-card";
+      c.innerHTML = `<span>${esc(x.geography)}</span><h3>${
+        esc(x.title)
+      }</h3><p>${esc(x.description || "")}</p><p class="source-caption">${esc(x.period)} · ${esc(source?.title || "Source not configured")} · ${esc(source?.date || "Date not configured")}</p>${
+        x.url || source?.url
+          ? `<a href="${esc(x.url || source.url)}" target="_blank" rel="noopener">Source ↗</a>`
+          : ""
+      }`;
+      extra.append(c);
+    }
+  }
+  function renderSources() {
+    let list = $("#sources-list");
+    list.replaceChildren();
+    (d.sources || []).forEach((s) => {
+      let c = document.createElement("article");
+      c.className = "source-item";
+      c.innerHTML = `<h3>${esc(s.title)}</h3><p>${esc(s.date)}${
+        s.geography ? " · " + esc(s.geography) : ""
+      }</p><p>${esc(s.notes || "")}</p>${
+        s.url
+          ? `<a href="${
+            esc(s.url)
+          }" target="_blank" rel="noopener">Open source ↗</a>`
+          : ""
+      }`;
+      list.append(c);
+    });
+    txt("sources-title", d.market?.sourcesTitle || "Sources and next steps");
+    txt("locator-disclaimer", d.locator?.disclaimer || "Map points are approximate and are not navigation destinations.");
+    txt(
+      "sources-intro",
+      d.market?.sourcesIntro || "Review named sources, geography and dates.",
+    );
+  }
+  function renderStrategy() {
+    if (d.strategy.mode !== "owner_occupancy_30_70" || !visibleSections.has("strategy")) {
+      $("#strategy").hidden = true;
       return;
     }
-    const max = Math.max(1, ...points.map((p) => Math.max(Number(p.carry), Number(p.equity))));
-    const min = Math.min(0, ...points.map((p) => Math.min(Number(p.carry), Number(p.equity))));
-    const span = max - min || 1;
-    const xFor = (index) => 36 + index * (828 / (points.length - 1));
-    const yFor = (value) => 196 - ((value - min) / span) * 160;
-    for (let i = 0; i < 4; i++) chart.append(svgEl('path', {d: `M30 ${36 + i * 54}h840`, class: 'chart-grid'}));
-    const rentPath = points.map((p, i) => `${i ? 'L' : 'M'}${xFor(i)} ${yFor(Number(p.carry))}`).join(' ');
-    const equityPath = points.map((p, i) => `${i ? 'L' : 'M'}${xFor(i)} ${yFor(Number(p.equity))}`).join(' ');
-    chart.append(svgEl('path', {d: rentPath, class: 'chart-path chart-path-rent'}), svgEl('path', {d: equityPath, class: 'chart-path chart-path-equity'}));
-    [max, max / 2 + min / 2, min].forEach((value, index) => {
-      const label = svgEl('text', {x: 3, y: 41 + index * 77, class: 'chart-axis'});
-      label.textContent = compactMoney(value);
-      chart.append(label);
+    txt("strategy-title", d.strategy.title || "Practice occupancy strategy");
+    txt("strategy-overview", d.strategy.summary || "");
+    txt("strategy-explainer", "The 30/70 scenario models 30% practice occupancy and 70% outside tenant space. Rental offsets use only the assumptions shown here and do not establish owner occupancy.");
+    const eligible = properties.filter((p) =>
+      Number.isFinite(p.price) && Number.isFinite(p.totalSf)
+    );
+    const controls = $("#finance-controls");
+    controls.replaceChildren();
+    const controlGrid = document.createElement("div");
+    controlGrid.className = "scenario-fields";
+    const propertyLabel = document.createElement("label");
+    propertyLabel.textContent = "Purchase option";
+    const picker = document.createElement("select");
+    picker.id = "finance-property";
+    for (const property of eligible) {
+      const option = document.createElement("option");
+      option.value = property.id;
+      option.textContent = title(property);
+      picker.append(option);
+    }
+    propertyLabel.append(picker);
+    controlGrid.append(propertyLabel);
+    const tiRange = d.strategy.tiRange;
+    let selectedTiRate = d.strategy.tiContributionPerSf;
+    for (const id of ["strategy-ti-controls", "ownership-ti-controls"]) {
+      const field = document.createElement("fieldset");
+      field.className = "ti-toggle";
+      const legend = document.createElement("legend");
+      legend.textContent = "Tenant TI Allowance / SF · Updates every comparison";
+      field.append(legend);
+      for (let rate = tiRange.min; rate <= tiRange.max; rate += tiRange.step) {
+        const label = document.createElement("label");
+        const input = document.createElement("input");
+        input.type = "radio";
+        input.name = id + "-rate";
+        input.dataset.tenantTiRate = "";
+        input.value = String(rate);
+        input.checked = rate === selectedTiRate;
+        const span = document.createElement("span");
+        span.textContent = money(rate);
+        label.append(input, span);
+        field.append(label);
+        input.addEventListener("change", () => {
+          selectedTiRate = rate;
+          document.querySelectorAll("[data-tenant-ti-rate]").forEach(node => { node.checked = Number(node.value) === rate; });
+          update();
+        });
+      }
+      $("#" + id).replaceChildren(field);
+    }
+    controls.append(controlGrid);
+    const assumptions = d.assumptions;
+    const tiRate = () => selectedTiRate;
+    const model = (property, rate = tiRate()) => window.PresentationFinance.compute(
+      {price: property.price, totalSf: property.totalSf}, assumptions, rate,
+    );
+    const lineProperty = $("#line-property");
+    lineProperty.replaceChildren(...eligible.map((property) => {
+      const option = document.createElement("option");
+      option.value = property.id;
+      option.textContent = title(property);
+      return option;
+    }));
+    const comparison = (id, rows, measures) => {
+      $("#" + id).innerHTML = `<thead><tr><th>Measure</th>${rows.map(({property}) => `<th><button type="button" class="text-button" data-preview="${esc(property.id)}">${esc(title(property))}</button></th>`).join("")}</tr></thead><tbody>${measures.map(([label, value]) => `<tr><th>${esc(label)}</th>${rows.map(row => `<td>${esc(value(row.result, row.property))}</td>`).join("")}</tr>`).join("")}</tbody>`;
+    };
+    function update() {
+      const active = byId[picker.value] || eligible[0];
+      const activeResult = model(active);
+      txt("finance-results", `${title(active)} · Illustrative year ${activeResult.year}: estimated property equity ${money(activeResult.equity)}; modeled cash required ${money(activeResult.extraCashRequired)}; outside rent received ${money(activeResult.outsideRent)}. Equity is not liquid cash. Assumptions: ${(assumptions.assumptionNotes || []).join(" ")}`);
+      const rows = eligible.map((property) => ({property, result: model(property)}));
+      $("#strategy-benefits").innerHTML = [["Practice occupancy", `${number(activeResult.practiceSf)} SF allocated to the practice.`], ["Outside-tenant space", `${number(activeResult.tenantSf)} SF allocated to outside tenants under the stated scenario.`], ["Mortgage contribution", `${money(activeResult.carry)} over ${assumptions.holdYears} years after modeled outside rent, before other owner costs.`], ["Estimated equity", `${money(activeResult.equity)} at year ${assumptions.holdYears}; a balance-sheet estimate rather than liquid cash or profit.`]].map(([label, value],i) => `<article class="strategy-benefit"><span class="benefit-icon">${i+1}</span><h4>${label}</h4><p>${value}</p></article>`).join("");
+      $("#strategy-assumptions").innerHTML = [[`${(assumptions.downPaymentFraction*100).toFixed(1)}%`, "Down payment"], [`${(assumptions.annualInterest*100).toFixed(2)}%`, "Annual interest"], [String(assumptions.amortizationYears), "Amortization · years"], [`${(assumptions.annualAppreciation*100).toFixed(2)}%`, "Annual appreciation assumption"], [money(assumptions.annualRentPerSf), "Rent / SF / year"], [String(assumptions.fillMonths), "Lease-up · months"]].map(([value,label]) => `<div><strong>${value}</strong><span>${label}</span></div>`).join("");
+      $("#allocation-spaces").innerHTML = rows.map(({property,result}) => `<button type="button" class="allocation-space-row text-button" data-preview="${esc(property.id)}"><b>${esc(title(property))}</b><div class="allocation-space-bar"><span class="practice" style="width:${result.practiceSf/property.totalSf*100}%"></span><span class="tenants" style="width:${result.tenantSf/property.totalSf*100}%"></span></div><div class="allocation-space-values"><span>Practice ${number(result.practiceSf)} SF</span><span>Outside tenants ${number(result.tenantSf)} SF</span></div></button>`).join("");
+      $("#rent-coverage").innerHTML = rows.map(({property,result}) => {const rent=result.stabilizedMonthlyRent, scale=Math.max(1,rent,result.payment);return `<button type="button" class="coverage-row text-button" data-preview="${esc(property.id)}"><b>${esc(title(property))}</b><div class="coverage-measure"><span>Outside rent</span><i class="coverage-income" style="width:${rent/scale*100}%"></i><strong>${money(rent)}/month</strong></div><div class="coverage-measure"><span>Loan P&amp;I</span><i class="coverage-gap" style="width:${result.payment/scale*100}%"></i><strong>${money(result.payment)}/month</strong></div></button>`;}).join("");
+      comparison("strategy-table", rows, [["Purchase price",(r,p)=>money(p.price)], ["Building area",(r,p)=>`${number(p.totalSf)} SF`], ["Practice area",r=>`${number(r.practiceSf)} SF`], ["Outside-tenant area",r=>`${number(r.tenantSf)} SF`], ["Down payment",r=>money(r.downPayment)], ["Loan amount",r=>money(r.loan)], ["Monthly principal and interest",r=>money(r.payment)]]);
+      $("#strategy-highlights").innerHTML = rows.map(({property}) => `<button type="button" class="property-jump" data-preview="${esc(property.id)}">${image(property,title(property))}<div><strong>${esc(title(property))}</strong><small>${esc(property.planningNote || property.description)}</small><small>${esc(sourceLine(property))}</small><span class="tile-action">Review the property ↗</span></div></button>`).join("");
+      comparison("buildout-table", rows, [["Practice area",r=>`${number(r.practiceSf)} SF`], ["Practice buildout / SF",()=>money(assumptions.practiceBuildoutPerSf)], ["Practice buildout budget",r=>money(r.practiceBuildout)], ["Outside-tenant area",r=>`${number(r.tenantSf)} SF`], ["Tenant TI / SF",()=>money(tiRate())], ["Tenant TI budget",r=>money(r.tenantTi)], ["Combined improvement budget",r=>money(r.combinedBudget)]]);
+      comparison("cash-carry-table", rows, [["Down payment",r=>money(r.downPayment)], ["Mortgage payments",r=>money(r.mortgagePayments)], ["Outside rent received",r=>money(r.outsideRent)], ["Mortgage contribution",r=>money(r.carry)], ["Practice rent avoided",r=>money(r.avoidedPracticeRent)], ["Tenant TI budget",r=>money(r.tenantTi)], ["Additional cash compared with leasing",r=>money(r.extraCashRequired)]]);
+      comparison("annual-carry-table", rows, Array.from({length:assumptions.holdYears},(_,i)=>[`Year ${i+1} · mortgage contribution`,r=>money(r.years[i+1].carry-r.years[i].carry)]));
+      comparison("equity-components", rows, [[`Year ${assumptions.holdYears} · property value`,r=>money(r.value)], ["Remaining loan",r=>money(r.balance)], ["Initial down payment",r=>money(r.downPayment)], ["Principal repaid",r=>money(r.principalRepaid)], ["Signed appreciation",r=>money(r.appreciation)], ["Estimated equity",r=>money(r.equity)]]);
+      comparison("ownership-summary", rows, [["Estimated property equity",r=>money(r.equity)], ["Additional cash compared with leasing",r=>money(r.extraCashRequired)], ["Modeled equity less additional cash",r=>money(r.benefit)]]);
+      $("#equity-year").max = String(assumptions.holdYears);
+      const year = Math.min(Number($("#equity-year").value || assumptions.holdYears), assumptions.holdYears);
+      $("#equity-year-label").textContent = String(year);
+      const pointAt = (r, y) => r.years[Math.max(0, Math.min(y, r.years.length - 1))];
+      const maxValue = Math.max(...rows.flatMap(({result}) => { const point = pointAt(result, year); return [point.value, point.balance]; }), 1);
+      $("#equity-chart").innerHTML = rows.map(({property, result}) => {
+        const point = pointAt(result, year);
+        return `<button type="button" class="equity-row" data-preview="${esc(property.id)}"><div class="equity-row-top"><b>${esc(title(property))}</b><strong>${money(point.equity)} Equity</strong></div><div class="equity-bar-line"><span>Property value</span><div class="equity-value-bar" role="img" aria-label="Value ${money(point.value)}" style="width:${point.value / maxValue * 100}%"></div></div><div class="equity-bar-line"><span>Remaining loan</span><div class="equity-loan-bar" role="img" aria-label="Remaining loan ${money(point.balance)}" style="width:${point.balance / maxValue * 100}%"></div></div><div class="equity-row-meta"><span>Value ${money(point.value)}</span><span>Loan ${money(point.balance)}</span><span>Principal repaid ${money(point.principalRepaid)}</span><span>Appreciation ${money(point.appreciation)}</span></div></button>`;
+      }).join("");
+      const lineView = $("#line-view").value;
+      $("#line-property-control").hidden = lineView !== "carry";
+      const selected = eligible.find((property) => property.id === lineProperty.value) || active;
+      const svgW = 860, svgH = 300, left = 76, right = 24, top = 18, bottom = 42;
+      const years = Array.from({length: assumptions.holdYears + 1}, (_, i) => i);
+      const chartSeries = lineView === "app"
+        ? rows.map(({property, result}, i) => ({name: title(property), color: ["#f57f29", "#002f6c", "#147d56"][i % 3], values: years.map((y) => pointAt(result, y).appreciation)}))
+        : (() => { const result = model(selected); return [{name: "Property Equity", color: "#147d56", values: years.map((y) => pointAt(result, y).equity)}, {name: "Cumulative Cash Carry", color: "#b42318", values: years.map((y) => pointAt(result, y).carry)}]; })();
+      const values = chartSeries.flatMap((series) => series.values);
+      const floor = Math.min(0, ...values), ceiling = Math.max(0, ...values);
+      const range = ceiling - floor || 1;
+      const x = (i) => left + (years.length <= 1 ? 0 : i / (years.length - 1)) * (svgW - left - right);
+      const y = (v) => svgH - bottom - (v - floor) / range * (svgH - top - bottom);
+      let svg = `<svg class="ownership-line-svg" viewBox="0 0 ${svgW} ${svgH}" role="img" aria-label="${lineView === "app" ? "Appreciation" : "Equity and cash carry"} over ${assumptions.holdYears} years">`;
+      for (let i = 0; i <= 4; i++) { const value = floor + (ceiling - floor) * i / 4; svg += `<line x1="${left}" y1="${y(value)}" x2="${svgW-right}" y2="${y(value)}" stroke="#dce4ee"/><text x="${left-8}" y="${y(value)+4}" text-anchor="end">${money(value)}</text>`; }
+      svg += `<line x1="${left}" y1="${y(0)}" x2="${svgW-right}" y2="${y(0)}" stroke="#8198b9" stroke-width="2"/>`;
+      for (let i = 0; i < years.length; i++) svg += `<text x="${x(i)}" y="${svgH-bottom+22}" text-anchor="middle">${years[i]}</text>`;
+      for (const series of chartSeries) { svg += `<polyline points="${series.values.map((value, i) => `${x(i)},${y(value)}`).join(" ")}" fill="none" stroke="${series.color}" stroke-width="3"/>`; for (let i=0;i<series.values.length;i++) svg += `<circle cx="${x(i)}" cy="${y(series.values[i])}" r="4" fill="white" stroke="${series.color}" stroke-width="2"><title>${esc(series.name)} · Year ${years[i]}: ${money(series.values[i])}</title></circle>`; }
+      svg += "</svg>";
+      $("#ownership-line-chart").innerHTML = svg + `<div class="line-legend">${chartSeries.map((series) => `<span><i style="background:${series.color}"></i>${esc(series.name)}</span>`).join("")}</div>`;
+      const compare = chartSeries.map((series) => `${esc(series.name)}: ${money(series.values.at(-1))}`).join(" · ");
+      txt("line-summary", `Year ${assumptions.holdYears} · ${compare}`);
+      txt("line-note", lineView === "carry" ? "Cash carry is mortgage payments less collected outside tenant rent under the stated lease-up and collection assumptions. It excludes other owner costs unless expressly included. This is a limited balance-sheet comparison, not profit or a cash-flow break-even claim." : `Appreciation gain uses the stated ${(assumptions.annualAppreciation * 100).toFixed(2)}% annual assumption. Appreciation alone does not establish an investment return.`);
+    }
+    picker.addEventListener("change", update);
+    $("#line-view").addEventListener("change", update);
+    $("#line-property").addEventListener("change", update);
+    $("#equity-year").max = String(assumptions.holdYears);
+    $("#equity-year").value = String(assumptions.holdYears);
+    $("#equity-year").addEventListener("input", update);
+    update();
+  }
+  const feedback = d.feedback || { mode: "disabled" };
+  function status(text, state = "info") {
+    $("#tour-save-status").textContent = text;
+    $("#tour-save-status").dataset.state = state;
+  }
+  function syncButtons() {
+    let s = new Set(selected.selected_ids);
+    $$("[data-toggle]").forEach((b) => {
+      let yes = s.has(b.dataset.toggle);
+      b.textContent = yes ? "Added · Remove from list" : "Add to review list";
+      b.setAttribute("aria-pressed", String(yes));
     });
-    points.forEach((point, index) => {
-      if (index % Math.max(1, Math.floor(points.length / 5)) !== 0 && index !== points.length - 1) return;
-      const label = svgEl('text', {x: xFor(index), y: 224, 'text-anchor': 'middle', class: 'chart-axis'});
-      label.textContent = `Yr ${point.year}`;
-      chart.append(label);
+  }
+  function renderTour() {
+    let available = $("#tour-available"), list = $("#tour-selected");
+    available.replaceChildren();
+    list.replaceChildren();
+    let ss = new Set(selected.selected_ids);
+    entities.forEach((p) => {
+      let yes = ss.has(p.id), row = document.createElement(yes ? "li" : "div");
+      row.className = yes ? "tour-item" : "tour-option";
+      row.draggable = true;
+      row.dataset.propertyId = p.id;
+      row.innerHTML = `<span class="drag-handle" aria-hidden="true">⠿</span><button class="tour-open" type="button" data-preview="${
+        esc(p.id)
+      }" aria-label="Review ${esc(title(p))}">${
+        p.image ? `<img src="${esc(p.image)}" alt="">` : ""
+      }<span>${
+        yes ? `<strong>${esc(title(p))}</strong>` : esc(title(p))
+      }<small>${
+        Number.isFinite(p.price)
+          ? money(p.price)
+          : Number.isFinite(p.rentPerSf)
+          ? `${money(p.rentPerSf)}/SF/year`
+          : ""
+      }</small></span></button>${
+        yes
+          ? `<button type="button" data-remove="${esc(p.id)}">Remove</button>`
+          : `<button type="button" data-add="${esc(p.id)}">Add</button>`
+      }${yes ? `<label class="property-note">Notes for CARR · ${esc(title(p))}<textarea data-property-note="${esc(p.id)}" rows="3" maxlength="2000">${esc(selected.property_notes[p.id] || "")}</textarea></label>` : ""}`;
+      (yes ? list : available).append(row);
     });
+    if (!selected.selected_ids.length) {
+      list.innerHTML = '<li class="tour-empty">No options selected yet.</li>';
+    }
+    $("#tour-save").disabled = !selected.ready || !selected.dirty ||
+      selected.busy || selected.conflict;
+    syncButtons();
   }
+  function changed() {
+    selected.dirty = true;
+    status(feedback.mode === "shared" ? "Unsaved changes. Save to share this review list." : "Session selections updated. Shared saving is disabled.", "dirty");
+    renderTour();
+  }
+  function add(id) {
+    if (!byId[id] || selected.selected_ids.includes(id)) return;
+    selected.selected_ids.push(id);
+    changed();
+  }
+  function remove(id) {
+    selected.selected_ids = selected.selected_ids.filter((x) => x !== id);
+    delete selected.property_notes[id];
+    changed();
+  }
+  async function loadSelection() {
+    if (feedback.mode !== "shared") {
+      status(
+        "Shared saving is disabled. This review list is not shared or saved.",
+        "disabled",
+      );
+      $("#tour-save").hidden = $("#tour-reload").hidden = true;
 
-  function installReveal() {
-    const nodes = doc.querySelectorAll('.scroll-reveal');
-    if (!('IntersectionObserver' in window)) { nodes.forEach((node) => node.classList.add('is-visible')); return; }
-    const observer = new IntersectionObserver((entries) => entries.forEach((entry) => {
-      if (entry.isIntersecting) { entry.target.classList.add('is-visible'); observer.unobserve(entry.target); }
-    }), {threshold: 0.12});
-    nodes.forEach((node) => observer.observe(node));
+      renderTour();
+      return;
+    }
+    adapter = window.PresentationSelectionAdapter.createSelectionAdapter({
+      endpoint: feedback.endpoint,
+      csrfHeader: feedback.csrfHeader || "X-CSRF-Token",
+    });
+    status("Loading shared review list…");
+    let r = await adapter.load();
+    if (r.status === "loaded") {
+      Object.assign(selected, {
+        version: r.state.version,
+        selected_ids: r.state.selected_ids.filter((id) => byId[id]),
+        notes: r.state.notes,
+        property_notes: r.state.property_notes,
+        csrf_token: r.state.csrf_token,
+        ready: true,
+        dirty: false,
+        conflict: false,
+      });
+      status(
+        r.state.updated_at
+          ? `Shared list loaded · last saved ${
+            new Date(r.state.updated_at).toLocaleString()
+          }`
+          : "Shared list loaded.",
+        "saved",
+      );
+    } else {
+      selected.ready = false;
+      status(
+        r.status === "unavailable"
+          ? "Shared service unavailable; changes cannot be saved."
+          : `Shared list could not load (${r.error || "error"}).`,
+        "error",
+      );
+    }
+    renderTour();
   }
-
-  if (!data || !Array.isArray(data.sections)) {
-    const status = byId('finance-status');
-    if (status) status.textContent = 'Presentation data is unavailable.';
-    return;
+  async function saveSelection() {
+    if (!adapter || !selected.ready || !selected.dirty || selected.busy) return;
+    selected.busy = true;
+    status("Saving shared review list…", "saving");
+    renderTour();
+    let r = await adapter.save({
+      selected_ids: selected.selected_ids,
+      notes: selected.notes,
+      property_notes: selected.property_notes,
+    });
+    selected.busy = false;
+    if (r.status === "saved") {
+      Object.assign(selected, {
+        version: r.state.version,
+        selected_ids: r.state.selected_ids.filter((id) => byId[id]),
+        notes: r.state.notes,
+        property_notes: r.state.property_notes,
+        csrf_token: r.state.csrf_token,
+        dirty: false,
+      });
+      status(
+        "Saved to the shared review list. This is not a confirmed appointment.",
+        "saved",
+      );
+    } else if (r.status === "conflict") {
+      Object.assign(selected, {
+        version: r.state.version,
+        csrf_token: r.state.csrf_token,
+        ready: false,
+        conflict: true,
+        dirty: true,
+      });
+      status(
+        "A newer shared list exists. Your local edits remain here; reload the shared version to reconcile before saving.",
+        "conflict",
+      );
+    } else {status(
+        r.status === "unavailable"
+          ? "Shared service unavailable. Your edits remain here."
+          : `Save failed (${r.error || r.status}). Your edits remain here.`,
+        "error",
+      );}
+    renderTour();
   }
-  renderHeaderAndText();
-  installSectionTitles();
-  renderMetrics();
-  renderDevelopmentMap();
-  renderLeaseRows();
-  renderPurchaseProperties();
-  renderDemographics();
-  renderSources();
-  installDialog();
-  installInteractions();
-  installReveal();
-    syncLocation();
-  updateFinance();
+  function bindTour() {
+    for (const [selector, action] of [["#tour-available", remove], ["#tour-selected", add]]) {
+      const area = $(selector);
+      area.addEventListener("dragover", e => { e.preventDefault(); area.classList.add("drop-target"); });
+      area.addEventListener("dragleave", () => area.classList.remove("drop-target"));
+      area.addEventListener("drop", e => { e.preventDefault(); area.classList.remove("drop-target"); action(e.dataTransfer.getData("text/plain")); });
+    }
+    $("#tour").addEventListener("dragstart", e => {
+      const row = e.target.closest("[data-property-id]");
+      if (!row || e.target.closest("textarea")) {e.preventDefault();return;}
+      e.dataTransfer.setData("text/plain", row.dataset.propertyId);
+      e.dataTransfer.effectAllowed = "move";
+    });
+    document.addEventListener("click", (e) => {
+      let b = e.target.closest(
+        "[data-preview],[data-add],[data-remove],[data-toggle]",
+      );
+      if (!b) return;
+      if (b.dataset.preview) openProperty(b.dataset.preview, b);
+      if (b.dataset.add) add(b.dataset.add);
+      if (b.dataset.remove) remove(b.dataset.remove);
+      if (b.dataset.toggle) {
+        selected.selected_ids.includes(b.dataset.toggle)
+          ? remove(b.dataset.toggle)
+          : add(b.dataset.toggle);
+      }
+    });
+    $("#tour-selected").addEventListener("input", (e) => {
+      if (!e.target.dataset.propertyNote) return;
+      selected.property_notes[e.target.dataset.propertyNote] = Array.from(e.target.value).slice(0, 2000).join("");
+      selected.dirty = true;
+      status(feedback.mode === "shared" ? "Unsaved changes. Save to share this review list." : "Session notes updated. Shared saving is disabled.", "dirty");
+      $("#tour-save").disabled = !selected.ready || selected.busy || selected.conflict;
+    });
+    $("#tour-save").addEventListener("click", saveSelection);
+    $("#tour-reload").addEventListener("click", () => {
+      if (
+        selected.dirty &&
+        !confirm("Reload the shared version and discard unsaved edits?")
+      ) return;
+      selected.dirty = false;
+      selected.conflict = false;
+      loadSelection();
+    });
+    renderTour();
+    loadSelection();
+  }
+  function init() {
+    buildNav();
+    for (const id of ["purchases", "leases", "strategy", "demographics"]) {
+      if (!navIds.includes(id)) $("#" + id).hidden = true;
+    }
+    setBrand();
+    const header = $(".site-header");
+    new ResizeObserver(() => document.documentElement.style.setProperty("--header-height", `${header.getBoundingClientRect().height}px`)).observe(header);
+    renderMarket();
+    renderProperties();
+    renderLeases();
+    renderProjects();
+    renderDemographics();
+    renderSources();
+    renderStrategy();
+    bindTour();
+    $("#property-dialog-close").addEventListener(
+      "click",
+      () => $("#property-dialog").close(),
+    );
+    $("#property-dialog").addEventListener("close", () => {
+      let fallback = $("#tour h1");
+      (dialogReturn?.isConnected ? dialogReturn : fallback)?.focus({
+        preventScroll: true,
+      });
+    });
+    $("#project-dialog-close").addEventListener(
+      "click",
+      () => $("#project-dialog").close(),
+    );
+    $("#project-dialog").addEventListener(
+      "close",
+      () => projectReturn?.focus({ preventScroll: true }),
+    );
+    window.addEventListener("hashchange", show);
+    show();
+    loadMaps();
+  }
+  document.readyState === "loading"
+    ? document.addEventListener("DOMContentLoaded", init)
+    : init();
 })();

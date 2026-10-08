@@ -1,0 +1,32 @@
+{
+  "schema": "factory-task-context/v1",
+  "constraints": [
+    {"id":"factory-boundaries","path":"AGENTS.md","section":"Boundaries"},
+    {"id":"working-rules","path":"AGENTS.md","section":"Working rules"},
+    {"id":"enforcement","path":"AGENTS.md","section":"Enforcement model"},
+    {"id":"pr-verification","path":"AGENTS.md","section":"Before every PR: design and debt pass"}
+  ],
+  "tasks": {
+    "presentation-render": [
+      {"type":"procedure","path":"capabilities/client-presentation/SKILL.md"},
+      {"type":"reference","path":"capabilities/client-presentation/references/approved-site-architecture.md"},
+      {"type":"acceptance","path":"capabilities/client-presentation/references/acceptance.md"}
+    ],
+    "presentation-research": [
+      {"type":"contract","path":"capabilities/client-presentation/assets/site/demographics.js"},
+      {"type":"reference","path":"capabilities/client-presentation/references/presentation-standard.md"}
+    ],
+    "presentation-publication": [
+      {"type":"procedure","path":"capabilities/client-presentation/references/inputs-and-delivery.md"},
+      {"type":"contract","path":"capabilities/client-presentation/scripts/qualify.mjs"}
+    ],
+    "presentation-30-70": [
+      {"type":"reference","path":"capabilities/client-presentation/references/financial-model.md"},
+      {"type":"contract","path":"capabilities/client-presentation/assets/site/finance.js"}
+    ],
+    "retrospective": [
+      {"type":"procedure","path":"vendor/mattpocock-skills/retro/SKILL.md"},
+      {"type":"reference","path":"vendor/mattpocock-skills/writing-for-agents/SKILL.md"}
+    ]
+  }
+}

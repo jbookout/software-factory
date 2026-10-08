@@ -77,7 +77,7 @@
       "lon": -90.1
     },
     "zoom": 11,
-    "disclaimer": "Fictional coordinates for interface testing only; not for navigation.",
+    "disclaimer": "Fictional coordinates for interface testing only; do not use for navigation.",
     "style": {
       "version": 8,
       "sources": {
@@ -337,8 +337,7 @@
           }
         }
       ]
-    },
-    "label": "Fictional regional locator"
+    }
   },
   "developments": [
     {

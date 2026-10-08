@@ -4,10 +4,10 @@ Use this flow as a starting point, adapting to the client's approved brief.
 
 | Section | Purpose | Presentation order |
 |---|---|---|
-| Home | Explain the location opportunity | Two or three sentences → sourced growth percentages → development map → numbered table → visual tiles |
-| Leases | Compare lease options | One map containing the whole shortlist → comparison → photo tiles → property details |
-| Purchases | Compare purchase options | Map → comparison → photo tiles → property details |
-| Ownership | Explain capital, carry, and long-term outcome | Structure → buildings and fit → buildout/TI and cash carry → equity and ownership-versus-leasing |
+| Home | Explain the location opportunity | Two or three sentences → sourced growth percentages → development map → visual tiles → sourced demographic snapshot/link → next options action |
+| Leases | Compare lease options | Photo tiles → property detail dialog → Start Tour List |
+| Purchases | Compare purchase options | Map → sourced practice-screening criteria → two-column photo tiles → property detail dialog → Start Tour List |
+| Strategy (explicit 30/70 only) | Explain capital, carry, and long-term outcome | Structure → buildings and fit → buildout/TI and cash carry → equity and ownership-versus-leasing |
 | Demographics | Support the market story | Study location/radii/date → population, households, income and growth → charts → report links |
 | Sources | Make facts traceable | Listing platforms, market sources, demographic reports, model assumptions, retrieval dates |
 
@@ -15,12 +15,12 @@ Omit irrelevant sections rather than fill them with generic sales copy. Keep mar
 
 ## Visual and interaction system
 
-For a CARR-branded packet using this approved design, retain the supplied official logo, Oswald headings and Montserrat body font when those licensed assets are available. Supply brand assets per client; do not invent a logo or publish extracted client imagery in a shared skill. The portable starter uses system-font fallbacks so it works offline without bundled proprietary assets.
+Use the fixed CARR navy/orange palette, Oswald headings and Montserrat body font loaded from the official Google Fonts stylesheet. Show the CARR wordmark consistently. A supplied client logo may appear as a small tribute in its original colors; never invent one or publish client imagery in the shared skill.
 
-- Sticky menu and current-page title on every section; deep links to each property and section.
+- Sticky menu and current-page title on every section; links to each section.
 - Compact cards with an identifiable property or project photo, address/name, a few decision-relevant facts, and parking ratios in the footer. Use drawings or site plans when those better identify a development. Never substitute an unrelated stock image as if it depicts the project.
-- One stable record ID supplies map number, table row, tile, preview, and detail. Removing a property removes every representation. Labels may change without changing IDs.
-- Hover and keyboard focus on table addresses and map markers show the same small photo preview. The marker and number remain visible. Click still navigates or opens the detailed project dialog. Touch receives a usable click target.
+- One stable record ID supplies map number, tile, and detail. Removing a property removes every representation. Labels may change without changing IDs.
+- Image cards and map markers retain their own affordances and open one detail dialog. Map markers and property cards open the shared detail dialog with add/remove selection controls. Dedicated property pages and client listing links are omitted. Touch receives a usable click target.
 - Details dialogs include a larger image and relevant facts. Support Escape, backdrop close, keyboard focus containment and focus restoration.
 - Cards, demographic columns, and controls respond consistently to hover/focus with restrained lift, border, or shadow. Respect reduced-motion preferences. Use explicit text as well as red/green for expenses/benefits.
 - Comparisons fit a desktop viewport without horizontal scrolling. Prefer metrics down rows and properties across columns, or aligned property panels. On narrow screens, stack panels or labeled cells. Avoid cramped multi-line headers and tall empty rows.
@@ -30,7 +30,7 @@ For a CARR-branded packet using this approved design, retain the supplied offici
 
 Use educational, consultative copy with concrete labels. Identify observed versus projected data, city versus county versus metro, source vintage, demographic radius, and units. Do not choose impressive figures by silently changing geography or period. Capacity in a sector plan is not completed homes. A future hospital campus is not three independent developments.
 
-Use the client's approved strategy wording when supplied and reuse rights permit. Loan-program terms are provisional until verified with the current lender; 30% occupancy, zero down, and a rate are scenario inputs, never universal eligibility claims. Do not carry a previous client's optimistic appreciation opinion into a new presentation.
+Use the client's approved strategy wording when supplied and reuse rights permit. Loan-program terms are provisional until verified with the current lender. Full owner occupancy and 30/70 allocation are separate, explicit strategy modes. No down-payment, interest-rate, tenant or appreciation assumption carries across clients. Do not carry a previous client's optimistic appreciation opinion into a new presentation.
 
 Existing-space clients do not need ground-up comparisons unless requested. Tenant TI and practice buildout should include a concise cost-basis footnote rather than an unrelated construction comparison.
 
