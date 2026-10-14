@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url'
 import { createArtifactReader } from 'software-factory'
 import * as e2e from '../../capabilities/agentic-ui-evaluation/wrapper.mjs'
 
+// Synthetic normalized receipts exercise the wrapper's rules. They are not a
+// live e2e run; live qualification needs the attended ChatGPT login.
 const sha = text => createHash('sha256').update(text).digest('hex')
 const brokenBuild = { sourceCommit: 'a'.repeat(40), buildDigest: sha('broken build') }
 const cleanBuild = { sourceCommit: 'b'.repeat(40), buildDigest: sha('repaired build') }
