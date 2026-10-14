@@ -102,7 +102,6 @@ export async function runQualification() {
       if (rows[0].status === 'fixture-qualified') assert.equal(rows[0].afterDigest, rows[1].afterDigest, 'distribution output differs')
       else assert.equal(kind, 'html', 'unexpected native coverage loss')
     }
-    // Parse failures must stay visible; they must never enter the HTML fallback.
     const invalid = path.join(directory, 'invalid'); await fs.mkdir(invalid)
     await fs.writeFile(path.join(invalid, 'broken.js'), 'const = ;\n')
     receipt.invalidControls = []

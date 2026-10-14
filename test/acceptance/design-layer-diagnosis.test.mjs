@@ -87,7 +87,7 @@ test('AW-2: dependency order accepts explicit independent decisions without inve
 test('AW-2: partial, assumed, weak and not-started never certify support; unknown/declined retain the question', () => {
   for (const support of ['partial', 'assumed', 'weak', 'not-started']) {
     const supplied = assessments('domain', support)
-    supplied[1].criterionMet = true // Even a claimed met criterion cannot upgrade assumed evidence.
+    supplied[1].criterionMet = true
     let view = answer(intake(apps[0], 'design-system'), supplied)
     const question = view.question
     for (const status of ['unknown', 'declined']) {

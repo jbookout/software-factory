@@ -19,8 +19,6 @@ async function execute(argv, cwd) {
   return result.stdout
 }
 
-// tarfile supplies the archive parser. Never extract paths or links from an archive:
-// read the single expected regular member and create our chosen output exclusively.
 const extract = `import os,sys,tarfile
 with tarfile.open(sys.argv[1]) as archive:
  members=archive.getmembers()

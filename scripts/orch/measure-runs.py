@@ -182,7 +182,6 @@ def read_bug_counts(path):
 def measure(records, artifact_root=None, stratify=True, window=None):
     """Join only bound normalized events. Legacy delivery lines are disclosed as unjoinable."""
     if window is not None and stratify:
-        # Validate the journal before censoring; outside-window contradictions stay invalid.
         records = list(records)
         measure(records, artifact_root, stratify=False)
     attempts = defaultdict(list)
@@ -239,7 +238,6 @@ def measure(records, artifact_root=None, stratify=True, window=None):
         if not visible and not spans_window:
             continue
         censored = window is not None and len(visible) != len(rows)
-        # Pre-window phases are context; future phases cannot settle current ownership/outcome.
         rows = rows if window is None else [r for r in rows if timestamp(r['at']) <= window[1]]
         heads = {r['head'] for r in rows}
         if len(heads) != 1 or any(len({r[f] for r in rows if r.get(f)}) > 1 for f in ('base', 'tree')):
@@ -256,7 +254,6 @@ def measure(records, artifact_root=None, stratify=True, window=None):
             unbound_jobs += 1
         if len({r['job'] for r in rows if r.get('job')}) > 1:
             raise ValueError('attempt crossed job identities')
-        # Multiple observations of CI are legitimate; multiple lifecycle starts/ends are not.
         for kind in KINDS - {'ci', 'api_unknown', 'usage', 'tests', 'job_terminal', 'job_reopened'}:
             if len(by_kind[kind]) > 1:
                 raise ValueError('duplicate lifecycle phase in an attempt')
@@ -322,10 +319,8 @@ def measure(records, artifact_root=None, stratify=True, window=None):
             terminal = {v for v in ci_verdicts if v != 'unknown'}
             if len(terminal) > 1:
                 raise ValueError('CI attempt has conflicting terminal verdicts')
-            # rows already end at the cutoff, so a terminal verdict here is settled for this window.
             verdict = next(iter(terminal), 'unknown')
             candidate['ci'].append((times.get('started', times.get('enqueued', times['ci'])), lane, attempt, verdict))
-        # A failed required CI observation is one round per run/attempt, not per leaf job.
         if ci_verdicts and verdict == 'failed' and outcome not in ('failed', 'timeout'):
             rounds['failed'] += 1
         if by_kind['merged']:
@@ -606,7 +601,6 @@ def main():
         print(json.dumps(report, sort_keys=True, allow_nan=False))
         return 0
     except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError, OverflowError, RecursionError, zlib.error):
-        # Do not serialize raw input, error messages, receipt paths or subprocess stderr.
         print(json.dumps({'schema': 'orch-measurement/v1', 'status': 'unknown', 'error': 'invalid or unreadable evidence'}))
         return 2
 

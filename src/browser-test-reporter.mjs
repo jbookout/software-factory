@@ -1,4 +1,3 @@
-// Forward result markers, never test names, console output or error payloads.
 export default async function* browserResults(events) {
   let passed = 0, filePassed = 0, terminal, failed = false
   for await (const { type, data } of events) {
@@ -14,7 +13,5 @@ export default async function* browserResults(events) {
       else terminal = valid ? counts : null
     }
   }
-  // File envelopes and suite markers never acknowledge a test body. A missing
-  // final summary (including early process.exit) cannot produce a browser pass.
   if (!failed && passed > 0 && filePassed === passed && terminal?.passed === passed) yield `pass ${passed}\n`
 }
