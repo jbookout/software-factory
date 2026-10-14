@@ -1,4 +1,3 @@
-// The product's read-only persistence interface: reads stored titles in a separate process.
 import { readFileSync } from 'node:fs'
 
 if (process.argv[2] === '--read') {

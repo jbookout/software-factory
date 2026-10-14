@@ -133,7 +133,6 @@ test('every mandatory pending requirement is reachable through the initialized f
 })
 
 test('public interview validation follows canonical subschema changes before accepting shared fields', async t => {
-  // A stricter canonical contract must affect the interview without a second edit to its validators.
   const directory = await mkdtemp(join(tmpdir(), 'design-schema-parity-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   await mkdir(join(directory, 'src'))

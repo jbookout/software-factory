@@ -42,7 +42,6 @@ test('AW-2: every entry and sample chooses each lowest unsupported layer, persis
   for (const app of apps) for (const entry of manager.DESIGN_ENTRIES) for (const layer of layers) {
     const initial = intake(app, entry)
     const supplied = assessments(layer)
-    // Multiple gaps must not route to the surface ahead of the lower layer.
     if (layer !== 'surface') Object.assign(supplied.at(-1), assessments('surface').at(-1))
     let view = answer(initial, supplied)
     assert.equal(view.question.layer, layer, `${app}/${entry}/${layer}`)

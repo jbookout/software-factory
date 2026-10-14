@@ -19,7 +19,6 @@ const pass = { status: "pass" }
 const built = { status: "pass", data: { candidateRevision, buildDigest } }
 const sha256 = bytes => createHash("sha256").update(bytes).digest("hex")
 
-// Each test gets its own evidence store outside any scratch environment.
 async function store() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "factory-evidence-"))
   async function write(ref, content) {

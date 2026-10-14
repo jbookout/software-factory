@@ -10,9 +10,6 @@ import * as verify from 'software-factory/design-verify'
 import { createArtifactReader } from 'software-factory'
 import { buildSampleApp, loadFeatureMap, runVerify, SAMPLE_ENGINE } from '../fixtures/verify-sample-app/verify.mjs'
 
-// Slice 4: one Launch → Doctor → Drive → Evidence → Cleanup run on a small
-// product-owned sample app. Its HTTP user-path driver is the sample's own
-// check, not e2e's web engine, so the gate must still refuse it for acceptance.
 const run = promisify(execFile)
 const skillDir = new URL('../fixtures/verify-sample-app/verify-skill/', import.meta.url)
 const revision = 'f'.repeat(40)
@@ -82,7 +79,6 @@ test('slice 4 sample: unit tests stay green on a broken user path; VERIFY detect
     assert.equal(r.binding.sourceCommit, revision)
   }
 
-  // Cleanup removed only this run's resources; evidence outside scratch survives byte-for-byte.
   for (const result of [failing, passing]) {
     assert.equal(await portClosed(result.port), true)
     await assert.rejects(fs.stat(result.scratchDir))
