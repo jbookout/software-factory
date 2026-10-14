@@ -1,10 +1,30 @@
-import { openDesignJournal, restoreDesignJournal, type JournalMutation, type JournalState } from 'software-factory/design-journal';
+import { openDesignJournal, restoreDesignJournal, type JournalMutation, type JournalState, type JournalArtifact, type ArtifactDigest, type ArtifactRef } from 'software-factory/design-journal';
 const scope = { userId: 'sample', projectId: 'task-app', version: 1 };
 const journal = await openDesignJournal(scope);
 const state: JournalState = await journal.execute({ command: 'read' });
-const bytes: Buffer = await journal.readArtifact('sha256:sample');
+const receipt = await journal.execute({ command: 'archive', bytes: 'eA==', origin: 'captured',
+  expectedRevision: state.revision, idempotencyKey: 'archive-sample' });
+if (!receipt.artifact) throw new Error('Archive receipt has no artifact');
+const artifact: JournalArtifact = receipt.artifact;
+const ref: ArtifactRef = artifact.ref;
+const digest: ArtifactDigest = artifact.digest;
+const bytes: Buffer = await journal.readArtifact(ref);
+const archivedDecision: JournalMutation = { command: 'append', kind: 'decision', record: {
+  schema: 'design-decision.v1', id: 'archive-decision', sourceRevision: 'a'.repeat(40), decision: 'Archive sample',
+  rationale: 'Retain synthetic bytes', alternatives: [], limits: ['Synthetic only'], artifacts: [artifact] } };
+// @ts-expect-error An artifact digest is not an artifact reference.
+await journal.readArtifact(digest);
+const swapped: JournalArtifact = {
+  // @ts-expect-error A digest cannot occupy the reference field.
+  ref: digest,
+  // @ts-expect-error A reference cannot occupy the digest field.
+  digest: ref,
+};
+// @ts-expect-error A plain string is not a journal-produced reference.
+await journal.readArtifact('sha256:sample');
 const binding = { expectedRevision: state.revision, idempotencyKey: 'sample' };
 const commands: JournalMutation[] = [
+  archivedDecision,
   { command: 'archive', bytes: bytes.toString('base64'), origin: 'captured' },
   { command: 'start-interview', sourceRevision: 'a'.repeat(40) },
   { command: 'answer-interview', response: { questionId: 'version', answer: { status: 'answered', value: 1 } } },
