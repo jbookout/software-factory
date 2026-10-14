@@ -29,7 +29,7 @@ export const isExecutable = name => name.startsWith('deploy/orch/') && (name.end
 export function executableBytes(name,bytes) {
  if(name!=='deploy/orch/factory-entry.sh')return bytes
  // Only repository copies include replay. Installed entrypoints require their receipt in every layout.
- const text=bytes.toString('utf8'),start=text.indexOf('# Source adapters'),end=text.indexOf("echo 'missing installation receipt",start)
+ const text=bytes.toString('utf8'),start=text.indexOf('if [ -n "$FACTORY_ROOT" ] && [ -n "$FACTORY_PR_CONFIG" ]; then'),end=text.indexOf("echo 'missing installation receipt",start)
  if(start<0||end<0)throw new Error('invalid factory entrypoint template')
  return Buffer.from(text.slice(0,start)+text.slice(end))
 }

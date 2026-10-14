@@ -132,7 +132,6 @@ def connect(root, initialize=False):
     db.execute("PRAGMA synchronous=FULL")
     version = db.execute("PRAGMA user_version").fetchone()[0]
     if version == 0 and initialize:
-        # Only a genuinely empty database may acquire the first migration.
         if db.execute("SELECT count(*) FROM sqlite_master").fetchone()[0]:
             raise ValueError("unversioned nonempty journal refused")
         db.executescript("BEGIN IMMEDIATE;" + SCHEMA + "COMMIT;")
@@ -163,8 +162,6 @@ def checked_json(text, expected):
 def read_blob(root, value):
     if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
         raise ValueError("invalid artifact digest")
-    # Pin this subdirectory too: neither root nor artifacts pathname replacement
-    # may redirect an operation after its checks. cwd is private to this process.
     fd = os.open(root / "artifacts", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     parent = os.open(".", os.O_RDONLY | os.O_DIRECTORY)
     try:
@@ -203,8 +200,6 @@ def publish_blob(root, value, data):
             os.close(temp_fd)
         if digest(regular_bytes(temporary, 0o400, 1024 * 1024)) != value:
             raise ValueError("artifact digest mismatch")
-        # Root lock serializes publishers; only complete durable bytes get the
-        # final name. Process-death temporary files are ignored by reads/backups.
         os.rename(temporary, value)
         temporary = None
         os.fsync(fd)
@@ -258,8 +253,6 @@ def state(db, scope):
         records.append({"kind": record["kind"], "record": checked_json(record["payload"], record["digest"]),
                         "revision": record["revision"], "digest": record["digest"]})
     view = checked_json(current["view"], current["view_digest"]) if current and current["view"] else None
-    # Reconstruct projections from the immutable event ledger. A database
-    # checksum alone cannot detect an accidentally omitted rejected record.
     expected_records, expected_artifacts, expected_view = [], {}, None
     for event in events:
         request, result = event["request"], event["result"]
@@ -300,7 +293,6 @@ def commit(db, root, scope, identity, request):
         current = state(db, scope)
         if command["expectedRevision"] != current["revision"]:
             raise ValueError("revision conflict: reread the project")
-        # Every supplied reference must already belong to this scope and match bytes.
         for ref in request["refs"]:
             value = ref["digest"]
             if ref["ref"] != "sha256:" + value or not db.execute(
@@ -339,8 +331,6 @@ def commit(db, root, scope, identity, request):
         result_text = encoded(result)
         db.execute("INSERT INTO events VALUES(?,?,?,?,?,?,?,?)", (scope, revision, command["idempotencyKey"],
                    request["requestText"], request["requestDigest"], digest(request["requestText"]), result_text, digest(result_text)))
-        # Measure proposed logical pages and the complete externally readable
-        # projection inside the transaction. Rollback preserves accepted history.
         if db.execute("PRAGMA page_count").fetchone()[0] * db.execute("PRAGMA page_size").fetchone()[0] > MAX_DATABASE_BYTES:
             raise ValueError("journal database size budget exceeded")
         state(db, scope)
@@ -353,8 +343,6 @@ def commit(db, root, scope, identity, request):
 
 
 def backup(db, root, scope, identity, destination):
-    # Read and verify everything before creating a destination. A completed
-    # manifest is written last, so interrupted snapshots are never restorable.
     state(db, scope)
     blobs = {row[0]: read_blob(root, row[0]) for row in db.execute(
         "SELECT digest FROM artifacts WHERE scope=?", (scope,))}
@@ -391,8 +379,6 @@ def restore(request):
         raise ValueError("backup database digest mismatch")
     private_path(str(backup_root / "artifacts"))
     blobs = {value: read_blob(backup_root, value) for value in manifest["artifacts"]}
-    # Inspection and installation use the same captured bytes, never a second
-    # pathname read of the database after its checksum was checked.
     source = sqlite3.connect(":memory:")
     source.deserialize(database)
     source.row_factory = sqlite3.Row
@@ -443,12 +429,8 @@ def run(request):
         identity = {"root": str(root), "device": info.st_dev, "inode": info.st_ino}
         if request.get("identity") and request["identity"] != identity:
             raise ValueError("private journal directory identity changed")
-        # Resolve subsequent files relative to the locked directory, so renaming
-        # its old pathname cannot switch our storage to a different directory.
         os.fchdir(lock)
         root = Path(".")
-        # Decide initialization only under the lock. An existing, genuinely
-        # empty private root is fresh; any persisted contents require its seal.
         initialize = request["op"] == "open" and not any(root.iterdir())
         private_path(str(root / "artifacts"), create=initialize)
         if not initialize:

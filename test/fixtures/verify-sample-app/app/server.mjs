@@ -1,4 +1,3 @@
-// Sample task app. Starts only with --serve so a test runner can import-scan this file.
 import http from 'node:http'
 import { readFileSync } from 'node:fs'
 import fs from 'node:fs/promises'

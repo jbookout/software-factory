@@ -52,8 +52,6 @@ export async function remoteReview(config, request, { command, observe, sleep = 
         const remoteOutput = `review-${pr}-${head}-${Date.now()}.txt`
         const model = request.model ?? {model:'gpt-6.1-sol',effort:'high'}
         const argv = ['codex',...createCodexExecArgs(model),'--sandbox','danger-full-access','--output-last-message',remoteOutput,'-']
-        // The remote lock names the worker PID, not the SSH transport. Losing
-        // the transport cannot free the checkout under a surviving reviewer.
         const script = `export PATH=/opt/homebrew/bin:$PATH CARR_JEV_WORKER=off
 cd ~/orch-wt/${repo.split('/')[1]} || exit 9
 mkdir -p _to_delete
@@ -89,8 +87,6 @@ cat ${quote(remoteOutput)}`
   const count = Number(env.CLOUD_SLOTS ?? config.cloudSlots ?? 1)
   if (!Number.isSafeInteger(count) || count < 1 || count > 16) throw new DeliveryError('invalid CLOUD_SLOTS', 9)
   const cloudDir=path.join(config.stateDir,'cloud-reviews'), cloudFile=path.join(cloudDir,`${keyFor(repo,pr)}-${head}.json`)
-  // A cloud session outlives the CLI that starts it. Persist its slot and launch
-  // intent before dispatch; a restart falls through without starting it twice.
   const admitted=await withLease(lockRoot,'cloud-admission',async()=>{
     if(await readJson(cloudFile,null))return false
     await fs.mkdir(cloudDir,{recursive:true,mode:0o700})

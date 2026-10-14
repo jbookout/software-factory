@@ -2,7 +2,6 @@ import { appendFileSync } from 'node:fs'
 import net from 'node:net'
 import { lookup } from 'node:dns'
 
-// Count attempts before rejecting them. Each CLI worker inherits this preload.
 function allow(host, resolving = false) {
   if (host === '127.0.0.1' || host === '::1' || host === '[::1]' || (!resolving && host === 'localhost')) return
   appendFileSync(process.env.PROVIDER_CALL_LOG, 'external-invocation\n')

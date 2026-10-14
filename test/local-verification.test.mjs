@@ -8,7 +8,6 @@ import { execFileSync } from 'node:child_process'
 const api = () => import('../src/local-verification.mjs')
 async function repository(t, name) {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), `verification-${name}-`))
-  // Disposable fixtures are left outside the reviewed source tree.
   execFileSync('git', ['init', '-q', cwd])
   execFileSync('git', ['-C', cwd, 'config', 'user.email', 'fixture@example.invalid'])
   execFileSync('git', ['-C', cwd, 'config', 'user.name', 'Fixture'])

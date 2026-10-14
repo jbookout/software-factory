@@ -112,7 +112,6 @@ export function normalizeE2eReport({ report, candidate, manifest, test }) {
  */
 export async function qualifyAgenticEvaluation({ manifest, broken, repaired, replay, archive }) {
   const reasons = []
-  // Nothing planted, nothing guarded or nothing archived proves nothing.
   if (!manifest.defects.length) reasons.push('no planted defect to catch')
   if (!manifest.traps.length) reasons.push('no trap to stay clean on')
   if (!archive.refs.length) reasons.push('no archived evidence to survive cleanup')
@@ -131,7 +130,6 @@ export async function qualifyAgenticEvaluation({ manifest, broken, repaired, rep
     if (!caught) { reasons.push(`planted defect ${defect.id} missed`); continue }
     repros.set(defect.id, caught.repro)
   }
-  // Traps sit on the routes they guard: only a finding that catches no planted defect flags one.
   const unplanted = triage.confirmed.filter(finding => !manifest.defects.some(defect => catches(finding, defect)))
   for (const finding of unplanted) {
     const traps = manifest.traps.filter(trap => finding.repro.route === trap.route)
@@ -147,7 +145,6 @@ export async function qualifyAgenticEvaluation({ manifest, broken, repaired, rep
     else if (replayed.assertionKind !== 'deterministic') reasons.push(`replay of ${id} must use deterministic assertions`)
     else if (replayed.outcome !== repro.outcome) reasons.push(`replay changed the outcome of ${id}`)
   }
-  // Count provider invocations, not cached-step labels; a missing count is not zero.
   if (replay.providerInvocations !== 0) reasons.push(`model call during replay: ${replay.providerInvocations ?? 'uncounted'}`)
   const read = createBoundReader({ readArtifact: archive.readArtifact, limits: archive.limits })
   for (const artifact of archive.refs) {

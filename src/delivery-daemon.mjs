@@ -35,8 +35,6 @@ export async function startDeliveryDaemon(config, identity, argv, env = process.
 export async function deliveryStatus(config, { repo, pr, step, code = 1, message, nextAction = 'inspect-and-resume' }) {
   const file = config.statusFile ?? path.join(config.stateDir, 'status.txt')
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
-  // Child diagnostics are kept in private logs. This line contains only the
-  // controller's fixed diagnostic and the action that owns the dead end.
   const clean = value => String(value ?? '').replace(/[\r\n]/g, ' ')
   await withLease(path.join(config.stateDir,'locks'),'delivery-status',async()=>{
     const state=path.join(config.stateDir,'status-lines.json'), prior=await readJson(state,{})

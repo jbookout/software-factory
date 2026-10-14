@@ -12,7 +12,6 @@ if (!planFile || !adapterFile || !reportFile || process.argv.length !== 5) {
   process.exitCode = 2
 } else {
   try {
-    // A pending file is evidence of an interrupted run, never permission to rerun it.
     const output = await fs.open(reportFile, 'wx', 0o600)
     try {
       const runId = randomUUID()
@@ -23,7 +22,6 @@ if (!planFile || !adapterFile || !reportFile || process.argv.length !== 5) {
       const context = createPinnedBuildContext([await readPinnedContract(plan.steering)])
       const evaluatorDigest = createHash('sha256').update(await fs.readFile(adapterFile)).digest('hex')
       const { execute, judge } = await import(pathToFileURL(path.resolve(adapterFile)))
-      // Replace complete snapshots atomically; interruption cannot erase the last receipt.
       const onProgress = async report => {
         const temporary = `${reportFile}.${runId}.tmp`
         const next = await fs.open(temporary, 'wx', 0o600)

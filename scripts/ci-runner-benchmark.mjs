@@ -73,8 +73,6 @@ function workflowParity(x) {
   need(selected.length === 1, 'not-a-job-selector', 'rejected')
   const afterNode = candidate.getIn(['jobs', selected[0].key.value, 'runs-on'], true)
   need(isScalar(afterNode) && afterNode.value === x.candidateSelector, 'not-a-job-selector', 'rejected')
-  // Only a directly defined simple scalar selector qualifies. Anchors, arrays,
-  // expressions and shell text require a separate reviewed experiment shape.
   return { baseline: canonicalDigest(x.originalWorkflow), candidate: canonicalDigest(x.candidateWorkflow), workload: canonicalDigest(x.originalWorkflow) }
 }
 function runEvidence(r, required, expectedWorkflow, expectedSelector, registeredAt, observedAt, ids) {
@@ -152,7 +150,6 @@ export function assessBenchmark(input, { now = new Date().toISOString() } = {}) 
       passing ||= left.inventory.every(([, verdict]) => verdict === 'success')
       failing ||= left.inventory.some(([, verdict]) => verdict === 'failure')
       baseline.push(left.seconds); candidate.push(right.seconds); baselineCost += left.charge; candidateCost += right.charge
-      // No raw names, paths, logs, URLs or provider errors enter the receipt.
       observations.push({ pair: i + 1, baselineSeconds: left.seconds, candidateSeconds: right.seconds,
         baselineQueueSeconds: left.queueSeconds, candidateQueueSeconds: right.queueSeconds,
         baselinePhases: Object.fromEntries(['setupSeconds', 'testSeconds', 'buildSeconds'].map(k => [k, a.phases[k]])),

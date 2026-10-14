@@ -1,6 +1,3 @@
-// Product-owned VERIFY runner for the slice-4 sample app: Launch, Doctor, Drive,
-// Evidence, Cleanup. It drives the user route over HTTP, so its engine is the
-// sample's own driver, never e2e's web engine; Prove refuses it for acceptance.
 import { createHash, randomUUID } from 'node:crypto'
 import { execFile, spawn } from 'node:child_process'
 import { once } from 'node:events'
@@ -63,7 +60,6 @@ export async function runVerify({ build, feature, evidenceRoot, scratchParent, c
   launchTimeoutMs = 10_000 }) {
   const runId = randomUUID()
   const scratchDir = await fs.mkdtemp(path.join(scratchParent, 'verify-run-'))
-  // Cleanup: only the process and scratch directory this run created, whichever step fails.
   try {
     return await drive({ build, feature, evidenceRoot, criterionId, role, skip, launchTimeoutMs, runId, scratchDir })
   } finally {

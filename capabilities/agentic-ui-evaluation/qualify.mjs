@@ -82,7 +82,6 @@ export async function runDeterministicQualification() {
     await fs.mkdir(dest)
     const callLog = path.join(dest, 'provider-invocations.log')
     await fs.writeFile(callLog, 'counter-start\n')
-    // No inherited credential env, no model gateway, no OAuth imports or store reads.
     const env = e2eEnvironment({ PATH: process.env.PATH, LANG: 'C.UTF-8',
       ...(process.env.PLAYWRIGHT_BROWSERS_PATH ? { PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH } : {}),
       FIXTURE_URL: `http://127.0.0.1:${server.address().port}`, PROVIDER_CALL_LOG: callLog,
@@ -106,7 +105,6 @@ export async function runDeterministicQualification() {
       assert.equal(providerInvocations, 0)
       runs[name] = { ...normalized, providerInvocations, summary: report.run.summary,
         durationMs: Date.parse(report.run.finishedAt) - Date.parse(report.run.startedAt) }
-      // Delete only disposable output under this git worktree, after archiving it.
       await fs.rm(path.join(root, '.output'), { recursive: true })
     } finally { await new Promise(resolve => server.close(resolve)) }
   }

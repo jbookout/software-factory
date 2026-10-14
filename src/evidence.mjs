@@ -111,7 +111,6 @@ export function createBoundReader({ readArtifact, limits: inputLimits, priorDige
 // it does not authenticate who wrote the observation.
 export async function acceptEvidence({ phase, kind, criterionId, binding, records, readArtifact,
   priorDigests = [], limits: inputLimits }) {
-  // Acceptance uses snapshots even while an injected reader yields control.
   binding = structuredClone(binding)
   records = structuredClone(records)
   const expected = phase === "after" ? ["passed"] : kind === "bug" ? ["failed"] : ["passed", "failed"]

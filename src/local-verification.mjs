@@ -80,7 +80,6 @@ export async function validateLaunchOutput(argv,directory,cwd,env=process.env) {
     const value=arg===flag?argv[index+1]:arg.slice(flag.length+1)
     if (!value || value.startsWith('--') || ['.','..'].includes(path.basename(value)))
       throw new Error('output must belong to owned attempt directory')
-    // Resolve each parent component physically before traversing "..".
     let parent = path.isAbsolute(value) ? path.parse(value).root : await fs.realpath(cwd)
     for (const part of path.dirname(value).split(path.sep).filter(Boolean)) {
       parent = await fs.realpath(path.join(parent,part)).catch(error=>{

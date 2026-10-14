@@ -35,7 +35,6 @@ const expectedBody = {
   startedAt: timestamp,
   completedAt: timestamp
 }
-// Independent oracle: hash the declared expected artifact, not the generated digest.
 const checksum = body => createHash("sha256").update(JSON.stringify(body)).digest("hex")
 const trustedDigest = checksum(expectedBody)
 
@@ -98,7 +97,6 @@ test("rewriting the payload and checksum fails the trusted original but is not a
   changed.receiptDigest = checksum(changedBody)
   assert.notEqual(changed.receiptDigest, receiptDigest)
   assert.equal(factory.verifyFactoryReceipt(changed, trustedDigest), false)
-  // Anyone can compute a new unkeyed checksum; trusting that new digest accepts the rewrite.
   assert.equal(factory.verifyFactoryReceipt(changed, changed.receiptDigest), true)
 })
 
