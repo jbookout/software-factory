@@ -1,0 +1,21 @@
+name: Leak guard
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+permissions:
+  contents: read
+concurrency:
+  group: leak-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  leak-guard:
+    name: leak-guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: python3 security/test_leak_guard.py
+      - run: python3 security/leak_guard.py --ci
