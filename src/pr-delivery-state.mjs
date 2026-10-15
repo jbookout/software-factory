@@ -3,11 +3,28 @@ import { Deadline, monotonicNow } from "./deadline.mjs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
+import { isDeliveryBinding } from "./evidence.mjs"
 
 export class DeliveryError extends Error {
   constructor(message, code = 1, transient = false) {
     super(message); this.code = code; this.transient = transient
   }
+}
+export function validateQueueJournal(queue) {
+  if (!Array.isArray(queue)) throw new DeliveryError("invalid queue journal", 9)
+  return queue.map(entry => {
+    if (!isDeliveryBinding(entry) || typeof entry.id !== "string" || !entry.id)
+      throw new DeliveryError("invalid queue job binding", 9)
+    const normalized = { ...entry, state: entry.state ?? (entry.outcome ? "acknowledged" : "pending") }
+    if (!["pending", "claimed", "effect-requested", "reconciled", "acknowledged"].includes(normalized.state))
+      throw new DeliveryError("invalid queue transition", 9)
+    if (["claimed", "effect-requested", "reconciled"].includes(normalized.state) &&
+        (typeof entry.attemptId !== "string" || !/^[0-9a-f]{64}$/.test(entry.effectId ?? "")))
+      throw new DeliveryError("unbound queue claim", 9)
+    if (["reconciled", "acknowledged"].includes(normalized.state) && !["pass", "fail"].includes(entry.outcome?.status))
+      throw new DeliveryError("missing queue outcome", 9)
+    return normalized
+  })
 }
 export const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 export const keyFor = (repo, pr) => `${encodeURIComponent(repo)}-${pr}`
