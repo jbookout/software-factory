@@ -52,3 +52,13 @@ for (const [property, source] of [
   test(property + source.slice(-50), () =>
     assert.ok(auditWorkflow(source).some((f) => f.property === property)),
   );
+
+for (const path of ["../private", "/private", "**"]) {
+  test(`artifact upload rejects unconfined path ${path}`, () => {
+    const source = clean.replace(
+      "run: npm test",
+      `uses: actions/upload-artifact@${"a".repeat(40)}\n        with:\n          path: "${path}"`,
+    );
+    assert.deepEqual(auditWorkflow(source), [{ file: "workflow.yml", property: "artifact-path" }]);
+  });
+}

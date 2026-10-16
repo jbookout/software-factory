@@ -1,4 +1,5 @@
 import { parseDocument } from "yaml";
+import { posix } from "node:path";
 const writable = (permissions) =>
   permissions === "write-all" || Object.values(permissions ?? {}).includes("write");
 
@@ -61,6 +62,28 @@ export function auditWorkflow(source, file = "workflow.yml") {
         add("publication-in-validation");
       if (step.uses?.startsWith("actions/download-artifact@"))
         add("artifact-execution-review-required");
+      if (step.uses?.startsWith("actions/upload-artifact@")) {
+        const value = step.with?.path;
+        if (
+          typeof value !== "string" ||
+          !value.trim() ||
+          !value
+            .trim()
+            .split(/\s+/)
+            .every((path) => {
+              const normalized = posix.normalize(path);
+              return (
+                !path.startsWith("!") &&
+                !path.includes("${{") &&
+                !posix.isAbsolute(normalized) &&
+                !normalized.startsWith("../") &&
+                normalized !== "." &&
+                /[\w-]/.test(normalized.split("/")[0])
+              );
+            })
+        )
+          add("artifact-path");
+      }
       if (
         step.uses?.startsWith("actions/upload-artifact@") &&
         /(?:\.env|\.git\b|credentials|tokens|(?:^|\s)[./]*\*(?:\s|$))/i.test(step.with?.path ?? "")
