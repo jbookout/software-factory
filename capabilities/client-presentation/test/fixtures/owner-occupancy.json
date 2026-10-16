@@ -1,0 +1,598 @@
+{
+  "schemaVersion": 2,
+  "brand": {
+    "name": "Example Practice A",
+    "descriptor": "Healthcare Real Estate",
+    "navy": "#002f6c",
+    "orange": "#f57f29",
+    "logo": null
+  },
+  "presentation": {
+    "title": "Synthetic practice property review",
+    "preparedFor": "Example Practice A",
+    "scenarioDate": "October 2026",
+    "summary": "Fictional example only. Replace the complete dataset with verified, source-backed client research before use.",
+    "fictional": true
+  },
+  "strategy": {
+    "mode": "owner_occupancy"
+  },
+  "sections": [
+    {
+      "id": "home",
+      "label": "Home",
+      "title": "A place to grow with purpose.",
+      "visible": true
+    },
+    {
+      "id": "purchases",
+      "label": "Purchases",
+      "title": "Ownership gives the practice a stake in the future.",
+      "visible": true
+    },
+    {
+      "id": "demographics",
+      "label": "Demographics",
+      "title": "Demand signals, with room for nuance.",
+      "visible": true
+    },
+    {
+      "id": "sources",
+      "label": "Sources",
+      "title": "A decision gets stronger with better evidence.",
+      "visible": true
+    },
+    {
+      "id": "feedback",
+      "label": "Tour List",
+      "title": "Keep the property discussion in sync.",
+      "visible": true
+    }
+  ],
+  "market": {
+    "title": "Fictional market snapshot",
+    "summary": "These made-up market signals illustrate layout only. They are not local facts or forecasts.",
+    "developmentTitle": "Example projects in context",
+    "purchaseScreening": [
+      {
+        "label": "Practice occupancy",
+        "description": "Synthetic shortlist for the configured practice occupancy scenario. Confirm the clinical layout during due diligence.",
+        "sourceId": "source-property-fixture"
+      },
+      {
+        "label": "Reported space",
+        "description": "Synthetic reported areas are shown in each property card; verify measurements and usable space.",
+        "sourceId": "source-property-fixture"
+      },
+      {
+        "label": "Parking and access",
+        "description": "Parking is unverified in this synthetic shortlist. Review access, condition and availability before deciding.",
+        "sourceId": "source-property-fixture"
+      }
+    ]
+  },
+  "locator": {
+    "center": {
+      "lat": 35.12,
+      "lon": -90.1
+    },
+    "zoom": 11,
+    "disclaimer": "Fictional coordinates for interface testing only; do not use for navigation.",
+    "style": {
+      "version": 8,
+      "sources": {
+        "water": {
+          "type": "geojson",
+          "data": {
+            "type": "FeatureCollection",
+            "features": [
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "Polygon",
+                  "coordinates": [
+                    [
+                      [
+                        -90.07119999999999,
+                        35.075
+                      ],
+                      [
+                        -90.05499999999999,
+                        35.075
+                      ],
+                      [
+                        -90.05499999999999,
+                        35.16
+                      ],
+                      [
+                        -90.0658,
+                        35.16
+                      ],
+                      [
+                        -90.07119999999999,
+                        35.075
+                      ]
+                    ]
+                  ]
+                }
+              }
+            ]
+          },
+          "attribution": "Synthetic test geometry; no real geography or navigation data"
+        },
+        "roads": {
+          "type": "geojson",
+          "data": {
+            "type": "FeatureCollection",
+            "features": [
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.13000000000001,
+                      35.075
+                    ],
+                    [
+                      -90.13000000000001,
+                      35.16
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.14500000000001,
+                      35.08916666666667
+                    ],
+                    [
+                      -90.05499999999999,
+                      35.08916666666667
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.11500000000001,
+                      35.075
+                    ],
+                    [
+                      -90.11500000000001,
+                      35.16
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.14500000000001,
+                      35.10333333333333
+                    ],
+                    [
+                      -90.05499999999999,
+                      35.10333333333333
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.1,
+                      35.075
+                    ],
+                    [
+                      -90.1,
+                      35.16
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.14500000000001,
+                      35.1175
+                    ],
+                    [
+                      -90.05499999999999,
+                      35.1175
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.085,
+                      35.075
+                    ],
+                    [
+                      -90.085,
+                      35.16
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.14500000000001,
+                      35.13166666666667
+                    ],
+                    [
+                      -90.05499999999999,
+                      35.13166666666667
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.07,
+                      35.075
+                    ],
+                    [
+                      -90.07,
+                      35.16
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.14500000000001,
+                      35.14583333333333
+                    ],
+                    [
+                      -90.05499999999999,
+                      35.14583333333333
+                    ]
+                  ]
+                }
+              }
+            ]
+          },
+          "attribution": "Synthetic test geometry"
+        }
+      },
+      "layers": [
+        {
+          "id": "land",
+          "type": "background",
+          "paint": {
+            "background-color": "#e9f2fa"
+          }
+        },
+        {
+          "id": "water",
+          "type": "fill",
+          "source": "water",
+          "paint": {
+            "fill-color": "#82b5dc",
+            "fill-opacity": 0.88
+          }
+        },
+        {
+          "id": "road-casing",
+          "type": "line",
+          "source": "roads",
+          "paint": {
+            "line-color": "#b7cadd",
+            "line-width": 2.6
+          }
+        },
+        {
+          "id": "roads",
+          "type": "line",
+          "source": "roads",
+          "paint": {
+            "line-color": "#ffffff",
+            "line-width": 1.7
+          }
+        }
+      ]
+    }
+  },
+  "developments": [
+    {
+      "id": "example-clinic-district",
+      "name": "Example Clinic District",
+      "location": "Fictional region",
+      "description": "Synthetic development record used to test map, image cards, and detail rendering.",
+      "status": "Fictional example",
+      "locator": {
+        "kind": "approximate",
+        "lat": 35.1,
+        "lon": -90.12,
+        "sourceId": "source-market-fixture"
+      },
+      "image": null,
+      "sourceId": "source-market-fixture",
+      "noPhotoReason": "Synthetic fixture: no image provided."
+    }
+  ],
+  "properties": [
+    {
+      "id": "example-property-1",
+      "name": "Example Purchase 1",
+      "location": "Fictional region",
+      "type": "Purchase \u00b7 fictional",
+      "price": 1250000,
+      "totalSf": 7000,
+      "description": "Synthetic purchase record for testing complete practice occupancy.",
+      "planningNote": "No external tenant strategy is represented in this example.",
+      "locator": {
+        "kind": "approximate",
+        "lat": 35.12,
+        "lon": -90.08,
+        "sourceId": "source-property-fixture"
+      },
+      "parkingSpaces": null,
+      "parkingRatio": null,
+      "image": null,
+      "sourceId": "source-property-fixture",
+      "noPhotoReason": "Synthetic fixture: no image provided."
+    },
+    {
+      "id": "example-property-2",
+      "name": "Example Purchase 2",
+      "location": "Fictional region",
+      "type": "Purchase \u00b7 fictional",
+      "price": 1375000,
+      "totalSf": 7000,
+      "description": "Synthetic purchase record for testing complete practice occupancy.",
+      "planningNote": "No external tenant strategy is represented in this example.",
+      "locator": {
+        "kind": "approximate",
+        "lat": 35.12,
+        "lon": -90.08,
+        "sourceId": "source-property-fixture"
+      },
+      "parkingSpaces": null,
+      "parkingRatio": null,
+      "image": null,
+      "sourceId": "source-property-fixture",
+      "noPhotoReason": "Synthetic fixture: no image provided."
+    },
+    {
+      "id": "example-property-3",
+      "name": "Example Purchase 3",
+      "location": "Fictional region",
+      "type": "Purchase \u00b7 fictional",
+      "price": 1500000,
+      "totalSf": 7000,
+      "description": "Synthetic purchase record for testing complete practice occupancy.",
+      "planningNote": "No external tenant strategy is represented in this example.",
+      "locator": {
+        "kind": "approximate",
+        "lat": 35.125,
+        "lon": -90.085,
+        "sourceId": "source-property-fixture"
+      },
+      "parkingSpaces": null,
+      "parkingRatio": null,
+      "image": null,
+      "sourceId": "source-property-fixture",
+      "noPhotoReason": "Synthetic fixture: no image provided."
+    },
+    {
+      "id": "example-property-4",
+      "name": "Example Purchase 4",
+      "location": "Fictional region",
+      "type": "Purchase \u00b7 fictional",
+      "price": 1625000,
+      "totalSf": 7000,
+      "description": "Synthetic purchase record for testing complete practice occupancy.",
+      "planningNote": "No external tenant strategy is represented in this example.",
+      "locator": {
+        "kind": "approximate",
+        "lat": 35.125,
+        "lon": -90.085,
+        "sourceId": "source-property-fixture"
+      },
+      "parkingSpaces": null,
+      "parkingRatio": null,
+      "image": null,
+      "sourceId": "source-property-fixture",
+      "noPhotoReason": "Synthetic fixture: no image provided."
+    }
+  ],
+  "leases": [],
+  "demographics": {
+    "modelVersion": 1,
+    "title": "Synthetic demographic research",
+    "geography": {
+      "id": "example-region",
+      "label": "Example Region (fictional)",
+      "kind": "region"
+    },
+    "asOfDate": "2026-10-01",
+    "validThrough": "2026-12-31",
+    "population": {
+      "unit": "people",
+      "period": "2021\u20132026",
+      "sourceId": "source-demographic-fixture",
+      "values": [
+        {
+          "label": "2021",
+          "value": 10000
+        },
+        {
+          "label": "2024",
+          "value": 10700
+        },
+        {
+          "label": "2026",
+          "value": 11400
+        }
+      ]
+    },
+    "age": {
+      "period": "2026",
+      "unit": "people",
+      "sourceId": "source-demographic-fixture",
+      "cells": [
+        {
+          "label": "Under 18",
+          "lower": 0,
+          "upper": 18,
+          "value": 2280
+        },
+        {
+          "label": "18 to 64",
+          "lower": 18,
+          "upper": 65,
+          "value": 6840
+        },
+        {
+          "label": "65 and over",
+          "lower": 65,
+          "upper": null,
+          "value": 2280
+        }
+      ]
+    },
+    "income": {
+      "period": "2026",
+      "unit": "households",
+      "sourceId": "source-demographic-fixture",
+      "median": {
+        "label": "Median household income",
+        "value": 75000,
+        "unit": "USD/year",
+        "period": "2026",
+        "sourceId": "source-demographic-fixture"
+      },
+      "cells": [
+        {
+          "label": "Under $50,000",
+          "lower": 0,
+          "upper": 50000,
+          "value": 1200
+        },
+        {
+          "label": "$50,000 to $99,999",
+          "lower": 50000,
+          "upper": 100000,
+          "value": 1800
+        },
+        {
+          "label": "$100,000 and over",
+          "lower": 100000,
+          "upper": null,
+          "value": 1000
+        }
+      ],
+      "thresholds": [
+        50000,
+        100000
+      ]
+    },
+    "cards": []
+  },
+  "sources": [
+    {
+      "id": "source-market-fixture",
+      "title": "Synthetic market fixture",
+      "url": null,
+      "date": "2026-10-01 (synthetic)",
+      "geography": "Example Region (fictional)",
+      "notes": "Test data only. No real market research."
+    },
+    {
+      "id": "source-property-fixture",
+      "title": "Synthetic purchase fixture",
+      "url": null,
+      "date": "2026-10-01 (synthetic)",
+      "geography": "Example Region (fictional)",
+      "notes": "Test data only. No property exists."
+    },
+    {
+      "id": "source-lease-fixture",
+      "title": "Synthetic lease fixture",
+      "url": null,
+      "date": "2026-10-01 (synthetic)",
+      "geography": "Example Region (fictional)",
+      "notes": "Test data only. No lease availability or rent is asserted."
+    },
+    {
+      "id": "source-current-practice-fixture",
+      "title": "Synthetic current-practice fixture",
+      "url": null,
+      "date": "2026-10-01 (synthetic)",
+      "geography": "Example Region (fictional)",
+      "notes": "Test data only. No practice or address exists."
+    },
+    {
+      "id": "source-demographic-fixture",
+      "title": "Synthetic demographic fixture",
+      "url": null,
+      "date": "2026-10-01 (synthetic)",
+      "geography": "Example Region (fictional)",
+      "notes": "Test data only. No local demographic fact is asserted."
+    }
+  ],
+  "feedback": {
+    "mode": "disabled",
+    "endpoint": null
+  },
+  "currentPractice": {
+    "name": "Example Current Practice",
+    "location": "100 Example Way, Example Region (fictional)",
+    "description": "Synthetic current-practice context used to test an optional map marker and detail dialog. No real practice or address is represented.",
+    "locator": {
+      "kind": "approximate",
+      "lat": 35.135,
+      "lon": -90.115,
+      "sourceId": "source-current-practice-fixture"
+    },
+    "sourceId": "source-current-practice-fixture",
+    "noPhotoReason": "Synthetic fixture: no image supplied."
+  }
+}
