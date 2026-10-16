@@ -1,23 +1,12 @@
-# Orchestrator delivery cutover
+# Delivery installation
 
-`deliver <repo> [PR]` owns review, repair, CI recovery and head-bound enqueue. A repository lane discovers open PRs, starts detached PR jobs, scans approvals, and serially drains its durable merge queue. Installed `deliver.sh` and `pr-loop.sh` callers detach automatically. There is no shadow cutover phase.
+Install a committed factory revision in a dedicated checkout, run `npm ci`, and invoke
+`node /absolute/path/to/installed-factory/bin/pr-delivery.mjs /absolute/path/to/config.json deliver --once`.
+Keep the previous checkout and its config. Roll back by invoking the previous entry point with that config path.
+Never run a second delivery worker against the same configuration.
 
-The private delivery config binds `orchestratorDir` to the existing `out/orch`, `statusFile` to `out/orch/delivery-status.txt`, and `stateDir` outside the factory source. It supplies repository-owned checks, trusted review posters, policy files and compute limits. The orchestrator reads the status file before each pass. Each repeated dead end is deduplicated until its diagnostic changes.
-
-Review routing keeps deterministic tier 1, focused tier 2, and full tier 3 with one confirmation of blocking findings. Code appears before test evidence. Every reviewer verifies or dismisses exact-head Dot second opinions. With `budget/DOT_AF_ON`, full reviews queue one AF brief per head, at most four waiting; the existing `dot/af-post.sh` remains the advisory publisher.
-
-With `budget/MACBOOK_ON`, one review uses the persistent `~/orch-wt/<repo>` checkout on the MacBook only on AC power, below the existing load limit and above the free-space limit. A remote worker lock retains ownership across SSH loss. Its head, tree and tracked cleanliness are checked after execution. Failure falls through to the next lane. With `budget/CLOUD_ON`, carr-system may use one Claude cloud reviewer, controlled by `CLOUD_SLOTS` with a default of one. Cloud launch intents persist across controller restarts. A missing completion keeps its slot occupied until reconciliation; timeout never proves remote work stopped. Studio review remains the fallback.
-
-Repair reuses the worktree holding the PR branch and refuses the canonical checkout. A spent primary budget escalates a builder once to Claude Opus; the durable escalation receipt prevents another launch across retries or changed heads. Interrupted repair source and checks are reconciled before any push. Refused transient or rule-violation merges remain queued without a three-attempt cutoff. Disjoint approved PRs may merge on their existing green CI after a clean merge-tree proof. A provider refusal requiring an updated branch falls back to integration. Cancelled checks create an empty commit through the Git API, preserving the source tree and recording the creation/ref-update intent before each effect.
-
-All steps below are required, in order, for the orchestrator after the PR merges.
-
-1. Use a clean checkout of the merged factory and the reviewed private config.
-2. Run `CONFIG=<private-config> OLD=<out/orch> scripts/orch/delivery-cutover.sh flip`.
-3. Read `delivery-mode`, `delivery-cutover.json`, the detached daemon receipts, and `delivery-status.txt`.
-
-Flip preflights installation before stopping writers. It snapshots and stops legacy launchd producers and process trees, imports pending queue, usage and in-flight PR intent, moves scripts into `_to_delete`, installs bound wrappers, starts detached delivery for every configured repository, and restarts fix-train against the wrappers. Dot jobs are outside the stopped-script inventory. A durable journal records each phase. A completed flip can be called again to resume dead repository lanes from receipts.
-
-Rollback is `CONFIG=<same-private-config> OLD=<same-out/orch> scripts/orch/delivery-cutover.sh rollback`. It validates saved script hashes and collisions, stops factory lanes, moves wrappers aside, restores scripts, deduplicates pending queue entries, resumes in-flight PRs and restarts legacy producers. Launchd restoration is idempotent. A partially completed flip must roll back before another flip.
-
-Rehearsal uses a temporary copy of the script and state inputs with `CUTOVER_SIMULATE=1`; file movement and state transfer execute, while process and launchd actions are logged. Verify every original script hash after rollback. Never point a rehearsal at the live directory. The commit-bound PR body contains the rehearsal output and identifies which actions were simulated.
+The config lists the three repositories, their check commands and required hosted checks.
+The serial worker repairs only observed failed checks, up to three rounds by default.
+A pending branch update, push or merge is read back before another action.
+Unknown provider outcomes remain pending. Green hosted CI on the exact candidate is required to merge.
+Factory delivery never deploys a product or changes its credentials.

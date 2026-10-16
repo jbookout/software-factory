@@ -93,7 +93,7 @@ Before opening or updating any pull request, apply both skills to the diff:
 
 Both are installed at `~/.agents/skills/` (sources: github.com/mattpocock/skills `skills/engineering/codebase-design`, github.com/jnsahaj/skills `skills/zero-tech-debt`). The PR reviewer checks both, so all two are required.
 
-When running checks, reviewing their results, or preparing delivery, use `npm run check`. Validate its producer/source/log receipt before reporting coverage.
+When running checks, reviewing their results, or preparing delivery, use `npm run check`. Report its exit status and read its output log before reporting coverage.
 
 ## Agent skills
 

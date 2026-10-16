@@ -3,10 +3,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { createHash } from "node:crypto"
 import { runProcess } from "../src/process-runner.mjs"
-import { runCodexBuild } from "../src/codex-build.mjs"
-import { createPinnedBuildContext } from "../src/model-room.mjs"
 
 test('review 1: latched and direct command signals retain mutation uncertainty', async t => {
   const { acquireLease } = await import('../src/pr-delivery-state.mjs')
@@ -96,7 +93,7 @@ test("hard timeout kills grandchildren that hold inherited pipes open", async ()
   assert.ok(Date.now() - start < 3000)
 })
 
-test("existing attended build caller still reads its schema result", async t => {
+test("command input closes before reading its output file", async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "factory-build-process-"))
   t.after(() => fs.rm(root, { recursive: true, force: true }))
   const codex = path.join(root, "codex")
@@ -105,12 +102,10 @@ const fs=require('node:fs'), args=process.argv.slice(2);
 process.stdin.resume();process.stdin.on('end',()=>{
 fs.writeFileSync(args[args.indexOf('--output-last-message')+1],JSON.stringify({status:'pass'}));
 });`, { mode: 0o755 })
-  const excerpt = "Fixture contract"
-  const pinnedBuildContext = createPinnedBuildContext([{ source_revision: "a".repeat(40),
-    path: "src/fixture.mjs", excerpt,
-    content_digest: `sha256:${createHash("sha256").update(excerpt).digest("hex")}` }])
-  const result = await runCodexBuild({ route: { provider: "codex", model: "fixture", effort: "high" },
-    outcome: "Fixture build", sourceRevision: "a".repeat(40), pinnedBuildContext }, { cwd: root, codex })
+  const output = path.join(root, 'result.json')
+  const execution = await runProcess([codex, '--output-last-message', output], { cwd: root, input: 'build task' })
+  assert.equal(execution.code, 0)
+  const result = JSON.parse(await fs.readFile(output, 'utf8'))
   assert.equal(result.status, "pass")
 })
 

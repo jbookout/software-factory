@@ -1,135 +1,29 @@
 name: CI
-
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited, ready_for_review, closed]
   push:
     branches: [main]
-
-concurrency:
-  # PR validation supersedes by workflow + PR. Non-PR verdicts are independent:
-  # sharing a non-cancelling group would still replace older pending runs.
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 permissions:
   contents: read
-
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   test:
-    if: ${{ github.event_name != 'pull_request' || github.event.action != 'closed' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 55
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-        timeout-minutes: 5
-      - name: Install pinned Python check dependencies
-        run: |
-          python3 -m venv "$RUNNER_TEMP/factory-check"
-          "$RUNNER_TEMP/factory-check/bin/python" -m pip install -r scripts/orch/requirements.txt
-          echo "$RUNNER_TEMP/factory-check/bin" >> "$GITHUB_PATH"
-        timeout-minutes: 5
-      - name: Run npm run check
-        shell: bash
-        env:
-          TMPDIR: ${{ runner.temp }}/factory-check-evidence
-        run: |
-          mkdir -p "$TMPDIR"
-          npm run check | tee "$TMPDIR/results.jsonl"
-        timeout-minutes: 45
-
-      - name: Retain check receipts and captured logs
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always()
-        with:
-          name: local-check-receipts
-          path: |
-            ${{ runner.temp }}/factory-check-evidence/results.jsonl
-            ${{ runner.temp }}/factory-check-evidence/factory-attempt-*/verification.json
-            ${{ runner.temp }}/factory-check-evidence/factory-attempt-*/output.log
-          retention-days: 7
-          if-no-files-found: error
-
-      - name: Audit installed workflow configuration (non-blocking pilot)
-        continue-on-error: true
-        run: npm run workflow:audit -- .
-
-  e2e-deterministic-qualification:
-    if: ${{ github.event_name != 'pull_request' || github.event.action != 'closed' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            capabilities/agentic-ui-evaluation/fixture/package-lock.json
       - run: npm ci
+      - run: npm run check
       - run: npm ci --prefix capabilities/agentic-ui-evaluation/fixture
       - run: npx --no-install playwright install --with-deps chromium
         working-directory: capabilities/agentic-ui-evaluation/fixture
-      - run: npm run e2e:qualify
-      - name: Qualify pinned Oxlint diagnostic parity
-        env:
-          TMPDIR: ${{ runner.temp }}/oxlint-evidence
-        run: |
-          mkdir -p "$TMPDIR"
-          npm run check lint
-        timeout-minutes: 5
-      - name: Retain Oxlint policy, diagnostic and resource evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: oxlint-qualification
-          path: |
-            ${{ runner.temp }}/oxlint-evidence/factory-attempt-*/verification.json
-            ${{ runner.temp }}/oxlint-evidence/factory-attempt-*/output.log
-            ${{ runner.temp }}/oxlint-evidence/factory-attempt-*/oxlint-*/receipt.json
-            ${{ runner.temp }}/oxlint-evidence/factory-attempt-*/oxlint-*/*.log
-            ${{ runner.temp }}/oxlint-evidence/factory-attempt-*/oxlint-*/*.rusage
-            ${{ runner.temp }}/oxlint-evidence/factory-attempt-*/oxlint-*/*.normalized.json
-            ${{ runner.temp }}/oxlint-evidence/factory-attempt-*/oxlint-*/installer/install.log
-            ${{ runner.temp }}/oxlint-evidence/factory-attempt-*/oxlint-*/corpus/src/**
-            ${{ runner.temp }}/oxlint-evidence/factory-attempt-*/oxlint-*/corpus/.oxlintrc.json
-            ${{ runner.temp }}/oxlint-evidence/factory-attempt-*/oxlint-*/corpus/eslint.config.mjs
-            ${{ runner.temp }}/oxlint-evidence/factory-attempt-*/oxlint-*/corpus/components.json
-          include-hidden-files: true
-          retention-days: 7
-          if-no-files-found: error
-      - name: Qualify pinned Oxfmt on copied fixtures
-        env:
-          TMPDIR: ${{ runner.temp }}/oxfmt-evidence
-        run: |
-          mkdir -p "$TMPDIR"
-          npm run check formatter
-        timeout-minutes: 5
-      - name: Retain Oxfmt measurements and source-bound receipts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: oxfmt-qualification
-          path: |
-            ${{ runner.temp }}/oxfmt-evidence/factory-attempt-*/verification.json
-            ${{ runner.temp }}/oxfmt-evidence/factory-attempt-*/output.log
-            ${{ runner.temp }}/oxfmt-evidence/factory-attempt-*/oxfmt-*/receipt.json
-            ${{ runner.temp }}/oxfmt-evidence/factory-attempt-*/oxfmt-*/corpus/**
-            ${{ runner.temp }}/oxfmt-evidence/factory-attempt-*/oxfmt-*/invalid/**
-            ${{ runner.temp }}/oxfmt-evidence/factory-attempt-*/oxfmt-*/first-install/npm-install.log
-            ${{ runner.temp }}/oxfmt-evidence/factory-attempt-*/oxfmt-*/repeated-install/npm-install.log
-          retention-days: 7
-          if-no-files-found: error
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always()
-        with:
-          name: e2e-deterministic-qualification
-          path: capabilities/agentic-ui-evaluation/fixture/.qualification/
-          include-hidden-files: true
-          if-no-files-found: error
+      - run: npm test
+        working-directory: capabilities/agentic-ui-evaluation/fixture

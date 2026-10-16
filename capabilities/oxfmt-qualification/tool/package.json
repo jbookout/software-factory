@@ -1,6 +1,0 @@
-{
-  "name": "factory-oxfmt-qualification-tool",
-  "private": true,
-  "version": "1.0.0",
-  "dependencies": { "oxfmt": "0.72.0" }
-}

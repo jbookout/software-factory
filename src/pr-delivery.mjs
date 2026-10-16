@@ -1,8 +1,4 @@
-import { importLegacyDelivery } from "./delivery-import.mjs"
 import { deliveryStatus } from "./delivery-daemon.mjs"
-import { reserveBuilderEscalation, queueDotReview, remoteReview } from "./delivery-lanes.mjs"
-import { validateLaunchOutput } from "./local-verification.mjs"
-import {writeReviewEvidence,readReviewEvidence} from "./review-evidence.mjs"
 import { createGitHubObservation } from "./github-observation.mjs"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { Deadline, DeadlineError, waitForCondition, validDuration } from "./deadline.mjs"
@@ -17,13 +13,11 @@ import { normalizeResult } from "./adapters.mjs"
 import { deliveryPrompt } from "./pr-delivery-prompts.mjs"
 import { deliveryEffectId, isDeliveryBinding } from "./evidence.mjs"
 import { validRequiredChecks } from "./pr-readiness.mjs"
-import { createGithubProvider, parseReview, latestTrustedReview } from "./github-snapshot.mjs"
+import { createGithubProvider } from "./github-snapshot.mjs"
 import { DeliveryError, keyFor, readJson, writeJson, withLease, reserveCodex, deliveryWait, completeDeliveryWait, orphanLeaseCount } from "./pr-delivery-state.mjs"
-import { decideReview, assembleReviewDiff } from "./review-tiers.mjs"
-import { readHolds, holdFor, freezeFor } from "./merge-holds.mjs"
 
 const DEFAULT_MODELS = fileURLToPath(new URL("../config/delivery-models.v1.json", import.meta.url))
-const MODEL_ROLES = ["review-tier2", "review-tier3", "fix", "ci-fix"]
+const MODEL_ROLES = ["fix", "ci-fix"]
 const SHA = /^[0-9a-f]{40}$/
 const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 const digestOf = value => createHash("sha256").update(value).digest("hex")
@@ -32,7 +26,6 @@ const pass = data => normalizeResult({ status: "pass", data }, "delivery")
 const fail = error => normalizeResult({ status: "fail",
   data: { code: Number.isInteger(error.code) ? error.code : 1, message: error.message, transient: error.transient ?? false,
     ...(error.observation ?? {}),
-    ...(error.builderEscalation ? {builderEscalation:true} : {}),
     ...(error.cancelled ? { cancelled: true, nextAction: "none" } : {}),
     ...(error.state ? { state: error.state, pool: error.pool, retryAt: error.retryAt, queryErrors: error.queryErrors, terminal: error.terminal, nextAction: "wait-for-provider-observation" } : {}),
     ...(error.pendingUpdate ? { pendingUpdate: true } : {}),
@@ -40,23 +33,6 @@ const fail = error => normalizeResult({ status: "fail",
     ...(error.uncertain ? { uncertain: true, nextAction: "readback-before-retry" } : {}),
     ...(error.wait ? { cause: error.wait.cause, resetAt: error.wait.resetAt, head: error.wait.head, nextAction: error.wait.cause === "mutation-uncertain" ? "readback-before-retry" : "wait-for-input-or-reset", admitted: false } : {}) },
   findings: [{ reason: error.message }] }, "delivery")
-
-// Tier 1 has no model reviewer. The verdict is the release pipeline's envelope:
-// line 1 the verdict, line 2 the exact head, line 3 blank so no authority
-// header (Fixes-Forward) can follow, and no other Reviewed-SHA line.
-export function tierOneVerdict(head, base, route, ci) {
-  const green = ci.state === "success"
-  const failed = [...new Set(ci.evidence.filter(c => c.head_sha === head && ["failure", "error", "cancelled", "timed_out", "action_required", "startup_failure"]
-    .includes(c.conclusion ?? c.state)).map(c => c.name ?? c.context))]
-  return [green ? "APPROVE" : "REVIEW: BLOCKED", `Reviewed-SHA: ${head}`, "",
-    green ? `Tier-1 deterministic approval: no model review ran. The review decision for ${base}..${head} is tier 1 (${route.reason}) and every required hosted check is green on this exact head.`
-      : `1. Tier-1 deterministic review: hosted checks are not green on this exact head (${failed.join(", ") || ci.state}). No model review ran; fix the checks.`,
-    `Review-Decision-Policy: ${route.decision.policy_digest}`, `Review-Decision-Diff: ${route.decision.diff_digest}`].join("\n")
-}
-
-// A model's blocking finding is never cleared without a model confirming it;
-// a tier-1 deterministic block (red checks) clears deterministically.
-const dispatchTier = (route, prior) => route.tier === 1 && prior && !/^Review-Tier: 1$/m.test(prior.body) ? 2 : route.tier
 
 export async function loadDeliveryConfig(file) {
   const value = await readJson(file)
@@ -69,8 +45,6 @@ export async function loadDeliveryConfig(file) {
   const config = { ...value, configFile: path.resolve(file), stateDir: absolute(value.stateDir),
     repos: Object.fromEntries(Object.entries(value.repos).map(([repo, local]) => {
       if (!REPO.test(repo)) throw new DeliveryError("invalid repository in config", 9)
-      if (!Array.isArray(local.trustedReviewers) || !local.trustedReviewers.length || local.trustedReviewers.some(login => typeof login !== "string" || !/^[A-Za-z0-9-]+(?:\[bot\])?$/.test(login)))
-        throw new DeliveryError("config repo trustedReviewers must name trusted GitHub identities", 9)
       if (!validRequiredChecks(local.requiredChecks)) throw new DeliveryError("config repo requiredChecks must name the expected checks", 9)
       if (local.checks !== undefined && (!Array.isArray(local.checks) || !local.checks.length))
         throw new DeliveryError("config repo checks must be nonempty argv commands", 9)
@@ -81,11 +55,7 @@ export async function loadDeliveryConfig(file) {
       }
       if (local.dependencyRevision !== undefined && (typeof local.dependencyRevision !== "string" || !local.dependencyRevision.trim()))
         throw new DeliveryError("config dependencyRevision must be a nonempty owned input pin", 9)
-      const policy = local.reviewPolicy
-      if (policy !== undefined && (Object.keys(policy ?? {}).length !== 1 || !(typeof policy.repositoryPath === "string" && policy.repositoryPath) && !(typeof policy.file === "string" && policy.file)))
-        throw new DeliveryError("config reviewPolicy names one repositoryPath or file", 9)
-      return [repo, { ...local, checkout: absolute(local.checkout), worktreeRoot: absolute(local.worktreeRoot),
-        ...(policy?.file ? { reviewPolicy: { file: absolute(policy.file) } } : {}) }]
+      return [repo, { ...local, checkout: absolute(local.checkout), worktreeRoot: absolute(local.worktreeRoot) }]
     })),
     limits: { runsPer24h: 8, slots: 4, timeoutMs: 4500_000, ...value.limits },
     pollMs: value.pollMs ?? 30_000, commandTimeoutMs: value.commandTimeoutMs ?? 120_000,
@@ -110,16 +80,11 @@ export async function loadDeliveryConfig(file) {
     if (config.resources.agentUnits + config.resources.browserConcurrency > config.resources.capacity)
       throw new DeliveryError("agent and child reservation exceeds capacity", 9)
   }
-  if(value.orchInbox) config.orchInbox = {command:absolute(value.orchInbox.command),store:absolute(value.orchInbox.store)}
   config.models = (await readJson(value.modelsFile ? absolute(value.modelsFile) : DEFAULT_MODELS, null))?.roles
   for (const role of MODEL_ROLES) {
     try { createCodexExecArgs(config.models?.[role]) }
     catch { throw new DeliveryError(`model roles file must name model and effort for ${role}`, 9) }
   }
-  if (value.holds !== undefined) throw new DeliveryError("config holds moved to holdsFile (the orchestrator's merge-holds.txt)", 9)
-  if (value.holdsFile !== undefined) config.holdsFile = absolute(value.holdsFile)
-  if (value.statusFile !== undefined) config.statusFile = absolute(value.statusFile)
-  if (value.orchestratorDir !== undefined) config.orchestratorDir = absolute(value.orchestratorDir)
   return config
 }
 
@@ -165,7 +130,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     return result
   }
   const git = async (cwd, ...args) => (await command(["git", ...args], cwd)).stdout.trim()
-  const provider = createGithubProvider(config, { command, getRepo, authenticate: authenticateReview, observer: github, budget,
+  const provider = createGithubProvider(config, { command, getRepo, authenticate: async () => false, observer: github, budget,
     withRead: (repo, fn) => {
       const phase = budget().phaseBudget("api", config.apiTimeoutMs)
       return measured("api", repo, undefined, () => deadlines.run(phase, fn))
@@ -200,12 +165,6 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     }
     return current
   }
-  async function postComment(repo, pr, body) {
-    const head = /^Reviewed-SHA: ([0-9a-f]{40})$/m.exec(body)?.[1] ?? (await view(repo, pr)).headRefOid
-    const { value, ok } = await mutation(repo, pr, head, "comment", { body }, [prLeases.get(keyFor(repo, pr))].filter(Boolean))
-    if (!ok || !Number.isSafeInteger(value?.id) || value.id <= 0 || value.body !== body)
-      throw new DeliveryError("GitHub comment acknowledgement missing", 1)
-  }
   function requireKnownCi(ci) {
     if (ci.state === "provider-unknown") throw Object.assign(new DeliveryError("invalid hosted checks response", 1), { state: "unknown" })
     if (ci.state === "superseded") throw new DeliveryError("SUPERSEDED: HEAD MOVED during checks; observe current head", 1)
@@ -215,35 +174,6 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
   }
   function requireOpen(pr) {
     if (pr.state !== "OPEN") throw new DeliveryError(`NOT OPEN (${pr.state}): no repair or review work`, 8)
-  }
-  async function authenticateReview(repo, pr, candidate) {
-    const id = /^Factory-Review: ([0-9a-f-]{36})$/m.exec(candidate.body)?.[1]
-    if (!id) return false // Imported/handwritten approvals require a new factory review.
-    const receipt = await readJson(path.join(config.stateDir, "reviews", `${id}.json`), null)
-    if (!receipt || receipt.schema !== "factory-review/v1" || receipt.repo !== repo || receipt.pr !== pr ||
-        receipt.head !== candidate.sha || receipt.verdict !== candidate.verdict || receipt.commentDigest !== digestOf(candidate.body) ||
-        ![1, 2, 3].includes(receipt.tier) || !receipt.sourceVerified) return false
-    const decision = await fs.readFile(receipt.decision?.file ?? "", "utf8").catch(() => null)
-    if (decision === null || digestOf(decision) !== receipt.decision.digest) return false
-    // Tier 1 is authenticated by its decision record; tiers 2-3 by the model execution.
-    if (receipt.tier === 1) {
-      const route = JSON.parse(decision)
-      if (route.tier !== 1 || route.decision?.head !== receipt.head) return false
-    } else {
-      if (receipt.execution?.code !== 0 || !receipt.execution?.pid) return false
-      const prompt = await fs.readFile(path.join(config.stateDir, "reviews", `${id}.prompt`), "utf8").catch(() => null)
-      const output = await fs.readFile(receipt.output, "utf8").catch(() => null)
-      if (prompt === null || output === null || digestOf(prompt) !== receipt.promptDigest || digestOf(output) !== receipt.outputDigest) return false
-      if (!receipt.input?.binding || receipt.input.binding.head!==receipt.head || receipt.input.binding.tree!==receipt.tree ||
-          receipt.input.binding.repo!==repo || receipt.input.binding.pr!==pr) return false
-      try {
-        if(digestOf(await fs.readFile(receipt.input.manifest,"utf8"))!==receipt.input.digest)return false
-        await readReviewEvidence(receipt.input.manifest,receipt.input.binding)
-      } catch {return false}
-    }
-    const source = await command(["git", "rev-parse", `${receipt.head}^{tree}`], getRepo(repo).checkout, { allowFailure: true })
-    if (source.code || source.stdout.trim() !== receipt.tree) return false
-    return true
   }
   async function log(event) {
     await fs.mkdir(config.stateDir, { recursive: true, mode: 0o700 })
@@ -261,14 +191,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     return wait
   }
   async function eligible(repo, pr, head) {
-    try { await deliveryWait(config, repo, pr, await waitInput(repo, pr, head), null, budget()) }
-    catch (error) {
-      if (error.wait?.cause === "budget-exhausted") {
-        const usage = await readJson(path.join(config.stateDir, "usage.json"), [])
-        error.builderEscalation = usage.some(row => row.repo === repo && row.pr === pr && ["fix", "ci-fix"].includes(row.kind) && row.at >= Date.now() - 86400_000)
-      }
-      throw error
-    }
+    await deliveryWait(config, repo, pr, await waitInput(repo, pr, head), null, budget())
   }
   async function waitChecks(repo, pr, head, completedOnly = false, initial) {
     const phase = budget().phaseBudget("readiness", config.checksTimeoutMs)
@@ -276,7 +199,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       const current = initial ?? await view(repo, pr)
       initial = null
       requireOpen(current)
-      if (current.headRefOid !== head) throw new DeliveryError("HEAD MOVED during checks; needs fresh review", 1)
+      if (current.headRefOid !== head) throw new DeliveryError("HEAD MOVED during checks; observe the new candidate", 1)
       const ci = current.ci
       requireKnownCi(ci)
       if (ci.state === "failure" && !ci.repairable) throw new DeliveryError("CI REQUIRED CHECK REFUSED: rerun current required check", 3)
@@ -369,17 +292,12 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     validateProcessRequest(argv, config.limits.timeoutMs)
     await fs.mkdir(path.join(config.stateDir,"attempts"),{recursive:true,mode:0o700})
     attemptDirectory ??= await fs.mkdtemp(path.join(config.stateDir,"attempts","job-"))
-    await validateLaunchOutput(argv,attemptDirectory,cwd,env)
     head ??= (await view(repo, pr)).headRefOid
-    const suspended = await readJson(path.join(config.stateDir, "waits", `${keyFor(repo, pr)}.json`), null)
-    if (["fix", "ci-fix"].includes(kind) && suspended?.cause === "budget-exhausted" &&
-        !await readJson(path.join(config.stateDir, "escalations", `${keyFor(repo, pr)}.json`), null))
-      await completeDeliveryWait(config, repo, pr, budget())
     await eligible(repo, pr, head)
     await requireNotCancelled(repo, pr, head)
     const attemptId = randomUUID()
     const effectId = deliveryEffectId({ repo, pr, head, action: kind + ":" + attemptId })
-    let release, compute, mutationPending = false, escalating = false
+    let release, compute, mutationPending = false
     try {
       if (!config.resources) throw new DeliveryError("resource configuration required before child admission", 9)
       const queue = budget().phaseBudget("queue", config.queueTimeoutMs)
@@ -387,31 +305,16 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
         compute = await reserveCompute(config,
           config.resources.agentUnits + config.resources.browserConcurrency, queue, { agentUnits: config.resources.agentUnits })
         const admission = { beforeAdmission: () => requireNotCancelled(repo, pr, head), identity: { attemptId, effectId, head } }
-        try { release = await reserveCodex(config, repo, pr, kind, queue, admission) }
-        catch (error) {
-          if (error.cause !== "budget-exhausted" || !["fix", "ci-fix"].includes(kind)) throw error
-          escalating = true
-          argv = [config.claude?.command ?? "claude", "-p", "--model", "opus", "--permission-mode", "acceptEdits", "--allowedTools", "Bash Edit Write Read Glob Grep"]
-          route = { model: "opus", effort: "high" }
-          release = await reserveCodex({ ...config, limits: { ...config.limits, runsPer24h: Number.MAX_SAFE_INTEGER } }, repo, pr, kind, queue, admission)
-        }
+        release = await reserveCodex(config, repo, pr, kind, queue, admission)
       })
       const admitted = await view(repo, pr)
       requireOpen(admitted)
       if (admitted.headRefOid !== head) throw new DeliveryError("SUPERSEDED: HEAD MOVED before child dispatch; observe current head", 1)
-      if (escalating) {
-        const escalation = await reserveBuilderEscalation(config, repo, pr, head)
-        await log({repo,pr,head,step:kind,status:"escalated",lane:escalation.lane})
-      }
       await log({ repo, pr, head, step: kind, status: "started", attemptId: release.attemptId,
         effectId })
       const jobId = randomUUID()
       const job = {id:jobId, ownership:"caller", worktree:cwd, model:route?.model ?? "external", effort:route?.effort ?? "external",
         log:path.join(attemptDirectory,"worker.log"), receipt:path.join(attemptDirectory,"worker.json")}
-      if (escalating) {
-        const file=path.join(config.stateDir,"escalations",`${keyFor(repo,pr)}.json`)
-        await writeJson(file,{...await readJson(file),state:"launch-requested",job})
-      }
       const digest = createHash("sha256")
       // Persist before launch: if the controller disappears there is no final
       // callback to write uncertainty. A completed child retires this marker.
@@ -422,16 +325,18 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
         mutationPending = true
       }
       await beforeExecution?.(job)
-      const runBudget = budget().phaseBudget("execution", config.limits.timeoutMs)
-      const result = await measured("execution", repo, pr, () => deadlines.run(runBudget, () => launchFence(repo, pr, head, () => command(argv, cwd, { input, timeoutMs: config.limits.timeoutMs, allowFailure: true,
-        env:{...env,TMPDIR:attemptDirectory,FACTORY_ATTEMPT_DIR:attemptDirectory}, job, onStarted: receipt => log({repo,pr,step:kind,status:"running",jobId:receipt.id,receipt:job.receipt}),
-        mutation: kind !== "review", captureOutput: false, onOutput: chunk => digest.update(chunk), onSpawn: async (job, signal) => {
-          await requireNotCancelled(repo, pr, head)
-          const bindings = [await release.bindJob(job, signal), ...await compute.bindJob(job, signal)]
-          const prLease = prLeases.get(keyFor(repo, pr))
-          if (prLease) bindings.push(await prLease.bindJob(job, signal))
-          return bindings
-        } }))))
+      const result = await launchFence(repo, pr, head, () => {
+        const runBudget = budget().phaseBudget("execution", config.limits.timeoutMs)
+        return measured("execution", repo, pr, () => deadlines.run(runBudget, () => command(argv, cwd, { input, timeoutMs: config.limits.timeoutMs, allowFailure: true,
+          env:{...env,TMPDIR:attemptDirectory,FACTORY_ATTEMPT_DIR:attemptDirectory}, job, onStarted: receipt => log({repo,pr,step:kind,status:"running",jobId:receipt.id,receipt:job.receipt}),
+          mutation: kind !== "review", captureOutput: false, onOutput: chunk => digest.update(chunk), onSpawn: async (job, signal) => {
+            await requireNotCancelled(repo, pr, head)
+            const bindings = [await release.bindJob(job, signal), ...await compute.bindJob(job, signal)]
+            const prLease = prLeases.get(keyFor(repo, pr))
+            if (prLease) bindings.push(await prLease.bindJob(job, signal))
+            return bindings
+          } })))
+      })
       if (mutationPending && (!afterExecution || result.code)) { await completeDeliveryWait(config, repo, pr, budget()); mutationPending = false }
       const outputDigest = digest.digest("hex")
       await log({ repo, pr, step: kind, status: result.code ? "failed" : "complete", code: result.code,
@@ -461,113 +366,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       })
     }
   }
-  const rawGit = async (cwd, ...args) => (await command(["git", ...args], cwd)).stdout
-  const routeReview = (repo, cwd, base, head) => decideReview({ git: rawGit, cwd, base, head, policy: getRepo(repo).reviewPolicy })
-  async function review(repo, pr) {
-    const initial = await view(repo, pr)
-    requireOpen(initial)
-    let current = await waitChecks(repo, pr, initial.headRefOid, true, initial)
-    current = await fresh(repo, pr, current)
-    requireOpen(current)
-    requireKnownCi(current.ci)
-    if (current.ci.state === "pending") throw new DeliveryError("CI changed before review; wait for checks", 75)
-    const local = getRepo(repo), head = current.headRefOid
-    await git(local.checkout, "fetch", "-q", "origin", "main", head)
-    const attempt = randomUUID()
-    const dir = path.join(local.worktreeRoot, `review-${pr}-${head}-${attempt}`)
-    await fs.mkdir(local.worktreeRoot, { recursive: true })
-    await fs.mkdir(path.join(config.stateDir,"attempts"),{recursive:true,mode:0o700})
-    const attemptDirectory=await fs.mkdtemp(path.join(config.stateDir,"attempts","review-"))
-    const output = path.join(attemptDirectory,"review.txt")
-    await git(local.checkout, "worktree", "add", "-q", "--detach", dir, head)
-    const tree = await git(dir, "rev-parse", "HEAD^{tree}")
-    const unchanged = async () => await git(dir, "rev-parse", "HEAD") === head &&
-      await git(dir, "write-tree") === tree &&
-      !(await git(dir, "status", "--porcelain", "--untracked-files=no"))
-    try {
-      const prior = current.review?.verdict !== "APPROVE" ? current.review : null
-      await git(dir,"fetch","-q","origin",current.baseRefOid)
-      const mergeBase=await git(dir,"merge-base",current.baseRefOid,head)
-      const artifacts = path.join(config.stateDir, "reviews", attempt)
-      await fs.mkdir(path.dirname(artifacts), { recursive: true, mode: 0o700 })
-      const route = await routeReview(repo, dir, mergeBase, head)
-      await writeJson(`${artifacts}.decision.json`, route)
-      await log({ repo, pr, step: "review-tier", head, tier: route.tier, reason: route.reason, decisionDigest: route.digest })
-      const tier = dispatchTier(route, prior)
-      const receipt = { tier, decision: { file: `${artifacts}.decision.json`, digest: digestOf(await fs.readFile(`${artifacts}.decision.json`, "utf8")) } }
-      let body
-      if (tier === 1) body = tierOneVerdict(head, mergeBase, route, current.ci)
-      else {
-        const fixRoute = prior ? await routeReview(repo, dir, prior.sha, head) : null
-        const binding={repo,pr,base:current.baseRefOid,mergeBase,head,tree,observedAt:current.fetchedAt}
-        const manifest=await writeReviewEvidence(path.join(config.stateDir,"reviews",`${attempt}-input`),binding,{
-          description:current.body,diff:await assembleReviewDiff({git:rawGit,cwd:dir,base:binding.mergeBase,head,decision:route.decision}),
-          checks:{head,ci:current.ci,inventory:current.inventory,availability:current.availability,observedAt:current.fetchedAt},
-          ...(prior?{fixDiff:await assembleReviewDiff({git:rawGit,cwd:dir,base:prior.sha,head,decision:fixRoute.decision})}:{})})
-        const inputDigest=digestOf(await fs.readFile(manifest,"utf8"))
-        const evidence=await readReviewEvidence(manifest,binding)
-        const opinions = current.comments.filter(c => c.body.startsWith("SECOND OPINION") && c.body.includes(head)).map(c => c.body)
-        const prompt = deliveryPrompt("review", { repo, pr, head, prior, evidence, tier, decision: route.decision, changedPaths: route.decision?.changed_paths ?? [], opinions })
-        await queueDotReview(config, { repo, pr, head, full: !prior && tier === 3 })
-        const reserved = await fs.open(output, "wx", 0o600)
-        await reserved.close()
-        const role = `review-tier${tier}`, argv = codexArgv(role, "--sandbox", "danger-full-access", "--output-last-message", output, "-")
-        const remotePrompt = prompt.replace(/OWNER-CAPTURED INPUT:[\s\S]*?\nReview only:/, "CAPTURED PUBLIC PR INPUT follows.\nReview only:")
-          .replace(/GitHub observation owner:[\s\S]*?never infer red CI from a query refusal\./, "Read additional public PR evidence from GitHub. Never bypass TLS verification.") +
-          `\nPR description:\n${current.body}\nCode changes and Tests (evidence):\n${await fs.readFile(evidence.files.diff.path, "utf8")}\nHosted checks:\n${await fs.readFile(evidence.files.checks.path, "utf8")}\n${evidence.files.fixDiff ? await fs.readFile(evidence.files.fixDiff.path, "utf8") : ""}`
-        const previousComments = new Set(current.comments.map(c => c.id))
-        const remote = await remoteReview(config, { repo, pr, head, prompt: remotePrompt, output, checkout: local.checkout, model:config.models[role] }, {
-          command, budget: budget(), env, sleep: ms => budget().sleep(ms),
-          observe: async () => {
-            const observed = await view(repo, pr)
-            if (observed.headRefOid !== head) throw new DeliveryError("HEAD MOVED during remote review", 2)
-            const candidate = await latestTrustedReview(observed.comments.filter(c => !previousComments.has(c.id)), local.trustedReviewers, async () => true)
-            return candidate?.sha === head ? candidate.body : null
-          }
-        })
-        const execution = remote ?? await guarded(repo, pr, "review", argv, dir, prompt, head, undefined, undefined, config.models[role], attemptDirectory)
-        if (!(await unchanged()))
-          throw new DeliveryError("reviewer changed pinned source; refusing approval, worktree retained")
-        if(digestOf(await fs.readFile(manifest,"utf8"))!==inputDigest)throw new DeliveryError("review input manifest changed")
-        await readReviewEvidence(manifest,binding)
-        body = await fs.readFile(output, "utf8")
-        const recordedPrompt = remote ? remotePrompt : prompt
-        await fs.writeFile(`${artifacts}.prompt`, recordedPrompt, { mode: 0o600 })
-        Object.assign(receipt, { cwd: dir, argv, execution, input:{manifest,binding,digest:inputDigest},
-          lane: remote?.lane ?? "studio", promptDigest: digestOf(recordedPrompt), output, outputDigest: digestOf(body) })
-      }
-      const parsed = parseReview(body)
-      if (!parsed || parsed.sha !== head || !["APPROVE", "REVIEW: BLOCKED"].includes(parsed.verdict))
-        throw new DeliveryError("invalid reviewer comment format or Reviewed-SHA")
-      const beforePost = await fresh(repo, pr, current)
-      requireOpen(beforePost)
-      if (beforePost.headRefOid !== head) throw new DeliveryError("HEAD MOVED during review; needs fresh review")
-      const comment = `${body.trimEnd()}\nReview-Tier: ${tier}\nReview-Decision: ${route.digest ?? "none"}\nFactory-Review: ${attempt}`
-      await writeJson(`${artifacts}.json`, { schema: "factory-review/v1", repo, pr, head, tree,
-        verdict: parsed.verdict, sourceVerified: true, ...receipt, commentDigest: digestOf(comment) })
-      await postComment(repo, pr, comment)
-      return { head, verdict: parsed.verdict, tier }
-    } finally {
-      // Test artifacts may be untracked; keep a modified tracked source tree for
-      // diagnosis rather than silently discarding an agent's prohibited edit.
-      if (await unchanged())
-        await git(local.checkout, "worktree", "remove", "--force", dir)
-    }
-  }
   const repairFile = (repo, pr) => path.join(config.stateDir,"repairs",`${keyFor(repo,pr)}.json`)
-  const repairReceipt = record => path.join(config.stateDir,"repair-receipts",`${record.id}.json`)
-  async function retainRepair(record) {
-    const file=repairReceipt(record), bytes=JSON.stringify(record)
-    await fs.mkdir(path.dirname(file),{recursive:true,mode:0o700})
-    const temp=`${file}.${randomUUID()}.tmp`
-    await writeJson(temp,record)
-    try {await fs.link(temp,file)}
-    catch(error) {
-      if(error.code!=="EEXIST")throw error
-      if(await fs.readFile(file,"utf8")!==bytes)throw new DeliveryError("terminal repair receipt changed",9)
-    } finally {await fs.unlink(temp)}
-    return file
-  }
   const checkPolicyFor = local => digestOf(JSON.stringify({checks:local.checks,timeoutMs:local.checkTimeoutMs ?? config.checksTimeoutMs}))
   async function verifyRepairSource(repo,pr,record) {
     const local=getRepo(repo),cwd=record.worktree
@@ -622,7 +421,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     // A checked push may have succeeded before its controller died. Any earlier
     // publication is an observed contract violation, never an unpushed claim.
     if(remoteHead!==record.baseHead && !(record.testedHead===record.head && remoteHead===record.head)) {
-      record.remoteHead=remoteHead;await persist("early_publication");await retainRepair(record)
+      record.remoteHead=remoteHead;await persist("early_publication")
       throw new DeliveryError("EARLY PUBLICATION: remote changed before runner-owned checks; reconcile published source",9)
     }
     await repairObservation(repo,pr,record,[record.baseHead,...(record.testedHead===record.head?[record.head]:[])])
@@ -638,8 +437,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
           const id=randomUUID()
           await fs.mkdir(path.join(config.stateDir,"attempts"),{recursive:true,mode:0o700})
           const attemptDirectory=await fs.mkdtemp(path.join(config.stateDir,"attempts","check-"))
-          await validateLaunchOutput(argv,attemptDirectory,cwd,env)
-          record.checkJob={id,ownership:"caller",worktree:cwd,model:"repository-check",effort:"deterministic",
+                record.checkJob={id,ownership:"caller",worktree:cwd,model:"repository-check",effort:"deterministic",
             log:path.join(attemptDirectory,"check.log"),receipt:path.join(attemptDirectory,"check.json")}
           record.checkPolicy=checkPolicy
           await persist("checking")
@@ -655,11 +453,11 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
           record.checks.push({argv,code:result.code,receipt:record.checkJob.receipt})
           remoteHead=await repairRemote(repo,record)
           if(remoteHead!==record.baseHead) {
-            record.remoteHead=remoteHead;await persist("early_publication");await retainRepair(record)
+            record.remoteHead=remoteHead;await persist("early_publication")
             throw new DeliveryError("EARLY PUBLICATION: remote changed during runner checks",9)
           }
           if(result.code) {
-            record.remoteHead=remoteHead;await persist("check_failed");await retainRepair(record)
+            record.remoteHead=remoteHead;await persist("check_failed")
             throw new DeliveryError(`repository check failed (${result.code}); source unpushed at observed remote ${remoteHead}`,result.code)
           }
           delete record.checkJob
@@ -681,14 +479,9 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     record.remoteHead=await repairRemote(repo,record)
     if(record.remoteHead!==record.head)throw new DeliveryError("PUSH PENDING: remote head differs from tested source",1)
     await repairObservation(repo,pr,record,[record.head])
-    const terminal={...record,status:"delivered"},receipt=await retainRepair(terminal)
-    if(config.orchInbox) {
-      await persist("inbox_pending")
-      await command([config.orchInbox.command,"--store",config.orchInbox.store,"inbox","push","PlatformEngineer",`${repo}#${pr}`,"delivered","--report",receipt],cwd,{captureOutput:false})
-    }
-    record=terminal;await writeJson(file,record)
-    await log({repo,pr,step:"repair-delivery",status:"delivered",head:record.head,testedHead:record.testedHead,remoteHead:record.remoteHead,receipt})
-    return {head:record.head,receipt}
+    record={...record,status:"delivered"};await writeJson(file,record)
+    await log({repo,pr,step:"repair-delivery",status:"delivered",head:record.head,remoteHead:record.remoteHead})
+    return {head:record.head}
   }
   async function reconcileBuilder(repo,pr,record) {
     const job=await terminalJob(record.builderJob,"BUILDER"),cwd=record.worktree
@@ -737,7 +530,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       await verifyRepairSource(repo,pr,prior)
       if(await repairRemote(repo,prior)!==prior.baseHead)throw new DeliveryError("corrective repair remote moved",9)
       await repairObservation(repo,pr,prior,[prior.baseHead])
-      await retainRepair(prior)
+      await log({repo,pr,step:"repair",status:prior.status,head:prior.head})
       await completeDeliveryWait(config,repo,pr,budget())
     }
     if (kind === "ci-fix" && !corrective) {
@@ -759,7 +552,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       prompt,current.headRefOid,async compute=>{
         const head=await git(cwd,"rev-parse","HEAD")
         if(head===inputHead) {
-          record={...record,status:"no_progress"};await writeJson(repairFile(repo,pr),record);await retainRepair(record)
+          record={...record,status:"no_progress"};await writeJson(repairFile(repo,pr),record)
           const error=new DeliveryError("NO-PROGRESS: fix produced no commit",2)
           error.wait=await suspend(repo,pr,current.headRefOid,{cause:"source-no-progress",code:2,message:error.message,resetAt:null})
           throw error
@@ -841,12 +634,12 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
   }
   async function enqueue(repo, pr, head, note = "", mode = "manual") {
     getRepo(repo)
-    if (!SHA.test(head)) throw new DeliveryError("approved SHA must be a full commit SHA")
+    if (!SHA.test(head)) throw new DeliveryError("candidate SHA must be a full commit SHA")
     if (await cancelled(repo, pr, head)) return { message: "QUEUED WORK CANCELLED", enqueued: false }
     if (mode !== "import") {
       const current = await view(repo, pr)
       requireOpen(current)
-      if (current.headRefOid !== head || current.review?.verdict !== "APPROVE" || current.review.sha !== head ||
+      if (current.headRefOid !== head ||
           current.ci.state !== "success" || current.mergeable !== "MERGEABLE" || current.isDraft)
         throw new DeliveryError("enqueue preconditions not satisfied", 4)
     }
@@ -877,7 +670,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
   }
   // A durable intent is never resent on missing acknowledgement. Provider state
   // must reconcile it first; confirmed refusals may be retried with a new attempt.
-  async function mutation(repo, pr, head, action, fields, owners, { reconcileOnly = false, publication = "review" } = {}) {
+  async function mutation(repo, pr, head, action, fields, owners, { reconcileOnly = false } = {}) {
     const id = effectIdentity(repo, pr, head, action, fields)
     const file = path.join(config.stateDir, "effects", `${id}.json`)
     return withLease(locks, `effect-${id}`, async () => {
@@ -888,12 +681,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
         throw new DeliveryError("invalid persisted effect binding", 9)
       const observeEffect = async () => {
         const current = await view(repo, pr)
-        if (action === "comment") {
-          // Delivery notes do not authorize review or merge; their exact body
-          // is the effect. Approval envelopes still require a trusted author.
-          const match = current.comments.find(c => c.body === fields.body && (publication === "delivery" || getRepo(repo).trustedReviewers.some(login => login.toLowerCase() === c.user.login.toLowerCase())))
-          if (match) return { ok: true, status: 201, value: { id: match.id, body: fields.body } }
-        } else if (action === "merge" && current.state === "MERGED") {
+        if (current.state === "MERGED") {
           return { ok: true, status: 200, value: { merged: true, sha: current.mergeCommit.oid } }
         }
         return null
@@ -929,8 +717,8 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
         await writeJson(file, record)
         return unresolved(async () => {
           await onTransition(`provider:${action}:requested`, record)
-          const route = action === "comment" ? `issues/${pr}/comments` : `pulls/${pr}/merge`
-          const result = await provider.mutate(repo, action === "comment" ? "POST" : "PUT", route, fields, owners).catch(async error => {
+          const route = `pulls/${pr}/merge`
+          const result = await provider.mutate(repo, "PUT", route, fields, owners).catch(async error => {
             // An explicit write refusal or proven non-launch is known. A failed
             // reconciliation read is handled separately and remains uncertain.
             if (error.uncertain === false || error.state === "auth_error") {
@@ -940,8 +728,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
             throw error
           })
           await onTransition(`provider:${action}:returned`, record)
-          if (result.ok && (action === "comment" ? Number.isSafeInteger(result.value?.id) && result.value.id > 0 && result.value.body === fields.body
-              : result.value?.merged === true && SHA.test(result.value.sha ?? ""))) return acknowledge(result)
+          if (result.ok && result.value?.merged === true && SHA.test(result.value.sha ?? "")) return acknowledge(result)
           if (result.transient || result.ok) return acknowledge(await reconcile())
           await writeJson(file, { ...record, state: "refused", status: result.status })
           return result
@@ -949,47 +736,36 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       })
     }, { budget: budget() })
   }
-  async function verifyApprovedHead(local, head, old, main = "origin/main") {
+  async function verifyCandidateHead(local, head, old, main = "origin/main") {
     let cursor = head, hops = 0
     while (cursor !== old) {
-      if (++hops > 6) throw new DeliveryError("HEAD IS NOT A MAIN-MERGE OF THE APPROVED HEAD; needs fresh review")
+      if (++hops > 6) throw new DeliveryError("HEAD IS NOT A MAIN-MERGE OF THE CANDIDATE HEAD; observe the new candidate")
       const parents = (await git(local.checkout, "show", "-s", "--format=%P", cursor)).split(" ")
-      if (parents.length !== 2) throw new DeliveryError("NON-MERGE COMMIT after approval; needs fresh review")
+      if (parents.length !== 2) throw new DeliveryError("NON-MERGE COMMIT after the candidate; observe the new candidate")
       const [first, second] = parents
       if ((await command(["git", "merge-base", "--is-ancestor", second, main], local.checkout, { allowFailure: true })).code)
-        throw new DeliveryError("SECOND PARENT NOT ON MAIN; needs fresh review")
+        throw new DeliveryError("SECOND PARENT NOT ON MAIN; observe the new candidate")
       const tree = (await git(local.checkout, "merge-tree", "--write-tree", second, first)).split("\n")[0]
       if (tree !== await git(local.checkout, "rev-parse", `${cursor}^{tree}`))
-        throw new DeliveryError("MERGE HAS HAND EDITS; needs fresh review", 2)
+        throw new DeliveryError("MERGE HAS HAND EDITS; observe the new candidate", 2)
       cursor = first
     }
   }
-  async function verifyDelivery(repo, pr, observed, approvedHead, base = null) {
+  async function verifyDelivery(repo, pr, observed, candidateHead, base = null) {
     const local = getRepo(repo), commit = observed.mergeCommit?.oid
     supportedBase(observed)
     if (observed.state !== "MERGED" || !SHA.test(commit ?? "")) throw new DeliveryError("MERGE VERIFY: invalid merged commit", 7, true)
     await git(local.checkout, "fetch", "-q", "origin", "main", observed.headRefOid)
-    await verifyApprovedHead(local, observed.headRefOid, approvedHead)
+    await verifyCandidateHead(local, observed.headRefOid, candidateHead)
     if ((await command(["git", "merge-base", "--is-ancestor", commit, "origin/main"], local.checkout, { allowFailure: true })).code)
       throw new DeliveryError("MERGE NOT ON MAIN", 7, true)
     const parents = (await git(local.checkout, "show", "-s", "--format=%P", commit)).split(" ")
     if (parents.length !== 1) throw new DeliveryError("MERGE SOURCE VERIFY: expected squash commit", 7)
-    if (base && parents[0] !== base) throw new DeliveryError("MERGE BASE VERIFY: delivered onto a base the integrated review never saw", 7)
+    if (base && parents[0] !== base) throw new DeliveryError("MERGE BASE VERIFY: delivered onto a base the candidate did not include", 7)
     const expected = (await git(local.checkout, "merge-tree", "--write-tree", parents[0], observed.headRefOid)).split("\n")[0]
     if (expected !== await git(local.checkout, "rev-parse", `${commit}^{tree}`))
       throw new DeliveryError("MERGE SOURCE VERIFY: delivered tree does not match PR", 7)
     return { message: `${repo}#${pr} MERGED ${commit} (on main, source verified)`, mergeCommit: commit, merged: true }
-  }
-  // GitHub must itself refuse a merge once main is no longer an ancestor of the
-  // reviewed head; no local comparison can close the race with other writers.
-  async function requireServerUpToDate(repo) {
-    for (const rule of await provider.pages(repo, "rules/branches/main", { rowKey: row => `${row?.ruleset_id}:${row?.type}` })) {
-      if (rule?.type !== "required_status_checks" || rule.parameters?.strict_required_status_checks_policy !== true ||
-          !Number.isSafeInteger(rule.ruleset_id)) continue
-      const ruleset = (await provider.request(repo, `rulesets/${rule.ruleset_id}`)).value
-      if (ruleset?.enforcement === "active" && ruleset.current_user_can_bypass === "never") return
-    }
-    throw new DeliveryError("INTEGRATION BASE NOT SERVER-ENFORCED: main needs an active strict required-status-checks rule the merger cannot bypass", 9)
   }
   const integrationRecord = (repo, pr, head) => path.join(config.stateDir, "integrations", `${keyFor(repo, pr)}-${head}.json`)
   async function integrationBase(repo, pr, head) {
@@ -1006,7 +782,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     return value
   }
   function branchUpdatePending() {
-    const error = new DeliveryError("UPDATE-BRANCH PENDING: await changed head before review or CI", 6, true)
+    const error = new DeliveryError("UPDATE-BRANCH PENDING: await changed head before CI", 6, true)
     error.pendingUpdate = true
     return error
   }
@@ -1026,13 +802,13 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
         if (current) requireOpen(current)
         if (current && current.headRefOid !== pending.head) {
           await git(local.checkout, "fetch", "-q", "origin", current.headRefOid, pending.head, pending.base)
-          await verifyApprovedHead(local, current.headRefOid, pending.head, pending.base)
+          await verifyCandidateHead(local, current.headRefOid, pending.head, pending.base)
           if ((await command(["git", "merge-base", "--is-ancestor", pending.base, current.headRefOid], local.checkout, { allowFailure: true })).code)
-            throw new DeliveryError("UPDATED HEAD DOES NOT INCLUDE REQUESTED MAIN; needs fresh review", 2)
+            throw new DeliveryError("UPDATED HEAD DOES NOT INCLUDE REQUESTED MAIN; observe the new candidate", 2)
           // Verified readback resolves this intent; the old head now needs a
           // terminal fresh-review outcome rather than further reconciliation.
           await fs.unlink(updateRecord(repo, pr, pending.head))
-          throw new DeliveryError("INTEGRATION UPDATED; needs fresh review and CI of the integrated tree", 2)
+          return { updated: true, head: current.headRefOid, message: "INTEGRATION UPDATED; await CI on the new head" }
         }
         if (Date.now() >= until) throw branchUpdatePending()
         await budget().sleep(config.pollMs)
@@ -1042,14 +818,9 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       throw error
     }
   }
-  // A FREEZE leaves the entry queued and untouched: exit 75, retried next pass.
-  async function requireUnfrozen(repo, pr, title) {
-    const freeze = freezeFor(await readHolds(config.holdsFile), repo, title)
-    if (freeze) throw new DeliveryError(`FREEZE ${repo}#${pr}: ${freeze.reason}`, 75)
-  }
   async function mergeOne(repo, pr, old, note, owners, retry = false) {
     const local = getRepo(repo)
-    if (!SHA.test(old)) throw new DeliveryError("approved SHA must be a full commit SHA")
+    if (!SHA.test(old)) throw new DeliveryError("candidate SHA must be a full commit SHA")
     const pending = await pendingUpdate(repo, pr, old)
     if (pending) return reconcileUpdate(repo, pr, pending)
     let current = await view(repo, pr)
@@ -1061,27 +832,17 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       return delivered
     }
     if (current.state !== "OPEN") throw new DeliveryError(`${repo}#${pr} NOT OPEN (${current.state})`, 8)
-    await requireUnfrozen(repo, pr, current.title)
     if (current.isDraft) throw new DeliveryError("DRAFT: integration requires a published candidate", 8)
-    if (current.review?.verdict !== "APPROVE" || current.review.sha !== old)
-      throw new DeliveryError(`NO INDEPENDENT APPROVE for ${old}`, 4)
     if (current.mergeable === "UNKNOWN") throw new DeliveryError("MERGEABILITY UNKNOWN: wait for provider observation", 75)
-    if (current.headRefOid !== old) throw new DeliveryError("HEAD CHANGED after integration; needs fresh review", 2)
+    if (current.headRefOid !== old) throw new DeliveryError("HEAD CHANGED after integration; observe the new candidate", 2)
     await git(local.checkout, "fetch", "-q", "origin", "main", current.headRefOid, old)
     if (current.mergeStateStatus === "DIRTY" || current.mergeable === "CONFLICTING")
-      throw new DeliveryError("CONFLICT with main; needs a builder merge + fresh review", 5)
+      throw new DeliveryError("CONFLICT with main; needs a builder merge", 5)
     const ancestor = await command(["git", "merge-base", "--is-ancestor", current.base.sha, current.headRefOid], local.checkout, { allowFailure: true })
-    let disjoint = false
-    if (ancestor.code && !env.FORCE_UPDATE && !retry) {
-      const mergeBase = await git(local.checkout, "merge-base", current.base.sha, old)
-      const changed = new Set((await git(local.checkout, "diff", "--name-only", mergeBase, old)).split("\n").filter(Boolean))
-      const upstream = (await git(local.checkout, "diff", "--name-only", mergeBase, current.base.sha)).split("\n").filter(Boolean)
-      disjoint = !upstream.some(file => changed.has(file)) && !(await command(["git", "merge-tree", "--write-tree", current.base.sha, old], local.checkout, { allowFailure: true })).code
-    }
-    if (ancestor.code && !disjoint) {
+    if (ancestor.code) {
       current = await fresh(repo, pr, current)
       requireOpen(current)
-      if (current.review?.verdict !== "APPROVE" || current.review.sha !== old || current.isDraft)
+      if (current.isDraft)
         throw new DeliveryError("update-branch preconditions changed", 4)
       const pending = { schema: "factory-branch-update/v1", repo, pr, head: current.headRefOid, base: current.base.sha,
         attemptId: randomUUID(), effectId: deliveryEffectId({ repo, pr, head: old, action: "update-branch:" + current.base.sha }) }
@@ -1098,38 +859,23 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       })
       if (update.ok || update.transient) return reconcileUpdate(repo, pr, pending)
       await fs.unlink(updateRecord(repo, pr, old))
-      if (update.status === 422) throw new DeliveryError("UPDATE-BRANCH FAILED; needs a builder integration + fresh review", 5)
+      if (update.status === 422) throw new DeliveryError("UPDATE-BRANCH FAILED; needs a builder integration", 5)
       throw new DeliveryError(`UPDATE-BRANCH REFUSED (HTTP ${update.status})`, 6)
     }
     const head = current.headRefOid
     const base = current.base.sha
     await waitChecks(repo, pr, head)
     current = await view(repo, pr)
-    if (current.headRefOid !== head) throw new DeliveryError("HEAD MOVED during checks; needs fresh review")
+    if (current.headRefOid !== head) throw new DeliveryError("HEAD MOVED during checks; observe the new candidate")
     requireOpen(current)
     if (current.mergeable !== "MERGEABLE") throw new DeliveryError("MERGEABILITY NOT READY", 75)
-    const approval = current.review
     const finalCi = current.ci
     requireKnownCi(finalCi)
     if (finalCi.state !== "success") throw new DeliveryError(`NONGREEN on ${head}`, 3)
-    if (!approval || approval.verdict !== "APPROVE" || approval.sha !== old)
-      throw new DeliveryError(`NO INDEPENDENT APPROVE for ${old}`, 4)
-    if (!disjoint) await requireServerUpToDate(repo)
     await git(local.checkout, "fetch", "-q", "origin", "main")
     if (await git(local.checkout, "rev-parse", "origin/main") !== base)
-      throw new DeliveryError("INTEGRATION BASE MOVED; needs fresh integration, review and CI", 2)
-    await requireUnfrozen(repo, pr, current.title)
+      throw new DeliveryError("INTEGRATION BASE MOVED; needs fresh integration and CI", 2)
     await writeJson(integrationRecord(repo, pr, head), { schema: "factory-integration/v1", repo, pr, head, base })
-    const evidence = await mutation(repo, pr, head, "comment", { body: `DELIVERY VERIFIED\nSource-SHA: ${head}\nIntegration-Base: ${base}\n\nExact integrated head, independent review and hosted checks verified. ${note}` }, owners, { publication: "delivery" })
-    if (!evidence.ok) throw new DeliveryError("DELIVERY EVIDENCE REFUSED" + (evidence.transient ? ": transient service error" : ""), 6, evidence.transient)
-    // The reviewed source and all mutable predicates are checked again after
-    // publishing evidence. REST's sha field is the provider's final head CAS.
-    const beforeMerge = await fresh(repo, pr, current)
-    if (beforeMerge.isDraft || beforeMerge.mergeable !== "MERGEABLE" || beforeMerge.ci.state !== "success" ||
-        beforeMerge.review?.verdict !== "APPROVE" || beforeMerge.review.sha !== old) {
-      await log({ step: "precondition", repo, pr, staleActions: 1, nextAction: "observe-current-checks-and-review" })
-      throw new DeliveryError("MERGE PRECONDITIONS CHANGED: observe current draft, checks and review", 4)
-    }
     const result = await mutation(repo, pr, head, "merge", { merge_method: "squash", sha: head }, owners)
     if (!result.ok) {
       if (result.transient) {
@@ -1154,7 +900,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     }
     throw lastError
   }
-  const integrationLane = (repo, fn) => withLease(locks, `merge-${encodeURIComponent(repo)}`, fn, { budget: budget() })
+  const integrationLane = (repo, fn) => withLease(locks, "delivery-worker", fn, { budget: budget() })
   const prWriter = (repo, pr, fn) => withLease(locks, `pr-${keyFor(repo, pr)}`, fn, { budget: budget() })
   async function unresolvedIntent(repo, pr, head) {
     if (await pendingUpdate(repo, pr, head)) return true
@@ -1230,75 +976,10 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
           : orphanLeases ? "wait-for-supervised-child-or-recover-lease" : owned ? "reconcile-provider" : "consume-pending" }
     })
   }
-  const enqueueOwner = fn => withLease(locks, "enqueue-owner", fn, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget: budget() })
-  async function enqueueObserved(repo, current, eventHead, mode = "automatic") {
-    if (eventHead && eventHead !== current.headRefOid) return { enqueued: false }
-    if (holdFor(await readHolds(config.holdsFile), repo, current.title)) return { enqueued: false }
-    const approval = current.review
-    if (current.state !== "OPEN" || approval?.verdict !== "APPROVE" || approval.sha !== current.headRefOid || current.mergeable !== "MERGEABLE") return { enqueued: false }
-    const ci = current.ci
-    requireKnownCi(ci)
-    if (ci.state !== "success") return { enqueued: false }
-    return enqueue(repo, current.number, current.headRefOid, "auto-enqueued: approved head + green", mode)
-  }
-  async function autoEnqueue(repos) {
-    let count = 0, retryAt = null
-    for (const repo of repos) {
-      // Each repository lane keeps its own deadline, persisted before scanning
-      // so a restart cannot spend another scan immediately.
-      const file = path.join(config.stateDir, "reconciliation", `${encodeURIComponent(repo)}.json`)
-      const previous = await readJson(file, null)
-      if (previous?.retryAt > Date.now()) { retryAt = Math.min(retryAt ?? Infinity, previous.retryAt); continue }
-      await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
-      await writeJson(file, { retryAt: Date.now() + Math.max(300_000, config.autoPollMs) })
-      const holds = await readHolds(config.holdsFile)
-      const prs = await provider.pages(repo, "pulls?state=open")
-      for (const raw of prs) {
-        if (raw.base?.ref !== "main" || raw.comments === 0) continue
-        if (holdFor(holds, repo, raw.title)) continue
-        const snapshot = await observe(repo, raw.number, { requireApproval: true })
-        if (snapshot.state === "refused") continue
-        if (snapshot.state !== "known") throw observationError(snapshot)
-        const current = { ...snapshot, state: snapshot.prState }
-        if (current.state !== "OPEN" || current.mergeable !== "MERGEABLE" || current.isDraft ||
-            current.review?.verdict !== "APPROVE" || current.review.sha !== current.headRefOid || current.ci.state !== "success") continue
-        if ((await enqueue(repo, current.number, current.headRefOid, "auto-enqueued: approved head + green", "automatic")).enqueued) count++
-      }
-    }
-    return retryAt && !count ? { message: "RECONCILIATION WAIT", retryAt } : { message: `AUTO-ENQUEUED ${count}` }
-  }
   async function discoverDelivery(repo) {
-    const file = path.join(config.stateDir, "discovery", `${encodeURIComponent(repo)}.json`)
-    const previous = await readJson(file, null)
-    if (previous?.retryAt > Date.now()) return { candidates: [], retryAt: previous.retryAt }
-    await writeJson(file, { retryAt: Date.now() + Math.max(300_000, config.autoPollMs) })
-    const open = (await provider.pages(repo, "pulls?state=open")).filter(p => p.base?.ref === "main" && !p.draft)
-    const holds = await readHolds(config.holdsFile)
-    const ready = new Set()
-    for (const raw of open) {
-      if (!raw.comments || holdFor(holds, repo, raw.title)) continue
-      const current = await view(repo, raw.number)
-      if (current.review?.verdict === "APPROVE" && current.review.sha === current.headRefOid && current.ci.state === "success") ready.add(raw.number)
-    }
-    await withLease(locks, "legacy-import", async () => {
-      const file = path.join(config.stateDir, "inflight.json"), jobs = await readJson(file, {})
-      for (const raw of open) {
-        if (holdFor(holds, repo, raw.title)) continue
-        const key = keyFor(repo, raw.number)
-        if (ready.has(raw.number)) { if (jobs[key]) jobs[key].status = "complete"; continue }
-        if (!jobs[key] || jobs[key].head !== raw.head.sha) jobs[key] = { repo, pr: raw.number, head: raw.head.sha, status: "pending", source: "discovery" }
-      }
-      const numbers = new Set(open.map(p => p.number))
-      for (const job of Object.values(jobs)) if (job.repo === repo && !numbers.has(job.pr)) job.status = "complete"
-      await writeJson(file, jobs)
-    }, leaseWait())
-    return { candidates: (await thisRecoveryCandidates()).filter(job => job.repo === repo) }
+    const open = await provider.pages(repo, "pulls?state=open")
+    return { candidates: open.filter(pr => pr.base?.ref === "main" && !pr.draft).map(pr => ({ repo, pr: pr.number })) }
   }
-  async function thisRecoveryCandidates() {
-    const jobs = await readJson(path.join(config.stateDir, "inflight.json"), {})
-    return Object.values(jobs).filter(job => job.status === "pending").map(({repo,pr}) => ({repo,pr}))
-  }
-  const importLegacy = root => importLegacyDelivery(config, root)
   return {
     config,
     async recoveryCandidates() {
@@ -1315,9 +996,6 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
           if (directory === "repairs" ? !["delivered","no_progress"].includes(record.status) : ["suspended","resumable"].includes(record.status))
             candidates.set(keyFor(record.repo,record.pr),{repo:record.repo,pr:record.pr,...(directory === "repairs" ? {repairId:record.id} : {})})
         }
-      }
-      for (const record of Object.values(await readJson(path.join(config.stateDir, "inflight.json"), {}))) {
-        if (record.status === "pending" && config.repos[record.repo]) candidates.set(keyFor(record.repo, record.pr), { repo: record.repo, pr: record.pr })
       }
       return [...candidates.values()]
     },
@@ -1347,16 +1025,13 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
               }
               await eligible(repo, pr, current.headRefOid)
               current = await waitChecks(repo, pr, current.headRefOid, true, current)
-              const review = current.review
-              const approved = review?.verdict === "APPROVE" && review.sha === current.headRefOid
               const ci = current.ci
               if (ci.state === "success" && current.mergeable === "UNKNOWN") throw new DeliveryError("MERGEABILITY UNKNOWN: wait for provider observation", 75)
-              const ready = approved && current.mergeable === "MERGEABLE" && ci.state === "success"
-              data = { head: current.headRefOid, approved, ready, state: ci.state === "success" ? "green" : ci.state === "failure" ? "red" : ci.state, repairable: ci.repairable === true, mergeable: current.mergeable, blocked: review?.sha === current.headRefOid && ["BLOCK", "REVIEW: BLOCKED", "CHANGES REQUESTED"].includes(review?.verdict) }
+              const ready = current.mergeable === "MERGEABLE" && ci.state === "success"
+              data = { head: current.headRefOid, ready, repairable: ci.repairable === true }
 
               break
             }
-            case "review": data = await review(repo, pr); break
             case "github-logs": data = {body: (await provider.request(repo, `actions/jobs/${request.job}/logs`, {format:"text"})).value}; break
             case "github-read": data = { body: (await provider.request(repo, request.route)).value }; break
             case "repair-status": data = await readJson(repairFile(repo,pr),{status:"absent"});
@@ -1374,10 +1049,6 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
               break
             case "pr:complete":
               await completeDeliveryWait(config, repo, pr, budget())
-              await withLease(locks, "legacy-import", async () => {
-                const file = path.join(config.stateDir, "inflight.json"), jobs = await readJson(file, {})
-                if (jobs[keyFor(repo, pr)]) { jobs[keyFor(repo, pr)].status = "complete"; await writeJson(file, jobs) }
-              }, leaseWait())
               data = {}; break
             case "fix": case "ci-fix": data = await fix(repo, pr, step, worktree, request.repairId); break
             case "ci-retrigger": data = await retriggerCi(repo, pr); break
@@ -1386,14 +1057,13 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
             case "queue-cancel": data = await cancelQueued(repo, pr, head); break
             case "queue-status": data = await queueSummary(); break
             case "enqueue": data = await enqueue(repo, pr, head, note); break
-            case "enqueue-event": data = await enqueueOwner(async () => {
-              const current = await view(repo, pr, {observeChecks:false})
-              if (head && head !== current.headRefOid) return {enqueued:false}
-              return enqueueObserved(repo, await view(repo, pr), head, "event")
-            }); break
-            case "auto-enqueue": data = await enqueueOwner(() => autoEnqueue(repo ? [repo] : Object.keys(config.repos))); break
+            case "enqueue-event": {
+              const current = await view(repo, pr)
+              if (head && head !== current.headRefOid) data = { enqueued: false }
+              else data = await enqueue(repo, pr, current.headRefOid, note)
+              break
+            }
             case "delivery-scan": data = await discoverDelivery(repo); break
-            case "import-legacy": data = await importLegacy(request.root); break
             case "merge-one-core":
               data = await integrationLane(repo, lane => prWriter(repo, pr, writer => mergeOne(repo, pr, head, note ?? "", [lane, writer]))); break
             case "merge-queue": {
