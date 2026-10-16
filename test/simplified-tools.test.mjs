@@ -153,3 +153,18 @@ test("a failed cleanup is reported as a failed job", async () => {
   assert.equal(result.events.at(-1).step, "cleanup");
   assert.equal(result.events.at(-1).status, "fail");
 });
+
+test("a queued check cancels without acquiring a slot", async (t) => {
+  const root = await temporary(t),
+    controller = new AbortController();
+  const first = await reserveCheck({ root, capacity: 1 });
+  try {
+    const queued = reserveCheck({ root, capacity: 1, signal: controller.signal });
+    controller.abort();
+    await assert.rejects(queued, { code: 130 });
+  } finally {
+    await first.release();
+  }
+  const next = await reserveCheck({ root, capacity: 1 });
+  await next.release();
+});

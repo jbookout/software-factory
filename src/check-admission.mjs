@@ -5,7 +5,8 @@ import { acquireLease } from "./pr-delivery-state.mjs";
 
 export async function reserveCheck({
   root = path.join(os.homedir(), ".cache/software-factory/checks"),
-  budget = new Deadline(3600_000),
+  signal,
+  budget = new Deadline(3600_000, { signal }),
   capacity = 3,
 } = {}) {
   if (!Number.isInteger(capacity) || capacity < 1 || capacity > 3)

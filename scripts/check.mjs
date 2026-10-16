@@ -18,7 +18,7 @@ process.on("SIGINT", cancel);
 process.on("SIGTERM", cancel);
 let admission;
 try {
-  admission = await reserveCheck();
+  admission = await reserveCheck({ signal: controller.signal });
   for (const name of selected) {
     if (!classes[name]) throw new Error(`unknown check class ${name}`);
     const result = await runVerification({
@@ -37,6 +37,9 @@ try {
       break;
     }
   }
+} catch (error) {
+  if (!controller.signal.aborted) throw error;
+  process.exitCode = 130;
 } finally {
   await admission?.release();
   process.off("SIGINT", cancel);
