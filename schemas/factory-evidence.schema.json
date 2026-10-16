@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jbookout/software-factory/schemas/factory-evidence.schema.json",
+  "title": "Software factory criterion evidence",
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "digest"],
+      "properties": {
+        "ref": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$" },
+        "digest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "buildDigest"],
+      "properties": {
+        "revision": { "type": "string", "minLength": 1 },
+        "buildDigest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "criterionId", "artifact"],
+      "properties": {
+        "kind": { "const": "observation" },
+        "criterionId": { "type": "string", "minLength": 1 },
+        "artifact": { "$ref": "#/$defs/artifact" }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "criterionId", "revision", "buildDigest", "outcome", "observed", "attachments"],
+      "properties": {
+        "schema": { "const": "factory-observation.v1" },
+        "criterionId": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string", "minLength": 1 },
+        "buildDigest": { "$ref": "#/$defs/sha256" },
+        "outcome": { "enum": ["passed", "failed", "blocked"] },
+        "observed": { "type": "string", "minLength": 1 },
+        "attachments": { "type": "array", "items": { "$ref": "#/$defs/artifact" } }
+      }
+    }
+  }
+}

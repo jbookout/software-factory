@@ -4,19 +4,37 @@
   "type": "module",
   "exports": {
     ".": "./src/index.mjs",
-    "./design-manager": "./src/design-manager.mjs",
-    "./design-settings": "./src/design-settings.mjs",
-    "./design-verify": "./src/design-verify.mjs",
-    "./design-journal": "./src/design-journal.mjs"
+    "./design-manager": {
+      "types": "./src/design-manager.d.mts",
+      "import": "./src/design-manager.mjs"
+    },
+    "./codex-cloud-qualification": {
+      "types": "./src/codex-cloud-qualification.d.mts",
+      "import": "./src/codex-cloud-qualification.mjs"
+    },
+    "./design-settings": {
+      "types": "./src/design-settings.d.mts",
+      "import": "./src/design-settings.mjs"
+    },
+    "./design-verify": {
+      "types": "./src/design-verify.d.mts",
+      "import": "./src/design-verify.mjs"
+    },
+    "./design-journal": {
+      "types": "./src/design-journal.d.mts",
+      "import": "./src/design-journal.mjs"
+    }
   },
   "scripts": {
     "check": "node scripts/check.mjs",
     "test": "node --test --test-concurrency=2",
     "workflow:audit": "node scripts/orch/audit-workflows.mjs",
     "factory": "node ./bin/factory.mjs",
-    "format:check": "oxfmt --check"
+    "format:check": "oxfmt --check",
+    "design-cloud:qualify": "node ./bin/design-cloud-qualify.mjs"
   },
   "dependencies": {
+    "ajv": "8.20.0",
     "yaml": "2.8.3"
   },
   "devDependencies": {
@@ -26,7 +44,8 @@
     "eslint": "10.10.0",
     "marked": "18.0.14",
     "oxfmt": "0.72.0",
-    "tailwindcss": "4.3.3"
+    "tailwindcss": "4.3.3",
+    "typescript": "6.0.3"
   },
   "engines": {
     "node": ">=20.19"
