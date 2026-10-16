@@ -3,7 +3,17 @@ import { reserveCheck } from "../src/check-admission.mjs";
 const classes = {
   node: [process.execPath, "--test", "--test-concurrency=2"],
   browser: ["python3", "capabilities/jev-browser-select/test_select.py"],
-  workflows: [process.execPath, "scripts/orch/audit-workflows.mjs", "."],
+  orchestration: [
+    "python3",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "test/orch",
+    "-p",
+    "test_*.py",
+    "-v",
+  ],
 };
 const args = process.argv.slice(2);
 const focused =

@@ -21,7 +21,17 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Install pinned Python check dependencies
+        run: |
+          python3 -m venv "$RUNNER_TEMP/factory-check"
+          "$RUNNER_TEMP/factory-check/bin/python" -m pip install -r scripts/orch/requirements.txt
+          echo "$RUNNER_TEMP/factory-check/bin" >> "$GITHUB_PATH"
+        timeout-minutes: 5
       - run: npm run check
+
+      - name: Audit installed workflow configuration (non-blocking pilot)
+        continue-on-error: true
+        run: npm run workflow:audit -- .
       - run: npm ci --prefix capabilities/agentic-ui-evaluation/fixture
       - run: npm exec --no -- playwright install --with-deps chromium
         working-directory: capabilities/agentic-ui-evaluation/fixture
