@@ -26,11 +26,10 @@ The factory cannot deploy a product. Installation and previous-version rollback 
 
 ## Design
 
-Use a short brief with an objective, task questions and acceptance tests.
-`createDesignBrief` in `src/design-manager.mjs` offers optional guidance without mandatory stages or gates.
-`verifyDesign` runs the product's own behavioral test commands and retains their results as ordinary logs.
+The Design Manager is unfinished. Read [the plan](docs/design-manager/plan.md) first: its "Read first" section is the agreed shape for finishing it.
+`src/design-manager.mjs` holds the stages, gates and roles; `src/design-verify.mjs` freezes acceptance criteria and checks feature maps; `src/design-journal.mjs` keeps the decision journal.
 Worker settings are editable JSON. See [worker settings](docs/design-manager/settings-cloud.md).
-Design records use private SQLite and ordinary backup. Existing records remain readable. See [journal](docs/design-manager/journal.md).
+Design records use private SQLite and ordinary backup. See [journal](docs/design-manager/journal.md).
 
 ## Jobs and Model Room
 
