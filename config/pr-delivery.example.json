@@ -75,7 +75,7 @@
       }
     }
   },
-  "stateDir": "/absolute/path/to/private/factory-delivery-state",
+  "stateDir": "state",
   "limits": {
     "runsPer24h": 8,
     "slots": 4,
