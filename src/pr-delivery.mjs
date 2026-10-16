@@ -767,6 +767,17 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
       throw new DeliveryError("MERGE SOURCE VERIFY: delivered tree does not match PR", 7)
     return { message: `${repo}#${pr} MERGED ${commit} (on main, source verified)`, mergeCommit: commit, merged: true }
   }
+  // GitHub must itself refuse a merge once main is no longer an ancestor of the
+  // reviewed head; no local comparison can close the race with other writers.
+  async function requireServerUpToDate(repo) {
+    for (const rule of await provider.pages(repo, "rules/branches/main", { rowKey: row => `${row?.ruleset_id}:${row?.type}` })) {
+      if (rule?.type !== "required_status_checks" || rule.parameters?.strict_required_status_checks_policy !== true ||
+          !Number.isSafeInteger(rule.ruleset_id)) continue
+      const ruleset = (await provider.request(repo, `rulesets/${rule.ruleset_id}`)).value
+      if (ruleset?.enforcement === "active" && ruleset.current_user_can_bypass === "never") return
+    }
+    throw new DeliveryError("INTEGRATION BASE NOT SERVER-ENFORCED: main needs an active strict required-status-checks rule the merger cannot bypass", 9)
+  }
   const integrationRecord = (repo, pr, head) => path.join(config.stateDir, "integrations", `${keyFor(repo, pr)}-${head}.json`)
   async function integrationBase(repo, pr, head) {
     const record = await readJson(integrationRecord(repo, pr, head), null)
@@ -875,6 +886,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     await git(local.checkout, "fetch", "-q", "origin", "main")
     if (await git(local.checkout, "rev-parse", "origin/main") !== base)
       throw new DeliveryError("INTEGRATION BASE MOVED; needs fresh integration and CI", 2)
+    await requireServerUpToDate(repo)
     await writeJson(integrationRecord(repo, pr, head), { schema: "factory-integration/v1", repo, pr, head, base })
     const result = await mutation(repo, pr, head, "merge", { merge_method: "squash", sha: head }, owners)
     if (!result.ok) {

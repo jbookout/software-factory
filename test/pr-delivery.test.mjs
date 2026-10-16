@@ -83,6 +83,7 @@ if(['codex','claude'].includes(tool)) {
  if(s.loseUpdateResponse) reply(502,{message:'synthetic lost response'});
  reply(202,{message:'Updating pull request branch.'});
  } else if(name==='merge') {
+ if(s.advanceMainOnMerge) {git('-C',s.checkout,'checkout','-q','main');fs.writeFileSync(s.checkout+'/late-main.txt','late');git('-C',s.checkout,'add','late-main.txt');git('-C',s.checkout,'commit','-qm','External main move');git('-C',s.checkout,'push','-q','origin','main');s.advanceMainOnMerge=false;s.externalMain=git('-C',s.checkout,'rev-parse','HEAD');save();}
  if(body.merge_method!=='squash' || body.sha!==s.headRefOid) reply(409,{message:'Head branch was modified'});
  // Models an active strict ruleset: the provider refuses a head that lacks main.
  const strict=(s.rules??[{parameters:{strict_required_status_checks_policy:true}}]).some(r=>r.parameters?.strict_required_status_checks_policy)
@@ -766,12 +767,25 @@ test('waiting for the launch fence does not consume a healthy command execution 
   ok(await running)
 })
 
-test('ordinary delivery honors repository-owned non-strict required green CI', async t => {
+test('delivery refuses repositories without nonbypassable strict required CI', async t => {
   const f = await fixture(t, { rules: [{type:'required_status_checks',ruleset_id:1,parameters:{strict_required_status_checks_policy:false}}] })
   ok(await f.run('merge-enqueue',repo,'7',f.head))
-  ok(await f.run('merge-queue','--once'))
+  const result = await f.run('merge-queue','--once')
+  assert.match(result.stdout + result.stderr, /INTEGRATION BASE NOT SERVER-ENFORCED/)
   const state = await f.read()
-  assert.equal(state.state,'MERGED')
-  assert.equal(f.g('rev-parse','origin/main'),state.mergeCommit.oid)
+  assert.equal(state.state,'OPEN')
+  assert.equal(state.ghCalls.filter(merges).length,0)
+})
+
+test('merge is refused when main moves after the final local base check', async t => {
+  const f = await fixture(t, { advanceMainOnMerge: true })
+  const base = f.g('rev-parse','origin/main')
+  ok(await f.run('merge-enqueue',repo,'7',f.head))
+  await f.run('merge-queue','--once')
+  const state = await f.read()
+  assert.notEqual(state.externalMain,base)
+  assert.equal(state.state,'OPEN')
+  assert.equal(state.mergeCommit,undefined)
+  assert.equal(f.g('rev-parse','origin/main'),state.externalMain)
   assert.equal(state.ghCalls.filter(merges).length,1)
 })
