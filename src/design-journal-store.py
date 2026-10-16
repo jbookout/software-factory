@@ -37,7 +37,7 @@ def run(request):
     db = sqlite3.connect(f"file:{quote(str(file))}?mode=rw", uri=True, timeout=10)
     try:
         db.execute("CREATE TABLE IF NOT EXISTS notes (scope TEXT, id INTEGER PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL)")
-        scope = hashlib.sha256(json.dumps(request["scope"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        scope = hashlib.sha256(json.dumps(request["scope"], ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         if request["op"] == "append":
             with db:
                 cursor = db.execute("INSERT INTO notes(scope,kind,payload) VALUES(?,?,?)", (scope, request["kind"], json.dumps(request["record"])))

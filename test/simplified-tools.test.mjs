@@ -84,7 +84,7 @@ test("journal retains existing tables, isolates projects and backs up SQLite wit
   const options = {
     root: path.join(root, "journal"),
     userId: "fixture",
-    projectId: "one",
+    projectId: "one☀",
     version: 1,
   };
   const journal = await openDesignJournal(options);
@@ -97,13 +97,13 @@ test("journal retains existing tables, isolates projects and backs up SQLite wit
   execFileSync("python3", [
     "-c",
     `import sqlite3,sys,json,hashlib
-s=json.loads(sys.argv[2]); key=hashlib.sha256(json.dumps(s,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+s=json.loads(sys.argv[2]); key=hashlib.sha256(json.dumps(s,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 with sqlite3.connect(sys.argv[1]) as db:
  db.execute('CREATE TABLE events(scope TEXT, payload TEXT)')
  db.execute('INSERT INTO events VALUES(?,?)',(key,'existing interview'))
 `,
     database,
-    JSON.stringify({ userId: "fixture", projectId: "one", version: 1 }),
+    JSON.stringify({ userId: "fixture", projectId: "one☀", version: 1 }),
   ]);
   const read = await journal.execute({ command: "read" });
   assert.equal(read.records[0].record.objective, "Retain this record");
@@ -121,7 +121,7 @@ test("journal refuses public directories and linked database files", async (t) =
   const root = await temporary(t),
     publicDir = path.join(root, "public");
   await fs.mkdir(publicDir, { mode: 0o755 });
-  const options = { root: publicDir, userId: "fixture", projectId: "one", version: 1 };
+  const options = { root: publicDir, userId: "fixture", projectId: "one☀", version: 1 };
   const journal = await openDesignJournal(options);
   await assert.rejects(journal.execute({ command: "read" }), /private/);
   const privateDir = path.join(root, "private");
