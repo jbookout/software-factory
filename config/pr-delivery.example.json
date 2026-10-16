@@ -9,19 +9,8 @@
           "appId": 15368
         }
       ],
-      "checks": [
-        [
-          "ops/ci.sh",
-          "--strict"
-        ]
-      ],
-      "checkTimeoutMs": 3600000,
-      "trustedReviewers": [
-        "replace-with-verified-review-poster"
-      ],
-      "reviewPolicy": {
-        "repositoryPath": "ops/config/review-tiers.v1.json"
-      }
+      "checks": [["ops/ci.sh", "--strict"]],
+      "checkTimeoutMs": 3600000
     },
     "jbookout/doctorcre-app": {
       "checkout": "/absolute/path/to/doctorcre-app",
@@ -33,22 +22,10 @@
         }
       ],
       "checks": [
-        [
-          "npm",
-          "test"
-        ],
-        [
-          "python3",
-          "capabilities/jev-browser-select/test_select.py"
-        ]
+        ["npm", "test"],
+        ["python3", "capabilities/jev-browser-select/test_select.py"]
       ],
-      "checkTimeoutMs": 3600000,
-      "trustedReviewers": [
-        "replace-with-verified-review-poster"
-      ],
-      "reviewPolicy": {
-        "file": "/absolute/path/to/software-factory/config/review-tiers/doctorcre-app.v1.json"
-      }
+      "checkTimeoutMs": 3600000
     },
     "jbookout/software-factory": {
       "checkout": "/absolute/path/to/software-factory",
@@ -59,20 +36,8 @@
           "appId": 15368
         }
       ],
-      "checks": [
-        [
-          "npm",
-          "run",
-          "check"
-        ]
-      ],
-      "checkTimeoutMs": 3600000,
-      "trustedReviewers": [
-        "replace-with-verified-review-poster"
-      ],
-      "reviewPolicy": {
-        "file": "/absolute/path/to/software-factory/config/review-tiers/software-factory.v1.json"
-      }
+      "checks": [["npm", "run", "check"]],
+      "checkTimeoutMs": 3600000
     }
   },
   "stateDir": "/absolute/path/to/private/factory-delivery-state",
@@ -99,11 +64,5 @@
     "agentUnits": 1,
     "browserConcurrency": 1
   },
-  "holdsFile": "/absolute/path/to/orchestrator/merge-holds.txt",
-  "orchestratorDir": "/absolute/path/to/orchestrator",
-  "statusFile": "/absolute/path/to/orchestrator/delivery-status.txt",
-  "cloudSlots": 1,
-  "claude": {
-    "command": "claude"
-  }
+  "statusFile": "/absolute/path/to/orchestrator/delivery-status.txt"
 }

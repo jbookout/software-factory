@@ -1,5 +1,15 @@
 # Design Manager implementation plan
 
+## Read first: how to finish this (Joe, 2026-10-15)
+
+Joe is keeping the Design Manager to help him with UI. It is unfinished. When work resumes, finish it in a simpler shape than the 12 stages and 9 gates below:
+1. A short design brief.
+2. A few questions tailored to the task.
+3. A journal that stores Joe's design decisions.
+4. A visual check of the finished screen against the brief.
+
+Drop the stage gates, signed acceptance records and single-engine proof rule unless a real design job proves one is needed. Raise this with Joe at the start of the next session on the Design Manager.
+
 Joe-approved direction, 2026-10-01. TASK AE revised the plan after slice 1
 (PR 15) merged; TASK AI applied the stringsaeed stack post before slice 2.
 TASK AW applies Joe's 2026-10-02 design sources after slice 2 (PR 24) merged.

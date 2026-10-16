@@ -49,3 +49,12 @@ test("the sixth configured policy rejects unknown classes with repair guidance",
   assert.match(diagnostic.message, /no CSS is generated/)
   assert.match(diagnostic.message, /Use an existing component variant/)
 })
+
+for (const [file, text] of Object.entries((await import('../capabilities/tailwind-design-system-lint/cases.mjs')).SEEDS)) {
+  test(`ESLint case ${file}`, async () => {
+    const eslint = new ESLint({ cwd: fixture, overrideConfigFile: path.join(fixture, 'eslint.config.mjs') })
+    const [result] = await eslint.lintText(text, { filePath: path.join(fixture, 'src', file) })
+    assert.equal(result.fatalErrorCount, 0)
+    assert.equal(result.errorCount > 0, file !== 'custom-properties.tsx')
+  })
+}
