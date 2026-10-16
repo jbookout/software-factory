@@ -23,7 +23,7 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm ci --prefix capabilities/agentic-ui-evaluation/fixture
-      - run: npx --no-install playwright install --with-deps chromium
+      - run: npm exec --no -- playwright install --with-deps chromium
         working-directory: capabilities/agentic-ui-evaluation/fixture
       - run: npm test
         working-directory: capabilities/agentic-ui-evaluation/fixture
