@@ -17,3 +17,11 @@ export {
   nextDesignStage,
   advanceDesignStage,
 } from "./design-manager.mjs";
+
+export { createCodexBuildArgs, createCodexBuildPrompt, runCodexBuild } from "./codex-build.mjs";
+export { createScriptAdapter } from "./adapters.mjs";
+export {
+  signEvaluationBundle,
+  authenticateEvaluationBundle,
+  MODEL_ROOM_EVIDENCE_SCHEMA,
+} from "./model-room.mjs";

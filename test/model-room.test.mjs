@@ -1,42 +1,239 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import {
-  createPinnedBuildContext,
-  verifyPinnedBuildContext,
-  routeDoctorCreBuild,
-} from "../src/model-room.mjs";
-const excerpt = "Required source contract";
-const contract = {
-  source_revision: "a".repeat(40),
-  path: "src/contract.mjs",
-  excerpt,
-  content_digest: "sha256:" + createHash("sha256").update(excerpt).digest("hex"),
-};
-const route = { provider: "codex", model: "fixture-model", effort: "high" };
-test("Model Room receives required source and verifies the actual model", async () => {
-  const execute = async (request) => {
-    assert.equal(request.context.contracts[0].excerpt, excerpt);
-    return { ...route, result: "done" };
-  };
-  assert.equal(
-    (await routeDoctorCreBuild({ task: "Use the contract", contracts: [contract], route, execute }))
-      .result,
-    "done",
-  );
-  await assert.rejects(
-    routeDoctorCreBuild({
-      task: "Use the contract",
-      contracts: [contract],
-      route,
-      execute: async () => ({ ...route, model: "other" }),
-    }),
-    /actual route/,
-  );
-});
-test("source context refuses modified bytes", () => {
-  const context = createPinnedBuildContext([contract]);
-  assert.equal(verifyPinnedBuildContext(context), true);
-  context.contracts[0].excerpt = "changed";
-  assert.equal(verifyPinnedBuildContext(context), false);
-});
+import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
+import { execFileSync } from "node:child_process"
+import fs from "node:fs"
+import { fileURLToPath } from "node:url"
+import test from "node:test"
+
+import { createPinnedBuildContext, readPinnedContract, routeDoctorCreBuild,
+  selectOptionalBuildContext, verifyPinnedBuildContext, signEvaluationBundle,
+  authenticateEvaluationBundle } from "../src/model-room.mjs"
+import { createCodexBuildArgs, createCodexBuildPrompt } from "../src/codex-build.mjs"
+
+const root = fileURLToPath(new URL("..", import.meta.url))
+
+const baseline = { provider: "codex", model: "gpt-5.6-sol", effort: "high" }
+const candidate = { provider: "claude", model: "claude-opus-5", effort: "high" }
+const routeKey = "claude/claude-opus-5/high"
+const excerpt = "Overall status is available, partial or unavailable. Per-item judged.calibration_status is unverified_model_output."
+const contract = { source_revision: "a".repeat(40), path: "mcp-server/src/jev-needs-joe-advisory.js",
+  content_digest: `sha256:${createHash("sha256").update(excerpt).digest("hex")}`, excerpt }
+const common = { task: "Implement the DoctorCRE Needs Joe advisory model from the pinned CARR contract.",
+  contracts: [contract], baseline, candidates: [candidate], verifyObservation: row => row.attested === true }
+
+function jev(choice = routeKey) {
+  return async (_, request) => {
+    const sent = JSON.parse(request.body)
+    assert.equal(sent.state.contracts[0].excerpt, contract.excerpt)
+    return { ok: true, async json() { return { model: "jev-1.13.0", answers: { preferred_route: {
+      type: "choice", choice, confidence: 0.8,
+      probabilities: { baseline: choice === "baseline" ? 0.8 : 0.2, [routeKey]: choice === routeKey ? 0.8 : 0.2 }
+    } } } } }
+  }
+}
+
+test("Codex attended build uses the approval preset without a conflicting sandbox flag", () => {
+  const args = createCodexBuildArgs({ route: baseline }, "/tmp/result.json")
+  assert.ok(args.includes("--approve-for-me"))
+  assert.ok(!args.includes("-s"))
+  assert.ok(!args.includes("--sandbox"))
+})
+
+test("Codex build response schema closes every object shape", () => {
+  const schema = JSON.parse(fs.readFileSync(new URL("../schemas/factory-build-result.schema.json", import.meta.url)))
+  const seen = new Set()
+  function inspect(node) {
+    if (!node || typeof node !== "object" || seen.has(node)) return
+    seen.add(node)
+    if (node.type === "object") {
+      assert.equal(node.additionalProperties, false)
+      assert.deepEqual(new Set(node.required ?? []), new Set(Object.keys(node.properties ?? {})))
+    }
+    for (const value of Object.values(node)) inspect(value)
+  }
+  inspect(schema)
+})
+
+function observation(id, overrides = {}) {
+  return { case_id: id, route_key: routeKey, oracle_status: "pass", repository_status: "pass",
+    model_readback: "claude-opus-5", source_base: "c".repeat(40),
+    oracle_digest: `sha256:${"d".repeat(64)}`, attested: true, ...overrides }
+}
+
+test("Jev sees exact pinned contract but cannot promote insufficient replay cases", async () => {
+  const result = await routeDoctorCreBuild({ ...common, observations: [observation("pr44"), observation("pr45")],
+    controlEnabled: true, apiKey: "test", fetchImpl: jev() })
+  assert.deepEqual(result.selected_route, baseline)
+  assert.equal(result.jev.status, "skipped")
+  assert.equal(result.jev.reason, "single_qualified_route")
+  assert.deepEqual(result.eligible_routes, [])
+  assert.equal(result.qualifications[0].checked_cases, 2)
+})
+
+for (const [name, observations, checkedCases] of [
+  ["failed oracle", [observation("pr44", { oracle_status: "fail" }), observation("pr45"),
+    observation("pr46"), observation("pr47")], 0],
+  ["duplicate case", [observation("pr44"), observation("pr45"), observation("pr45")], 2],
+  ["unverified case", [observation("pr44"), observation("pr45"),
+    observation("pr46", { attested: false })], 2]
+]) {
+  test(`${name} cannot promote a candidate under explicit control`, async () => {
+    const result = await routeDoctorCreBuild({ ...common, observations,
+      controlEnabled: true, verifyControl: () => true, apiKey: "test", fetchImpl: jev() })
+    assert.deepEqual(result.selected_route, baseline)
+    assert.equal(result.qualifications[0].checked_cases, checkedCases)
+    assert.deepEqual(result.eligible_routes, [])
+    assert.equal(result.jev.reason, "single_qualified_route")
+  })
+}
+
+test("three distinct authenticated passes permit explicit control", async () => {
+  const observations = [observation("pr44"), observation("pr45"), observation("pr46")]
+  const result = await routeDoctorCreBuild({ ...common, observations,
+    controlEnabled: true, verifyControl: () => true, apiKey: "test", fetchImpl: jev() })
+  assert.deepEqual(result.selected_route, candidate)
+  assert.equal(result.selection_reason, "qualified_jev_choice")
+  const shadow = await routeDoctorCreBuild({ ...common, observations,
+    apiKey: "test", fetchImpl: jev() })
+  assert.deepEqual(shadow.selected_route, baseline)
+  const unapproved = await routeDoctorCreBuild({ ...common, observations,
+    controlEnabled: true, apiKey: "test", fetchImpl: jev() })
+  assert.deepEqual(unapproved.selected_route, baseline)
+  assert.equal(unapproved.selection_reason, "qualified_control_ready")
+})
+
+test("signed evaluation evidence enables qualified-only production control", async () => {
+  const key = "evaluator-secret-key-material-32-bytes-minimum"
+  const observations = [observation("pr44"), observation("pr45"), observation("pr46")]
+  const bundle = signEvaluationBundle({ control: { task_class: "doctorcre-build",
+    mode: "qualified_only", minimum_cases: 3 }, observations }, key)
+  const authenticated = authenticateEvaluationBundle(JSON.parse(JSON.stringify(bundle)), key)
+  const result = await routeDoctorCreBuild({ ...common,
+    observations: authenticated.observations,
+    minimumCases: authenticated.minimumCases,
+    verifyObservation: authenticated.verifyObservation,
+    verifyControl: authenticated.verifyControl,
+    controlEnabled: true, apiKey: "test", fetchImpl: jev() })
+  assert.deepEqual(result.selected_route, candidate)
+  assert.equal(result.selection_reason, "qualified_jev_choice")
+  assert.match(authenticated.bundleDigest, /^sha256:[0-9a-f]{64}$/)
+  const tampered = JSON.parse(JSON.stringify(bundle))
+  tampered.observations[0].oracle_status = "fail"
+  assert.throws(() => authenticateEvaluationBundle(tampered, key), /signature mismatch/)
+})
+
+test("Jev failure or invalid answer keeps baseline route explicit", async () => {
+  const failed = await routeDoctorCreBuild({ ...common, apiKey: "test", fetchImpl: async () => { throw Error("down") } })
+  assert.deepEqual(failed.selected_route, baseline)
+  assert.equal(failed.jev.status, "unavailable")
+  const invalid = await routeDoctorCreBuild({ ...common, apiKey: "test", fetchImpl: async () => ({ ok: true,
+    async json() { return { model: "jev-1.13.0", answers: { preferred_route: { type: "choice", choice: "other" } } } } }) })
+  assert.deepEqual(invalid.selected_route, baseline)
+  assert.equal(invalid.jev.reason, "invalid_answer")
+})
+
+test("pinned contract loader reads only an exact committed source excerpt", async () => {
+  const sourceRevision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim()
+  const result = await readPinnedContract({ root, sourceRevision, path: "README.md", startLine: 1, endLine: 1 })
+  assert.equal(result.excerpt, "# Software factory")
+  assert.equal(result.source_revision, sourceRevision)
+  await assert.rejects(readPinnedContract({ root, sourceRevision, path: "../secret", startLine: 1, endLine: 1 }))
+})
+
+test("build context retains exact source text and rejects a changed excerpt", () => {
+  const context = createPinnedBuildContext([contract])
+  assert.equal(verifyPinnedBuildContext(context), true)
+  assert.equal(context.contracts[0].excerpt, excerpt)
+  assert.equal(verifyPinnedBuildContext({ ...context, contracts: [{ ...contract, excerpt: "changed" }] }), false)
+})
+
+test("production Codex caller binds route, task, revision and pinned context", () => {
+  const prompt = createCodexBuildPrompt({ route: baseline, outcome: common.task,
+    sourceRevision: "e".repeat(40), pinnedBuildContext: createPinnedBuildContext([contract]) })
+  assert.match(prompt, /Implement the attended DoctorCRE build task/)
+  assert.match(prompt, new RegExp(contract.content_digest))
+  assert.match(prompt, new RegExp(contract.excerpt.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
+  assert.throws(() => createCodexBuildPrompt({ route: candidate, outcome: common.task,
+    sourceRevision: "e".repeat(40), pinnedBuildContext: createPinnedBuildContext([contract]) }),
+  /invalid Codex build request/)
+})
+
+test("Jev selects optional context depth while the required pinned contract stays full", async () => {
+  const optional = { ...contract, path: "notes/implementation.md",
+    excerpt: "a".repeat(4000), content_digest:
+      `sha256:${createHash("sha256").update("a".repeat(4000)).digest("hex")}` }
+  const chosen = await selectOptionalBuildContext({ task: common.task, chunks: [optional], apiKey: "test",
+    fetchImpl: async (_, request) => {
+      const sent = JSON.parse(request.body)
+      assert.equal(sent.state.chunks[0].excerpt, optional.excerpt)
+      return { ok: true, async json() { return { model: "jev-1.13.0", answers: {
+        context_0: { type: "choice", choice: "short", confidence: 0.8,
+          probabilities: { hide: 0.05, short: 0.8, long: 0.1, full: 0.05 } }
+      } } } }
+    } })
+  const context = createPinnedBuildContext([contract, ...chosen.contracts])
+  assert.equal(chosen.choices[0].visibility, "short")
+  assert.equal(chosen.contracts[0].excerpt.length, 600)
+  assert.equal(context.contracts[0].excerpt, contract.excerpt)
+  assert.equal(verifyPinnedBuildContext(context), true)
+})
+
+test("unavailable or malformed Jev hides optional context without hiding required contracts", async () => {
+  const unavailable = await selectOptionalBuildContext({ task: common.task, chunks: [contract] })
+  assert.equal(unavailable.reason, "no_api_key")
+  assert.deepEqual(unavailable.contracts, [])
+  const malformed = await selectOptionalBuildContext({ task: common.task, chunks: [contract],
+    apiKey: "test", fetchImpl: async () => ({ ok: true, async json() {
+      return { model: "jev-1.13.0", answers: { context_0: { type: "choice", choice: "full" } } }
+    } }) })
+  assert.equal(malformed.reason, "invalid_answer")
+  assert.deepEqual(malformed.contracts, [])
+  assert.equal(createPinnedBuildContext([contract, ...malformed.contracts]).contracts[0].excerpt,
+    contract.excerpt)
+})
+
+test("configured factory profile routes its build command with pinned contracts", () => {
+  const directory = fs.mkdtempSync("/tmp/factory-profile-")
+  try {
+    const sourceRevision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim()
+    const jobPath = `${directory}/job.json`, profilePath = `${directory}/profile.json`
+    fs.writeFileSync(jobPath, JSON.stringify({ product: "DoctorCRE", outcome: "Build fixture", sourceRevision }))
+    const build = [process.execPath, "--input-type=module", "-e", `
+      import assert from 'node:assert/strict';
+      let input = ''; for await (const chunk of process.stdin) input += chunk;
+      const request = JSON.parse(input);
+      assert.deepEqual(request.route, ${JSON.stringify(baseline)});
+      assert.equal(request.pinnedBuildContext.contracts[0].excerpt, '# Software factory');
+      console.log(JSON.stringify({status:'pass'}));`]
+    fs.writeFileSync(profilePath, JSON.stringify({ root, commands: {
+      build: { [`${baseline.provider}/${baseline.model}/${baseline.effort}`]: build },
+      verify: [process.execPath, '-e', 'console.log(JSON.stringify({status:"pass"}))']
+    }, modelRoom: { enabled: true, baseline, candidates: [], contracts: [{ root,
+      sourceRevision, path: 'README.md', startLine: 1, endLine: 1 }] } }))
+    const result = JSON.parse(execFileSync(process.execPath, ['bin/factory.mjs', jobPath, profilePath],
+      { cwd: root, encoding: 'utf8', env: { PATH: process.env.PATH } }))
+    assert.equal(result.outcome, 'complete')
+    assert.deepEqual(result.events.map(event => event.step), ['build', 'check', 'cleanup'])
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
+test("Codex build CLI forwards the pinned task and returns the desk result", () => {
+  const directory = fs.mkdtempSync('/tmp/factory-codex-cli-')
+  try {
+    fs.writeFileSync(`${directory}/codex`, `#!/usr/bin/env node
+      const fs = require('node:fs');
+      const args = process.argv.slice(2);
+      if (!args.includes('--approve-for-me') || !args.includes('--output-schema')) process.exit(2);
+      let input = ''; process.stdin.on('data', chunk => input += chunk);
+      process.stdin.on('end', () => {
+        if (!input.includes('Build fixture') || !input.includes(${JSON.stringify(excerpt)})) process.exit(3);
+        fs.writeFileSync(args[args.indexOf('--output-last-message') + 1], JSON.stringify({status:'pass',data:{fixture:true}}));
+      });`, { mode: 0o755 })
+    const request = { route: baseline, outcome: 'Build fixture', sourceRevision: 'e'.repeat(40),
+      pinnedBuildContext: createPinnedBuildContext([contract]) }
+    const result = JSON.parse(execFileSync(process.execPath, ['bin/codex-build.mjs'], {
+      cwd: root, encoding: 'utf8', input: JSON.stringify(request),
+      env: { PATH: `${directory}:${process.env.PATH}` } }))
+    assert.deepEqual(result, { status: 'pass', data: { fixture: true } })
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})

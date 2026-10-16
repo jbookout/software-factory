@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { createPinnedBuildContext } from "../src/model-room.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -85,4 +87,46 @@ test("a queued check cancels without acquiring a slot", async (t) => {
   }
   const next = await reserveCheck({ root, capacity: 1 });
   await next.release();
+});
+
+test("Model Room advice supplies the selected build route and pinned context", async () => {
+  const route = { provider: "codex", model: "fixture-model", effort: "high" };
+  const context = createPinnedBuildContext([
+    {
+      source_revision: "a".repeat(40),
+      path: "contract.txt",
+      excerpt: "fixture",
+      content_digest: `sha256:${createHash("sha256").update("fixture").digest("hex")}`,
+    },
+  ]);
+  let advised = 0;
+  const builds = [];
+  const result = await createFactory({
+    modelRoomAdvisor: async ({ job }) => {
+      assert.equal(job.outcome, "Build the pinned task");
+      advised++;
+      return {
+        schema: "doctorcre-build-route.v1",
+        selected_route: route,
+        state_digest: "fixture-digest",
+        build_context: context,
+      };
+    },
+  }).run(
+    { product: "DoctorCRE", outcome: "Build the pinned task", rounds: 2 },
+    {
+      async execute(step, request) {
+        if (step === "build") builds.push(request);
+        return { status: step === "check" && builds.length === 1 ? "fail" : "pass" };
+      },
+    },
+  );
+  assert.equal(result.outcome, "complete");
+  assert.equal(advised, 1);
+  assert.equal(builds.length, 2);
+  for (const build of builds) {
+    assert.deepEqual(build.route, route);
+    assert.deepEqual(build.pinnedBuildContext, context);
+    assert.equal(build.modelRoomStateDigest, "fixture-digest");
+  }
 });
