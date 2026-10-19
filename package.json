@@ -31,8 +31,7 @@
     "workflow:audit": "node scripts/orch/audit-workflows.mjs",
     "factory": "node ./bin/factory.mjs",
     "format:check": "oxfmt --check",
-    "design-cloud:qualify": "node ./bin/design-cloud-qualify.mjs",
-    "presentation:qualify": "node capabilities/client-presentation/scripts/qualify.mjs"
+    "design-cloud:qualify": "node ./bin/design-cloud-qualify.mjs"
   },
   "dependencies": {
     "ajv": "8.20.0",
