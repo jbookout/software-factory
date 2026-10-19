@@ -20,6 +20,7 @@ const DEFAULT_MODELS = fileURLToPath(new URL("../config/delivery-models.v1.json"
 const MODEL_ROLES = ["fix", "ci-fix"]
 const SHA = /^[0-9a-f]{40}$/
 const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
+const nonemptyText = value => typeof value === "string" && value.trim().length > 0
 const digestOf = value => createHash("sha256").update(value).digest("hex")
 const effectIdentity = (repo, pr, head, action, fields) => deliveryEffectId({ repo, pr, head, action: `${action}:${digestOf(JSON.stringify(fields))}` })
 const pass = data => normalizeResult({ status: "pass", data }, "delivery")
@@ -566,15 +567,19 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     const queue = await readJson(queueFile, [])
     if (!Array.isArray(queue)) throw new DeliveryError("invalid queue journal", 9)
     for (const entry of queue) {
-      if (!isDeliveryBinding(entry) || !entry.id) throw new DeliveryError("invalid queue job binding", 9)
+      if (!isDeliveryBinding(entry) || !nonemptyText(entry.id)) throw new DeliveryError("invalid queue job binding", 9)
       entry.state ??= entry.outcome ? "acknowledged" : "pending"
       if (!["pending", "claimed", "effect-requested", "reconciled", "acknowledged"].includes(entry.state))
         throw new DeliveryError("invalid queue transition", 9)
-      if (["claimed", "effect-requested", "reconciled"].includes(entry.state) &&
-          (typeof entry.attemptId !== "string" || !/^[0-9a-f]{64}$/.test(entry.effectId ?? "")))
+      const claimed = ["claimed", "effect-requested", "reconciled"].includes(entry.state)
+      if ((claimed || Object.hasOwn(entry, "attemptId")) && !nonemptyText(entry.attemptId) ||
+          (claimed || Object.hasOwn(entry, "effectId")) &&
+          (typeof entry.effectId !== "string" || !/^[0-9a-f]{64}$/.test(entry.effectId)))
         throw new DeliveryError("unbound queue claim", 9)
       if (["reconciled", "acknowledged"].includes(entry.state) && !["pass", "fail"].includes(entry.outcome?.status))
         throw new DeliveryError("missing queue outcome", 9)
+      if (["pending", "claimed", "effect-requested"].includes(entry.state) && Object.hasOwn(entry, "outcome"))
+        throw new DeliveryError("unexpected queue outcome", 9)
     }
     return queue
   }
@@ -997,8 +1002,6 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
   async function installationStatus() {
     const sourceRoot = fileURLToPath(new URL("../", import.meta.url))
     return { sourceRevision: await git(sourceRoot, "rev-parse", "HEAD"),
-      sourceModified: Boolean((await command(["git", "--no-optional-locks", "status", "--porcelain", "--untracked-files=no"],
-        sourceRoot, { mutation: false })).stdout.trim()),
       entrypoint: path.join(sourceRoot, "bin/pr-delivery.mjs"), configFile: config.configFile,
       policySource: path.join(sourceRoot, "docs/pr-delivery-cutover.md"), installation: "unverified",
       checkPolicy: Object.fromEntries(Object.entries(config.repos).map(([repo, local]) => [repo, local.requiredChecks])),
@@ -1008,14 +1011,22 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     const navigation = await installationStatus()
     const waitReceipt = path.join(config.stateDir, "waits", `${keyFor(repo, pr)}.json`)
     const repairReceipt = repairFile(repo, pr)
-    const read = async (file, schema) => {
-      const record = await readJson(file, null)
-      if (record !== null && (!isDeliveryBinding(record) || record.schema !== schema || record.repo !== repo || record.pr !== pr))
-        throw new DeliveryError("job journal binding mismatch", 9)
-      return record
+    const absolutePath = value => typeof value === "string" && path.isAbsolute(value) && !value.includes("\0")
+    const jobPaths = value => value == null || typeof value === "object" && !Array.isArray(value) &&
+      absolutePath(value.receipt) && absolutePath(value.log)
+    const read = async (file, schema, valid) => {
+      const record = await readJson(file)
+      if (record !== undefined && (!isDeliveryBinding(record) || record.schema !== schema || record.repo !== repo || record.pr !== pr || !valid(record)))
+        throw new DeliveryError("invalid job journal", 9)
+      return record ?? null
     }
-    const wait = await read(waitReceipt, "factory-delivery-wait/v1")
-    const repair = await read(repairReceipt, "factory-repair-delivery/v1")
+    const wait = await read(waitReceipt, "factory-delivery-wait/v1", record =>
+      ["suspended", "resumable", "complete"].includes(record.status) && nonemptyText(record.cause) &&
+      Number.isSafeInteger(record.code) && record.code >= 0)
+    const repair = await read(repairReceipt, "factory-repair-delivery/v1", record =>
+      nonemptyText(record.id) && ["building", "built", "no_progress", "checking", "check_interrupted", "check_failed",
+        "push_pending", "early_publication", "candidate_unconfirmed", "delivered"].includes(record.status) &&
+      absolutePath(record.worktree) && jobPaths(record.builderJob) && jobPaths(record.checkJob))
     const job = value => value ? { receipt: value.receipt, log: value.log } : null
     return { ...navigation, repo, pr, observation: "recorded history, not process liveness",
       queue: (await readQueue()).filter(row => row.repo === repo && row.pr === pr)
@@ -1129,7 +1140,7 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
           return pass(data)
         } catch (error) {
           if (["installation-status", "job-status"].includes(step))
-            return fail(new DeliveryError("Delivery navigation unavailable: check configuration and journal bindings", 9))
+            return fail(new DeliveryError("Delivery navigation unavailable: check configuration, journal fields and bindings", 9))
           await deliveryStatus(config, {repo, pr, step, code:error.code, message:error.message, nextAction:error.nextAction ?? (error.wait ? "wait-for-input-or-reset" : "inspect-and-resume")})
           if (!error.wait) await log({ step, repo, pr, status: "failed", code: error.code ?? 1, message: error.message })
           return fail(error)

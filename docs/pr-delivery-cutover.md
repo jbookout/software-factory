@@ -14,8 +14,7 @@ Factory delivery never deploys a product or changes its credentials.
 ## Evidence navigation
 
 `node bin/pr-delivery.mjs <config.json> installation-status` identifies the invoked
-factory HEAD revision, tracked modification flag, entry point, configuration,
-required checks, and evidence paths. Untracked files are excluded from the flag.
+factory HEAD revision, entry point, configuration, required checks, and evidence paths.
 Installation remains unverified. The output does not compare an installed worker
 with its intended deployment.
 
