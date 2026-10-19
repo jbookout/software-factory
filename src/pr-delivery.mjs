@@ -566,8 +566,6 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     const queue = await readJson(queueFile, [])
     if (!Array.isArray(queue)) throw new DeliveryError("invalid queue journal", 9)
     for (const entry of queue) {
-      // The journal is shared across lanes; dispatch, rather than reading
-      // another lane's row, requires a configured repository.
       if (!isDeliveryBinding(entry) || !entry.id) throw new DeliveryError("invalid queue job binding", 9)
       entry.state ??= entry.outcome ? "acknowledged" : "pending"
       if (!["pending", "claimed", "effect-requested", "reconciled", "acknowledged"].includes(entry.state))
