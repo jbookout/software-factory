@@ -33,7 +33,6 @@ try {
   process.exitCode = result.code || (passed ? 0 : 1)
   process.stdout.write(process.exitCode ? `browser tests exited ${process.exitCode}\n` : `pass ${passed}\n`)
 } catch (error) {
-  // No provider/process arguments or output are persisted on refusal.
   process.stderr.write(`${error.code === 142 ? error.message : 'browser execution refused'}\n`)
   process.exitCode = Number.isInteger(error.code) ? error.code : 1
 } finally { if (release) await release() }

@@ -12,3 +12,4 @@ __pycache__/
 
 
 config/pr-delivery.local.json
+capabilities/agentic-ui-evaluation/fixture/test-results/

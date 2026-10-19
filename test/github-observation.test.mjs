@@ -84,7 +84,6 @@ test('PR46 finding 2: a successful cached observation clears only its own streak
  await f.fetch('rest','checks',response(200))
  await assert.rejects(f.observer().request({pool:'rest',key:'checks',validate:()=>false},async()=>response(200)),e=>e.state==='unknown')
  f.advance(60001)
- // Keep the known-good cache alive for this recovery probe.
  const file=path.join(f.config.stateDir,'github.json'),state=JSON.parse(await fs.readFile(file))
  for(const item of Object.values(state.cache)) item.expiresAt=2000000
  state.failures.other=3;await fs.writeFile(file,JSON.stringify(state))

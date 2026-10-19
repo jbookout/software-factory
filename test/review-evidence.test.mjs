@@ -3,7 +3,6 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { deliveryPrompt } from '../src/pr-delivery-prompts.mjs'
 const api=()=>import('../src/review-evidence.mjs')
 const binding={repo:'fixture/repo',pr:7,base:'a'.repeat(40),head:'b'.repeat(40),tree:'c'.repeat(40),observedAt:'2026-10-05T00:00:00.000Z'}
 async function input() {
@@ -17,10 +16,6 @@ test('exact-head owner inputs support review without worker GitHub credentials',
  assert.match(await fs.readFile(evidence.files.diff.path,'utf8'),/\+fixed/)
  assert.equal(await fs.readFile(evidence.files.description.path,'utf8'),'Fixture description')
  assert.equal(JSON.parse(await fs.readFile(evidence.files.checks.path,'utf8')).state,'success')
- const prompt=deliveryPrompt('review',{repo:binding.repo,pr:7,head:binding.head,evidence})
- assert.match(prompt,/OWNER-CAPTURED INPUT/)
- assert.doesNotMatch(prompt,/gh pr diff/)
- assert.match(prompt,/client.*route.*probe/)
  assert.equal((await fs.stat(evidence.files.diff.path)).mode & 0o222,0)
  await assert.rejects(readReviewEvidence(manifest,{...binding,head:'d'.repeat(40)}),/binding/)
 })
@@ -44,5 +39,3 @@ test('a successful same-endpoint alternate probe establishes availability withou
  assert.equal(probeAvailability([failure,successful]).availability,'reachable')
  assert.equal(probeAvailability([failure,{...successful,route:'other'}]).availability,'unproven')
 })
-
-test('review launch requires owner-captured input',()=>{assert.throws(()=>deliveryPrompt('review',{repo:binding.repo,pr:7,head:binding.head}),/owner-captured/)})

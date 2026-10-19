@@ -182,7 +182,6 @@ def audit(root, required=(), owner='orchestrator-maintainer'):
     for path in paths:
         file = path.relative_to(root).as_posix()
         try:
-            # Do not follow workflow symlinks outside the reviewed checkout.
             if path.is_symlink() or root.resolve() not in path.resolve().parents:
                 raise ValueError('workflow outside checkout')
             text = path.read_text()
@@ -263,7 +262,6 @@ def audit(root, required=(), owner='orchestrator-maintainer'):
         record('.github/workflows', '*', 'syntax', 'unknown', None, 'No workflows observed')
     if not required:
         record('.github/workflows', '*', 'required-trigger', 'unknown', None, 'Live required-context contract not supplied; no required-gate claim')
-    # Same job/property is a single regression even if several steps violate it.
     responses = {p['response']['id']: p['response'] for p in properties if 'response' in p}
     status = 'breach' if responses else 'unknown' if any(p['status'] == 'unknown' for p in properties) else 'pass'
     return {'schema': 'workflow-audit/v1', 'status': status, 'properties': properties, 'responses': list(responses.values()),

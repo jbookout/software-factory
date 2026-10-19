@@ -6,8 +6,6 @@ import os from 'node:os'
 import path from 'node:path'
 import * as verify from 'software-factory/design-verify'
 
-// AW-4: synthetic store fixtures for the criterion evidence contract. These
-// records exercise the gate; they are not e2e qualification receipts.
 const sha = bytes => createHash('sha256').update(bytes).digest('hex')
 const key = 'review-key-held-by-the-core-0123456789'
 const featureMap = {
@@ -139,7 +137,6 @@ test('AW-4 frozen manifest: immutable, digest-bound and every feature entry poin
   const duplicated = structuredClone(criteriaInput)
   duplicated.criteria[2].id = 'task-saved'
   assert.throws(() => verify.freezeVerifyCriteria({ ...duplicated, featureMap }), /duplicate criterion/)
-  // A manifest edited after freezing (expectation rewritten to match the defect) is not the frozen one.
   const w = await world()
   const forged = { ...w.manifest, criteria: w.manifest.criteria.map((c, i) => i ? c : { ...c, expectation: 'anything' }) }
   const tampered = await verify.evaluateVerification({ ...w, manifest: forged })

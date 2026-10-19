@@ -102,8 +102,6 @@ test("zero-wait election keeps one owner when a choosing peer publishes before w
       tickets.push(owner.ticket)
       if (tickets.length === 2) bothTickets.resolve()
       await bothTickets.promise
-      // Both chose ticket 1. The higher token stays in choosing until the
-      // lower token has read its ticket 0 during election.
       if (to === higher) await choosingObserved.promise
       await rename(from, to)
       published.set(to, owner)
@@ -118,8 +116,6 @@ test("zero-wait election keeps one owner when a choosing peer publishes before w
     return snapshot
   })
   t.mock.method(fs, "rm", async (file, ...args) => {
-    // Hold the lower token's withdrawal until the higher token has observed
-    // its earlier claim. The old election makes both contenders give up.
     if (file === lower) await earlierObserved.promise
     await rm(file, ...args)
     published.delete(file)

@@ -42,8 +42,6 @@ function jobShapeError(job) {
   return null;
 }
 
-// Normalize only expression access, not shell text. Dynamic indices retain the
-// context root and therefore cannot hide credentials or untrusted event data.
 const expressions = value => [...String(value).matchAll(/\$\{\{([\s\S]*?)\}\}/g)].map(match => match[1].replace(/\[\s*(['"])([\w-]+)\1\s*\]/g, '.$2').replace(/\s*\.\s*/g, '.'));
 function strings(value) {
   const pending = [value], seen = new Set(), result = [];
@@ -58,8 +56,6 @@ const hasSecret = value => strings(value).some(text => expressions(text).some(ex
 const injectedEvent = run => expressions(run).some(expression => /\b(?:github(?:\.event(?:\.|\[)|\.head_ref\b|\.ref(?:_name)?\b|\[)|inputs(?:\.|\[))/.test(expression));
 const publisher = run => /\b(?:gh\s+release\s+(?:create|upload|edit|delete)|(?:npx\s+)?wrangler\s+(?:deploy|publish)|npm\s+publish|docker\s+push|aws\s+s3\s+(?:cp|sync))\b/.test(run ?? '');
 function execution(run = '') {
-  // npm options and whitespace do not change the install/test/build authority.
-  // All npm scripts are executable build paths, even custom script names.
   const build = /\bnpm\b[^\n;&|]*\b(?:ci|install|test|run|exec)\b|\b(?:node|python\d*)\b[^\n]*test|\b(?:playwright|ops\/ci\.sh)\b|\be2e\s+run\b/.test(run);
   if (run.trim() === digestCommand) return {build, unknown:false};
   const unknown = run.split(/\n/).some(line => {
@@ -114,8 +110,6 @@ function artifactProducer(step, job, workflow, pins) {
   const output = producer.outputs?.[reference[2]];
   const uploadRef = typeof output === 'string' ? output.match(/^\$\{\{\s*steps\.([\w-]+)\.outputs\.artifact-id\s*\}\}$/) : null;
   const upload = producer.steps.find(candidate => candidate.id === uploadRef?.[1] && candidate.uses?.startsWith('actions/upload-artifact@'));
-  // The pilot accepts one explicit file per handoff. Globs and directory uploads
-  // require a different byte-verification contract and are reported unmeasured.
   const path = upload?.with?.path;
   if (!safeArtifactPath(path) || /[\s*?[\]{}]/.test(path) || upload.if !== undefined || upload['continue-on-error']) return null;
   return {id: reference[1], job: producer, file: posix.basename(path)};
@@ -131,9 +125,6 @@ function digestGuard(step, producer, destination, job, workflow) {
 }
 function executableDownload(run, destinations) {
   if (!destinations.length) return false;
-  // Shell execution can change directory, use indirect argv, or invoke an action.
-  // After a download, arbitrary execution is conservatively unmeasured regardless
-  // of directory spelling. Data-only publishers and the exact digest guard remain.
   if ((run ?? '').trim() === digestCommand) return false;
   return /\b(?:node|bash|sh|python\d*|source|eval|exec|cd|npm|npx)\b|(?:^|\s)\.\//.test(run ?? '') || execution(run).unknown;
 }
@@ -145,7 +136,7 @@ export function auditWorkflow(source, pins, file = 'workflow.yml') {
   let document;
   const add = (property, path, remediation) => {
     let node;
-    try { node = document?.getIn(path,true); } catch { /* Invalid container shape. */ }
+    try { node = document?.getIn(path,true); } catch {  }
     findings.push({file,line:node?.range ? lines.linePos(node.range[0]).line : 1,property,remediation});
   };
   let workflow;

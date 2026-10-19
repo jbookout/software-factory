@@ -57,7 +57,6 @@ class PracticeAudit(unittest.TestCase):
             '        with:\n          ref: ${{ github.event.pull_request.head.sha }}\n      - run:')
         result = self.run_audit(text)
         self.assertTrue(any(f['property'] == 'privileged-checkout' and f['status'] == 'breach' for f in result['properties']))
-        # No checkout of pull-request code has a documented negative relevance test.
         result = self.run_audit(CLEAN)
         self.assertTrue(any(f['property'] == 'privileged-checkout' and f['status'] == 'not-applicable' and f['evidence'] for f in result['properties']))
 
