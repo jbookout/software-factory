@@ -5,9 +5,10 @@ import { spawnSync } from 'node:child_process'
 // errno alone. Observe only PID/group/state, never command arguments or output.
 function liveMembers(pid) {
   // The macOS fallback must read the system utility, including when a caller
-  // injects a PATH shim for another process observation contract.
+  // injects a PATH shim for another process observation contract. The setuid
+  // ps routinely exceeds 100ms on a loaded host; a stalled one stays bounded.
   const observation = spawnSync('/bin/ps', ['-g', String(pid), '-o', 'pid=,pgid=,stat='], {
-    encoding: 'utf8', timeout: 100, maxBuffer: 1_000_000
+    encoding: 'utf8', timeout: 1000, maxBuffer: 1_000_000
   })
   if (observation.error || observation.stderr?.trim()) return null
   // ps exits 1 with empty output when the selected group has no members.
@@ -17,11 +18,14 @@ function liveMembers(pid) {
   if (!rows.length || !rows.every(row => row && Number(row[2]) === pid)) return null
   return rows.some(row => !row[3].startsWith('Z'))
 }
+// A killed group can still be retiring at the first readback. Both probes are
+// bounded; a live group or two inconclusive observations remain a refusal.
+const retiredGroup = pid => liveMembers(pid) === false || liveMembers(pid) === false
 export function ownedGroupAlive(pid) {
   try { process.kill(process.platform === 'win32' ? pid : -pid, 0); return true }
   catch (error) {
     if (error.code === 'ESRCH') return false
-    if (error.code === 'EPERM' && process.platform === 'darwin' && liveMembers(pid) === false) return false
+    if (error.code === 'EPERM' && process.platform === 'darwin' && retiredGroup(pid)) return false
     return true
   }
 }
@@ -29,7 +33,7 @@ export function killOwnedGroup(pid, signal) {
   try { process.kill(process.platform === 'win32' ? pid : -pid, signal) }
   catch (error) {
     if (error.code === 'ESRCH') return
-    if (error.code === 'EPERM' && process.platform === 'darwin' && liveMembers(pid) === false) return
+    if (error.code === 'EPERM' && process.platform === 'darwin' && retiredGroup(pid)) return
     throw error
   }
 }

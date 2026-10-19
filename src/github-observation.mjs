@@ -10,7 +10,7 @@ function parse(response, format) {
  const [headers = '', ...parts] = response.stdout.split(/\r?\n\r?\n/)
  const status = Number(/^HTTP\/[^ ]+ (\d+)/.exec(headers)?.[1])
  let body
- try { body = format === 'text' ? parts.join('\n\n') : JSON.parse(parts.join('\n\n')) } catch { /* Classified as unknown below. */ }
+ try { body = format === 'text' ? parts.join('\n\n') : JSON.parse(parts.join('\n\n')) } catch {  }
  return { status, headers, body, ok: !response.code && status >= 200 && status < 300,
   transient: [429,500,502,503,504].includes(status) || !Number.isFinite(status) }
 }
@@ -56,12 +56,10 @@ export function createGitHubObservation(config, { now = Date.now } = {}) {
      await writeJson(file,state);throw observationError(state.hold)
     }
     state.requests.push({at,pool,mutation})
-    // Reservation survives interruption; a write invalidates all prior read evidence.
     if (mutation) state.cache = {}
     await writeJson(file,state)
     try { response = parse(await transport(), format) }
     catch (error) {
-     // Preserve supervised mutation uncertainty and deadlines for readback.
      if (mutation || error.code === 130) throw error
      transportError = error
      response = {status:NaN,headers:'',body:undefined,ok:false,transient:true}
@@ -89,7 +87,6 @@ export function createGitHubObservation(config, { now = Date.now } = {}) {
      const record = {state:kind,pool,observation:owner,retryAt:next,queryErrors,terminal,
       message:transportError ? transportError.message : kind === 'quota_hold' ? 'GitHub quota hold: wait for recorded retry time' : kind === 'auth_error' ?
        'GitHub authentication refused' : response.ok ? response.body === undefined ? 'invalid GitHub REST JSON' : 'invalid GitHub observation shape' : 'GitHub observation unavailable'}
-     // A quota/secondary hold applies to every pool; fallback cannot drain another one.
      state.hold = record
      await writeJson(file,state);throw Object.assign(transportError ?? observationError(record), record, {transient:!terminal})
     }

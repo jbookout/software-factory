@@ -9,7 +9,6 @@ import { promisify } from 'node:util'
 import { createHash } from 'node:crypto'
 import { qualifyCodexCloud } from 'software-factory/codex-cloud-qualification'
 
-// A real subprocess at the CLI seam; no network, account or model calls.
 const newFileDiff = (body = '{"sum":42}', newline = true, mode = '100644') => [
   'diff --git a/qualification-result.json b/qualification-result.json',
   `new file mode ${mode}`, 'index 0000000..abc1234', '--- /dev/null',
@@ -174,7 +173,6 @@ test('invalid environment and unbounded deadline refuse before any process start
   await assert.rejects(readFile(f.calls), { code: 'ENOENT' })
 })
 
-// Blocking review regressions cross the exported execution/CLI interfaces.
 const settingsBinding = () => ({ userId: 'synthetic-user', workerId: 'synthetic-worker',
   version: 1, settingsDigest: `sha256:${'b'.repeat(64)}`, station: 'define', mode: 'fast' })
 

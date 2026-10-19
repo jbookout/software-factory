@@ -73,6 +73,17 @@ configuration and derived artifact. The pilot must beat `rg` and
 language-symbol baselines on representative work or be retired; it is never a
 merge, release, repository-creation, or runtime prerequisite.
 
+## How every job runs: pstack and Pocock skills
+
+Every task, all required:
+
+1. Size it first. One obvious change: build it. Medium or large: run `/grill-with-docs` before writing code. Bigger than one session: map it with `/wayfinder`.
+2. Work in `/poteto-mode` (pstack). Subtract before you add. Use a tool the way its own docs say, and build no proof, receipt or harness machinery nobody asked for.
+3. Code changes go test-first with `/tdd`. A bug starts with `/diagnosing-bugs`.
+4. Before the PR, run the design and debt pass below.
+
+Claude gets these from the enabled `pstack` and `mattpocock-skills` plugins; Codex from `~/.agents/skills/`. If a skill is missing, say so in the report rather than skipping it.
+
 ## Before every PR: design and debt pass
 
 Before opening or updating any pull request, apply both skills to the diff:
@@ -82,16 +93,18 @@ Before opening or updating any pull request, apply both skills to the diff:
 
 Both are installed at `~/.agents/skills/` (sources: github.com/mattpocock/skills `skills/engineering/codebase-design`, github.com/jnsahaj/skills `skills/zero-tech-debt`). The PR reviewer checks both, so all two are required.
 
+When running checks, reviewing their results, or preparing delivery, use `npm run check`. Report its exit status and read its output log before reporting coverage.
+
 ## Agent skills
 
 ### Issue tracker
 
-GitHub Issues. See [tracker operations](docs/agents/issue-tracker.md).
+Issues and specs live in GitHub Issues for `jbookout/software-factory` (the `gh` CLI). PRs are not a triage surface. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Default canonical labels. See [triage mapping](docs/agents/triage-labels.md).
+Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). Only `wontfix` exists as a GitHub label today; the other four are not yet created. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
-Single-context; factory record-store destination. See [domain consumers](docs/agents/domain.md).
+Single-context: a root `GLOSSARY.md` and `docs/adr/`, both created lazily. See `docs/agents/domain.md`.

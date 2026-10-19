@@ -18,8 +18,6 @@ async function maybeStat(file) {
   try { return await lstat(file) } catch (error) { if (error.code !== 'ENOENT') throw error; return null }
 }
 
-// Check the canonical destination before creating anything. This covers .git
-// directories and worktree .git files, including symlinked parent directories.
 async function privateReceiptPath(file) {
   let ancestor = dirname(resolve(file))
   const missing = []
@@ -77,7 +75,6 @@ async function persist(storage, value) {
     owned = false
   } finally {
     await handle.close()
-    // Never remove a pre-existing or substituted temporary path.
     if (owned) {
       await storage.verify()
       const info = await maybeStat(temp)
@@ -137,9 +134,6 @@ function readyStatus(output) {
 }
 const versionValue = output => /^codex-cli \d+\.\d+\.\d+(?:-[A-Za-z0-9.]+)?$/.test(output.trim()) ? output.trim() : undefined
 
-// Qualification is intentionally fail-closed for this CLI surface. Observation is
-// not certification: local deadlines never prove remote cancellation/timeout,
-// local config never proves the cloud's model, and login never proves entitlement.
 export async function qualifyCodexCloud(options) {
   exactFields(options, ['stateFile', 'codexCommand', 'cwd', 'timeoutMs', 'sourceRevision', 'model', 'effort', 'environment', 'settingsBinding'], 'request')
   const { stateFile, cwd, timeoutMs = 30_000 } = options
@@ -171,7 +165,6 @@ export async function qualifyCodexCloud(options) {
       const { receiptDigest, ...content } = receipt
       if (receipt.qualified !== false || receiptDigest !== digest(content) || digest(receipt.request) !== digest(request) ||
           !['preflight', 'submission-pending', 'submitted', 'finished'].includes(receipt.phase)) throw new Error('invalid stored receipt; verify the original observations before recovery')
-      // An interrupted submission may have reached the cloud. Never retry it.
       if (receipt.phase === 'submission-pending' && !receipt.taskId) {
         receipt.checks.submission = check('blocked', 'submission outcome unknown: inspect cloud tasks before any new attempt')
         await save()
@@ -190,7 +183,6 @@ export async function qualifyCodexCloud(options) {
         } }
       await save()
     }
-    // Do not inherit paid API credentials or unrelated process secrets.
     const env = Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'TMPDIR', 'SystemRoot', 'SSL_CERT_FILE', 'SSL_CERT_DIR']
       .filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]]))
     const probe = async (name, args, projection = () => 'raw diagnostics omitted') => {
@@ -249,7 +241,6 @@ export async function qualifyCodexCloud(options) {
         '-c', `model=${JSON.stringify(request.model)}`, '-c', `model_reasoning_effort=${JSON.stringify(request.effort)}`]
       if (request.environment) args.push('--env', request.environment.id, '--branch', request.environment.branch)
       args.push(CLOUD_SAMPLE_PROMPT)
-      // Persist before the external call, including for a timeout/lost response.
       receipt.phase = 'submission-pending'
       await save()
       const submit = await probe('submission', args)
@@ -258,8 +249,6 @@ export async function qualifyCodexCloud(options) {
         receipt.checks.submission = check('blocked', request.environment
           ? 'submission outcome unknown: inspect cloud tasks before retry; no task ID was read back'
           : 'factory-only environment missing; CLI submission refused without --env')
-        // No selected environment means the CLI cannot submit. With an environment
-        // an ambiguous call stays pending so a later invocation never resubmits.
         receipt.phase = request.environment ? 'submission-pending' : 'finished'
         await save()
         return receipt

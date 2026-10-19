@@ -86,7 +86,6 @@ test('inherited object names are not configured workers', async () => {
 
 test('unchanged version-one profiles retain their original digest and assignment bindings with numeric worker IDs', async () => {
   const baseline = JSON.parse(await readFile(new URL('../../config/design-manager/joe.example.json', import.meta.url)))
-  // Digests captured with the settings canonicalizer at bfc751, before its extraction.
   for (const [numeric, digest] of [
     [false, 'sha256:ed167358f2913f4d6a4a7ead287be4abca35212cbb8959d2f9f132363a50556b'],
     [true, 'sha256:b98a7f653940264df216f4b82fefa7c2f167f3e9f0631194384bab2ddc8ecc35'],

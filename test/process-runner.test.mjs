@@ -3,10 +3,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { createHash } from "node:crypto"
 import { runProcess } from "../src/process-runner.mjs"
-import { runCodexBuild } from "../src/codex-build.mjs"
-import { createPinnedBuildContext } from "../src/model-room.mjs"
 
 test('review 1: latched and direct command signals retain mutation uncertainty', async t => {
   const { acquireLease } = await import('../src/pr-delivery-state.mjs')
@@ -96,7 +93,7 @@ test("hard timeout kills grandchildren that hold inherited pipes open", async ()
   assert.ok(Date.now() - start < 3000)
 })
 
-test("existing attended build caller still reads its schema result", async t => {
+test("command input closes before reading its output file", async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "factory-build-process-"))
   t.after(() => fs.rm(root, { recursive: true, force: true }))
   const codex = path.join(root, "codex")
@@ -105,12 +102,10 @@ const fs=require('node:fs'), args=process.argv.slice(2);
 process.stdin.resume();process.stdin.on('end',()=>{
 fs.writeFileSync(args[args.indexOf('--output-last-message')+1],JSON.stringify({status:'pass'}));
 });`, { mode: 0o755 })
-  const excerpt = "Fixture contract"
-  const pinnedBuildContext = createPinnedBuildContext([{ source_revision: "a".repeat(40),
-    path: "src/fixture.mjs", excerpt,
-    content_digest: `sha256:${createHash("sha256").update(excerpt).digest("hex")}` }])
-  const result = await runCodexBuild({ route: { provider: "codex", model: "fixture", effort: "high" },
-    outcome: "Fixture build", sourceRevision: "a".repeat(40), pinnedBuildContext }, { cwd: root, codex })
+  const output = path.join(root, 'result.json')
+  const execution = await runProcess([codex, '--output-last-message', output], { cwd: root, input: 'build task' })
+  assert.equal(execution.code, 0)
+  const result = JSON.parse(await fs.readFile(output, 'utf8'))
   assert.equal(result.status, "pass")
 })
 
@@ -235,6 +230,37 @@ test('macOS retired-group cleanup does not require a global process-table scan',
    assert.equal(ownedGroupAlive(31234),true)
    assert.throws(()=>killOwnedGroup(31234,'SIGKILL'),{code:'EPERM'})
   }
+ } finally {observer.mock.restore();syncBuiltinESMExports()}
+})
+
+test('macOS cleanup reobserves a retiring group before treating EPERM as a refusal', async t => {
+ if(process.platform!=='darwin') return t.skip('macOS retired-group EPERM behavior')
+ const cp=await import('node:child_process'),{syncBuiltinESMExports}=await import('node:module')
+ const {killOwnedGroup}=await import('../src/process-group.mjs')
+ t.mock.method(process,'kill',()=>{throw Object.assign(Error('retiring group'),{code:'EPERM'})})
+ for(const initial of [{status:0,stdout:'31234 31234 R\n',stderr:''},
+  {error:Object.assign(Error('observer timeout'),{code:'ETIMEDOUT'}),status:null}]) {
+  let reads=0
+  const observer=t.mock.method(cp.default,'spawnSync',()=>++reads===1 ? initial : {status:0,stdout:'31234 31234 Z\n',stderr:''})
+  syncBuiltinESMExports()
+  try {assert.doesNotThrow(()=>killOwnedGroup(31234,'SIGKILL'));assert.equal(reads,2)}
+  finally {observer.mock.restore();syncBuiltinESMExports()}
+ }
+})
+
+test('macOS cleanup tolerates a slow system observer on a loaded host', async t => {
+ if(process.platform!=='darwin') return t.skip('macOS retired-group EPERM behavior')
+ const cp=await import('node:child_process'),{syncBuiltinESMExports}=await import('node:module')
+ const {killOwnedGroup,ownedGroupAlive}=await import('../src/process-group.mjs')
+ t.mock.method(process,'kill',()=>{throw Object.assign(Error('retired group'),{code:'EPERM'})})
+ // spawnSync reports ETIMEDOUT when /bin/ps outlives its bound; under load it takes ~300ms.
+ const observer=t.mock.method(cp.default,'spawnSync',(file,args,options)=>options.timeout<300
+  ? {error:Object.assign(Error('spawnSync /bin/ps ETIMEDOUT'),{code:'ETIMEDOUT'}),status:null}
+  : {status:0,stdout:'31234 31234 Z\n',stderr:''})
+ syncBuiltinESMExports()
+ try {
+  assert.equal(ownedGroupAlive(31234),false)
+  assert.doesNotThrow(()=>killOwnedGroup(31234,'SIGKILL'))
  } finally {observer.mock.restore();syncBuiltinESMExports()}
 })
 
