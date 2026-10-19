@@ -31,7 +31,8 @@ try {
       if (delivered.merged) return true;
       return report(await adapter.execute("enqueue-event", candidate));
     });
-  if (["deliver", "recover"].includes(action) && (!number || number.startsWith("--"))) {
+  if (action === "installation-status") report(await adapter.execute(action));
+  else if (["deliver", "recover"].includes(action) && (!number || number.startsWith("--"))) {
     await withLease(path.join(config.stateDir, "locks"), "serial-delivery", async () => {
       do {
         for (const candidate of await adapter.recoveryCandidates()) await deliver(candidate);
@@ -81,6 +82,7 @@ try {
       [
         "readiness",
         "repair-status",
+        "job-status",
         "snapshot",
         "queue-cancel",
         "enqueue-event",

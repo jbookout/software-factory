@@ -24,6 +24,8 @@ Pending branch updates, pushes and merges are read back before any retry. Cancel
 Only green hosted CI on the exact candidate permits a merge. GitHub's rules remain the final merge authority.
 The factory cannot deploy a product. Installation and previous-version rollback are described in [delivery installation](docs/pr-delivery-cutover.md).
 
+`installation-status` identifies the invoked factory and evidence paths. `job-status <repo> <pr>` reads a PR's recorded queue, wait, and repair metadata. See [evidence navigation](docs/pr-delivery-cutover.md#evidence-navigation).
+
 ## Design
 
 The Design Manager is unfinished. Read [the plan](docs/design-manager/plan.md) first: its "Read first" section is the agreed shape for finishing it.
