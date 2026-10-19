@@ -54,6 +54,7 @@
     "sources",
   ];
   let maps = {}, maplibregl = null;
+  let draftRevision = 0;
   let selected = {
     version: null,
     selected_ids: [],
@@ -778,6 +779,7 @@
     syncButtons();
   }
   function changed() {
+    draftRevision++;
     selected.dirty = true;
     status(feedback.mode === "shared" ? "Unsaved changes. Save to share this review list." : "Session selections updated. Shared saving is disabled.", "dirty");
     renderTour();
@@ -841,6 +843,7 @@
   }
   async function saveSelection() {
     if (!adapter || !selected.ready || !selected.dirty || selected.busy) return;
+    const revision = draftRevision;
     selected.busy = true;
     status("Saving shared review list…", "saving");
     renderTour();
@@ -853,15 +856,19 @@
     if (r.status === "saved") {
       Object.assign(selected, {
         version: r.state.version,
+        csrf_token: r.state.csrf_token,
+        dirty: draftRevision !== revision,
+      });
+      if (!selected.dirty) Object.assign(selected, {
         selected_ids: r.state.selected_ids.filter((id) => byId[id]),
         notes: r.state.notes,
         property_notes: r.state.property_notes,
-        csrf_token: r.state.csrf_token,
-        dirty: false,
       });
       status(
-        "Saved to the shared review list. This is not a confirmed appointment.",
-        "saved",
+        selected.dirty
+          ? "Earlier changes saved. Newer edits are still unsaved."
+          : "Saved to the shared review list. This is not a confirmed appointment.",
+        selected.dirty ? "dirty" : "saved",
       );
     } else if (r.status === "conflict") {
       Object.assign(selected, {
@@ -913,6 +920,7 @@
     $("#tour-selected").addEventListener("input", (e) => {
       if (!e.target.dataset.propertyNote) return;
       selected.property_notes[e.target.dataset.propertyNote] = Array.from(e.target.value).slice(0, 2000).join("");
+      draftRevision++;
       selected.dirty = true;
       status(feedback.mode === "shared" ? "Unsaved changes. Save to share this review list." : "Session notes updated. Shared saving is disabled.", "dirty");
       $("#tour-save").disabled = !selected.ready || selected.busy || selected.conflict;

@@ -49,6 +49,43 @@ function fixture({ comments = [], fault, move, runs, link, liveBase = base } = {
   return { provider, calls, cfg }
 }
 
+test('live gh 2.102.0 repository-ID pagination reads every recorded pull page', async () => {
+  const recorded = JSON.parse(fs.readFileSync(new URL('./fixtures/github-pulls-recorded.json', import.meta.url)))
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'recorded-github-')); roots.push(stateDir)
+  const calls = []
+  const provider = createGithubProvider({stateDir, pollMs:5, commandTimeoutMs:1000}, {
+    getRepo: () => ({checkout:'/synthetic/factory'}),
+    command: async argv => {
+      calls.push(argv)
+      const response = recorded.pages.find(page => JSON.stringify(page.argv) === JSON.stringify(argv))
+      assert.ok(response, `unexpected command ${JSON.stringify(argv)}`)
+      return response
+    }
+  })
+  const rows = await provider.pages('jbookout/carr-system', 'pulls?state=open')
+  assert.deepEqual(rows.map(row => row.id), recorded.pages.flatMap(page => JSON.parse(page.stdout.split('\n\n')[1]).map(row => row.id)))
+  assert.equal(calls.length, recorded.pages.length)
+})
+
+test('numeric repository-ID links work for comment pagination in a full observation', async () => {
+  const comments = Array.from({length:26}, (_, i) => comment(i + 1))
+  const value = await fixture({comments, link:'https://api.github.com/repositories/1311400386/issues/7/comments?per_page=25&page=2'}).provider.snapshot(repo, 7)
+  assert.equal(value.state, 'known')
+  assert.equal(value.inventory.comments.length, 26)
+})
+
+for (const link of [
+  'https://elsewhere.invalid/repositories/1/issues/7/comments?per_page=25&page=2',
+  'https://api.github.com/repositories/1/pulls?per_page=25&page=2',
+  'https://api.github.com/repositories/1/issues/7/comments?per_page=25&page=3',
+  'https://api.github.com/repositories/1/issues/7/comments?per_page=25&page=2&filter=other',
+  'https://api.github.com/repositories/1/issues/7/comments?per_page=25&page=2&page=2'
+]) test('malformed numeric-ID links remain unknown without following another endpoint', async () => {
+  const f = fixture({comments:Array.from({length:26}, (_, i) => comment(i + 1)), link})
+  assert.equal((await f.provider.snapshot(repo, 7)).state, 'unknown')
+  assert.ok(f.calls.every(argv => argv[2].startsWith(`repos/${repo}/`)))
+})
+
 test("50 observations share one immutable snapshot per PR across concurrent readers", async () => {
   const f = fixture()
   const ids = new Set()
