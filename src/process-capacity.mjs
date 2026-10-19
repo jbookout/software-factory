@@ -49,7 +49,6 @@ function testLauncher(command) {
   let test = false, requested
   for (let i = 0; i < args.length; i++) {
     // Node accepts hyphens and underscores interchangeably in option names.
-    // Normalize names once for both launcher detection and worker accounting.
     const [name, attached] = args[i].split('=')
     const option = name.replaceAll('_', '-')
     if (option === '--' || !option.startsWith('-') || ['-e', '--eval', '-p', '--print', '--run'].includes(option)) break
@@ -74,8 +73,6 @@ function unmanagedUnits(rows, owned, browserConcurrency) {
   let units = 0
   for (const row of tests) {
     if (descends(row.pid, owned, parents) || descends(row.ppid, testRoots, parents)) continue
-    // Unmanaged supported launcher flags are counted, not silently reduced to
-    // the factory default. Unknown launchers consume the declared worker cap.
     const root = new Set([row.pid])
     const activeWorkers = rows.filter(worker => worker.pid !== row.pid &&
       /^(?:\S*\/)?node\s/.test(worker.command) && descends(worker.pid, root, parents)).length
@@ -90,8 +87,6 @@ function unmanagedUnits(rows, owned, browserConcurrency) {
   return units
 }
 
-// Acquire every unit under one election or release every partial acquisition.
-// Each unit uses the existing supervisor-bound lease and dead-owner recovery.
 export async function reserveCompute(config, units, budget, { snapshot = processSnapshot, agentUnits = 0 } = {}) {
   const { capacity, browserConcurrency } = config.resources
   if (!Number.isSafeInteger(units) || units <= 0 || units > capacity) throw new Error('resource request exceeds host capacity')
@@ -101,8 +96,6 @@ export async function reserveCompute(config, units, budget, { snapshot = process
     const reservation = await withLease(root, 'compute-admission', async () => {
       const releases = [], owned = new Set(), managed = new Map()
       try {
-        // Reading a unit invokes existing lease recovery; an occupied unit
-        // retains both controller and supervisor/group identities.
         let occupied = 0
         for (let i = 0; i < capacity; i++) {
           const release = await acquireLease(root, `compute-${i}`, { budget })

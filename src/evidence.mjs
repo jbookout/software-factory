@@ -23,8 +23,6 @@ export function evidenceReadLimits(input = {}) {
   return limits
 }
 
-const digestOf = bytes => createHash("sha256").update(bytes).digest("hex")
-
 // Reads evidence bytes from a store that outlives the job's scratch environment.
 // Pins the configured store identity. The POSIX helper opens each component
 // relative to a held directory descriptor with O_NOFOLLOW (no check/use gap).
@@ -92,7 +90,7 @@ export function createBoundReader({ readArtifact, limits: inputLimits, priorDige
     if (!Buffer.isBuffer(bytes)) return { failed: `invalid reader byte contract: ${artifact.ref}` }
     if (bytes.length > limits.maxBytes) return { failed: `artifact size limit exceeded: ${artifact.ref}` }
     if (!bytes.length) return { failed: `empty: ${artifact.ref}` }
-    const digest = digestOf(bytes)
+    const digest = createHash("sha256").update(bytes).digest("hex")
     if (digest !== artifact.digest) return { failed: `digest mismatch: ${artifact.ref}` }
     if (priorDigests.includes(digest)) return { failed: `reused from an earlier phase: ${artifact.ref}` }
     return { bytes, digest }
@@ -113,7 +111,6 @@ export function createBoundReader({ readArtifact, limits: inputLimits, priorDige
 // it does not authenticate who wrote the observation.
 export async function acceptEvidence({ phase, kind, criterionId, binding, records, readArtifact,
   priorDigests = [], limits: inputLimits }) {
-  // Acceptance uses snapshots even while an injected reader yields control.
   binding = structuredClone(binding)
   records = structuredClone(records)
   const expected = phase === "after" ? ["passed"] : kind === "bug" ? ["failed"] : ["passed", "failed"]
@@ -156,4 +153,22 @@ export async function acceptEvidence({ phase, kind, criterionId, binding, record
   }
   const result = failed.length ? "failed" : blocked.length ? "blocked" : "passed"
   return { result, reasons: [...failed, ...blocked], artifacts }
+}
+
+// The one delivery binding rule: a safe owner/name repository, a positive PR
+// number and a full lowercase commit SHA. Journals and effects add their own fields.
+export function isDeliveryBinding(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  const { repo, pr, head } = value
+  return typeof repo === "string" && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) &&
+    !repo.split("/").some(part => part === "." || part === "..") &&
+    Number.isSafeInteger(pr) && pr > 0 && typeof head === "string" && /^[0-9a-f]{40}$/.test(head)
+}
+
+// Effect identity binds semantic input; retries keep the same explicit attempt.
+export function deliveryEffectId({ repo, pr, head, action, attempt = 1, policy = "pr-delivery/v1" }) {
+  if (!isDeliveryBinding({ repo, pr, head }) ||
+      typeof action !== "string" || !action || !Number.isSafeInteger(attempt) || attempt <= 0 ||
+      typeof policy !== "string" || !policy) throw Error("invalid delivery effect binding")
+  return createHash("sha256").update(JSON.stringify([repo, pr, head, action, policy, attempt])).digest("hex")
 }

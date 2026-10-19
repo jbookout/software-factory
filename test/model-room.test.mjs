@@ -134,7 +134,7 @@ test("Jev failure or invalid answer keeps baseline route explicit", async () => 
 test("pinned contract loader reads only an exact committed source excerpt", async () => {
   const sourceRevision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim()
   const result = await readPinnedContract({ root, sourceRevision, path: "README.md", startLine: 1, endLine: 1 })
-  assert.equal(result.excerpt, "# Software Factory")
+  assert.equal(result.excerpt, "# Software factory")
   assert.equal(result.source_revision, sourceRevision)
   await assert.rejects(readPinnedContract({ root, sourceRevision, path: "../secret", startLine: 1, endLine: 1 }))
 })
@@ -187,4 +187,50 @@ test("unavailable or malformed Jev hides optional context without hiding require
   assert.deepEqual(malformed.contracts, [])
   assert.equal(createPinnedBuildContext([contract, ...malformed.contracts]).contracts[0].excerpt,
     contract.excerpt)
+})
+
+test("configured factory profile routes its build command with pinned contracts", () => {
+  const directory = fs.mkdtempSync("/tmp/factory-profile-")
+  try {
+    const sourceRevision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim()
+    const jobPath = `${directory}/job.json`, profilePath = `${directory}/profile.json`
+    fs.writeFileSync(jobPath, JSON.stringify({ product: "DoctorCRE", outcome: "Build fixture", sourceRevision }))
+    const build = [process.execPath, "--input-type=module", "-e", `
+      import assert from 'node:assert/strict';
+      let input = ''; for await (const chunk of process.stdin) input += chunk;
+      const request = JSON.parse(input);
+      assert.deepEqual(request.route, ${JSON.stringify(baseline)});
+      assert.equal(request.pinnedBuildContext.contracts[0].excerpt, '# Software factory');
+      console.log(JSON.stringify({status:'pass'}));`]
+    fs.writeFileSync(profilePath, JSON.stringify({ root, commands: {
+      build: { [`${baseline.provider}/${baseline.model}/${baseline.effort}`]: build },
+      verify: [process.execPath, '-e', 'console.log(JSON.stringify({status:"pass"}))']
+    }, modelRoom: { enabled: true, baseline, candidates: [], contracts: [{ root,
+      sourceRevision, path: 'README.md', startLine: 1, endLine: 1 }] } }))
+    const result = JSON.parse(execFileSync(process.execPath, ['bin/factory.mjs', jobPath, profilePath],
+      { cwd: root, encoding: 'utf8', env: { PATH: process.env.PATH } }))
+    assert.equal(result.outcome, 'complete')
+    assert.deepEqual(result.events.map(event => event.step), ['build', 'check', 'cleanup'])
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
+test("Codex build CLI forwards the pinned task and returns the desk result", () => {
+  const directory = fs.mkdtempSync('/tmp/factory-codex-cli-')
+  try {
+    fs.writeFileSync(`${directory}/codex`, `#!/usr/bin/env node
+      const fs = require('node:fs');
+      const args = process.argv.slice(2);
+      if (!args.includes('--approve-for-me') || !args.includes('--output-schema')) process.exit(2);
+      let input = ''; process.stdin.on('data', chunk => input += chunk);
+      process.stdin.on('end', () => {
+        if (!input.includes('Build fixture') || !input.includes(${JSON.stringify(excerpt)})) process.exit(3);
+        fs.writeFileSync(args[args.indexOf('--output-last-message') + 1], JSON.stringify({status:'pass',data:{fixture:true}}));
+      });`, { mode: 0o755 })
+    const request = { route: baseline, outcome: 'Build fixture', sourceRevision: 'e'.repeat(40),
+      pinnedBuildContext: createPinnedBuildContext([contract]) }
+    const result = JSON.parse(execFileSync(process.execPath, ['bin/codex-build.mjs'], {
+      cwd: root, encoding: 'utf8', input: JSON.stringify(request),
+      env: { PATH: `${directory}:${process.env.PATH}` } }))
+    assert.deepEqual(result, { status: 'pass', data: { fixture: true } })
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
 })

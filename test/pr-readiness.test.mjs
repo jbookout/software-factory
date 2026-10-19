@@ -48,3 +48,17 @@ for (const [status, conclusion] of [["success", null], ["failure", null], ["comp
     assert.equal(result.state, "provider-unknown")
     assert.equal(result.repairable, undefined)
   })
+
+test("retro 2: an optional failed check cannot authorize a CI fixer",()=>{
+ const result=classifyChecks(input({checkRuns:[run(),run(C,"failure",{id:2,name:"optional"})]}))
+ assert.equal(result.state,"failure");assert.equal(result.repairable,false)
+ assert.equal(classifyChecks(input({checkRuns:[run(C,"failure")]})).repairable,true)
+})
+
+test('cancellation recovery uses only the latest exact check attempt', () => {
+ for (const latest of ['success',null]) {
+  const checks=[run(C,'cancelled',{id:1}),run(C,latest,{id:2,status:latest===null?'in_progress':'completed'})]
+  assert.equal(classifyChecks(input({checkRuns:checks})).cancelled,false)
+ }
+ assert.equal(classifyChecks(input({checkRuns:[run(C,'cancelled',{id:2})]})).cancelled,true)
+})

@@ -1,390 +1,80 @@
-import { createHash, randomUUID } from "node:crypto"
-import { readFileSync } from "node:fs"
-import Ajv2020 from "ajv/dist/2020.js"
+import { verifyPinnedBuildContext } from "./model-room.mjs";
 
-import { acceptEvidence, buildIdentity, evidenceReadLimits } from "./evidence.mjs"
-import { evaluatePerformance } from "./performance-factory.mjs"
-import { classifyRisk, reviewsFor } from "./risk-router.mjs"
-import { verifyPinnedBuildContext } from "./model-room.mjs"
-
-const DEFAULT_BUDGETS = { verificationRounds: 3, reviewRounds: 2 }
-const jobSchema = JSON.parse(readFileSync(new URL("../schemas/factory-job.schema.json", import.meta.url)))
-const ajv = new Ajv2020({ strict: true })
-const validateBudgetInput = ajv.compile(jobSchema.properties.budgets)
-const validateBudgets = ajv.compile({ ...jobSchema.properties.budgets, required: Object.keys(DEFAULT_BUDGETS) })
-const validateCriterion = ajv.compile(jobSchema.properties.criterion)
-
-function resolveBudgets(input = {}) {
-  if (!validateBudgetInput(input)) throw new Error(`invalid budgets: ${ajv.errorsText(validateBudgetInput.errors)}`)
-  const budgets = { ...DEFAULT_BUDGETS, ...input }
-  if (!validateBudgets(budgets)) throw new Error(`invalid budgets: ${ajv.errorsText(validateBudgets.errors)}`)
-  return budgets
-}
-
-function hash(value) {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex")
-}
-
-// trustedDigest must come from a separately trusted original, not this receipt.
-// This unkeyed JSON checksum detects changes; it does not authenticate an author.
-export function verifyFactoryReceipt(receipt, trustedDigest) {
-  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)
-      || typeof trustedDigest !== "string" || !/^[a-f0-9]{64}$/.test(trustedDigest)) return false
-  try {
-    const { receiptDigest, ...body } = receipt
-    return receiptDigest === trustedDigest && hash(body) === trustedDigest
-  } catch {
-    return false
-  }
-}
-
-function findingKey(findings) {
-  return hash(findings ?? [])
-}
-
-function assertJob(job) {
-  if (!job || typeof job !== "object") throw new Error("job is required")
-  for (const field of ["outcome", "sourceRevision"]) {
-    if (typeof job[field] !== "string" || !job[field].trim()) throw new Error(`${field} is required`)
-  }
-}
-
-export function createFactory({ now = () => new Date().toISOString(), makeId = randomUUID,
-  modelRoomAdvisor = null, readArtifact = null, evidenceLimits } = {}) {
-  const readLimits = evidenceReadLimits(evidenceLimits)
+export function createFactory({ modelRoomAdvisor = null } = {}) {
   return {
     async run(job, adapter) {
-      assertJob(job)
-      if (!adapter || typeof adapter.execute !== "function") throw new Error("adapter.execute is required")
-      const budgets = resolveBudgets(job.budgets)
-      if (job.criterion !== undefined && !validateCriterion(job.criterion)) {
-        throw new Error(`invalid criterion: ${ajv.errorsText(validateCriterion.errors)}`)
-      }
-      // The caller and adapters own their values; the run owns its snapshot.
-      job = structuredClone(job)
-
-      const startedAt = now()
-      const jobId = job.id ?? makeId()
-      const events = []
-      const findings = []
-      const evidence = []
-      const proposals = []
-      let stopped = null
-      let prepared = false
-      let environmentId = null
-      let candidate = null
-      let verificationRounds = 0
-      const evidenceAcceptance = { before: null, after: null }
-      const criterion = job.criterion ? Object.freeze(job.criterion) : null
-      const needsEvidence = risk => job.kind === "bug" || risk.signals.includes("interface")
-      let risk = classifyRisk(job.risk)
-      let changedPaths = [...(job.risk?.changedPaths ?? [])]
-      let reviewRoles = reviewsFor(risk)
-      let modelRoom = null
-      let performance = evaluatePerformance({ baseline: job.performance?.baseline, current: {},
-        budgets: job.performance?.budgets, knownFingerprints: job.performance?.knownFingerprints })
-
-      async function execute(step, input = {}) {
-        let result
-        try {
-          result = await adapter.execute(step, structuredClone({
-            jobId,
-            outcome: job.outcome,
-            sourceRevision: job.sourceRevision,
-            ...input
-          }))
-        } catch (error) {
-          result = {
-            status: "fail",
-            evidence: [],
-            findings: [{ reason: "adapter execution failed", errorType: error.name, errorDigest: hash(error.message) }],
-            measurements: {},
-            proposals: [],
-            data: {}
-          }
-        }
-        events.push({ step, status: result.status })
-        evidence.push(...result.evidence.map((item) => ({ step, ...item })))
-        findings.push(...result.findings.map((item) => ({ step, ...item })))
-        proposals.push(...result.proposals.map((item) => ({ step, ...item })))
-        return result
-      }
-
-      // Phase evidence counts only when the factory reads the artifacts and accepts them.
-      async function accept(phase, result, binding, priorDigests) {
-        let verdict
-        try {
-          verdict = await acceptEvidence({ phase, kind: job.kind, criterionId: criterion.id, binding,
-            records: result.evidence, readArtifact, priorDigests, limits: readLimits })
-        } catch (error) {
-          verdict = { result: "failed", reasons: ["unexpected evidence acceptance error"], artifacts: [] }
-          findings.push({ step: `evidence:${phase}`, reason: "evidence acceptance failed",
-            errorType: error.name, errorDigest: hash(error.message) })
-        }
-        evidenceAcceptance[phase] = verdict
-        return verdict.result === "passed" ? null : `evidence:${phase}:${verdict.result}`
-      }
-
-      async function buildCandidate() {
-        const build = await execute("build", modelRoom ? { route: modelRoom.selected_route,
-          modelRoomStateDigest: modelRoom.state_digest,
-          ...(modelRoom.build_context ? { pinnedBuildContext: modelRoom.build_context } : {}) } : {})
-        // A repair invalidates the previous candidate until a new build binds it.
-        candidate = null
-        evidenceAcceptance.after = null
-        if (build.status !== "pass") stopped = build.status === "skip" ? "build:missing" : "build"
-        else ({ candidate, stopped } = buildIdentity(build.data, job.sourceRevision))
-        return !stopped
-      }
-
-      async function repairCandidate(step, request) {
-        const repair = await execute(step, request)
-        if (repair.status !== "pass") {
-          stopped = repair.status === "skip" ? `${step}:missing` : step
-          return false
-        }
-        // Always rebuild: repairs can change source, fixtures or build configuration.
-        return buildCandidate()
-      }
-
-      async function verifyCandidate() {
-        let previous = null
-        const limit = budgets.verificationRounds
-        while (verificationRounds < limit) {
-          const round = ++verificationRounds
-          const result = await execute("verify", { round })
-          if (result.status === "pass") return true
-          if (result.status === "skip") {
-            stopped = "verify:missing"
-            return false
-          }
-          const current = findingKey(result.findings)
-          if (current === previous) {
-            stopped = "verify:stalled"
-            return false
-          }
-          previous = current
-          if (round < limit) {
-            if (!await repairCandidate("repair:verification", { round, findings: result.findings })) return false
-          }
-        }
-        stopped = "verify:budget-exhausted"
-        return false
-      }
-
+      const rounds = job.rounds ?? 3;
+      if (!Number.isInteger(rounds) || rounds < 1 || rounds > 10)
+        throw new Error("rounds must be between one and ten");
+      const events = [];
+      let modelRoom = null;
+      const execute = async (step) => {
+        const result = await adapter.execute(
+          step,
+          structuredClone({
+            ...job,
+            ...(step === "build" && modelRoom
+              ? {
+                  route: modelRoom.selected_route,
+                  modelRoomStateDigest: modelRoom.state_digest,
+                  ...(modelRoom.build_context
+                    ? { pinnedBuildContext: modelRoom.build_context }
+                    : {}),
+                }
+              : {}),
+          }),
+        );
+        events.push({ step, ...result });
+        return result.status === "pass";
+      };
+      const result = { outcome: "failed", events };
       try {
-        const environment = await execute("environment:prepare")
-        environmentId = environment.data.environmentId ?? null
-        prepared = Boolean(environmentId)
-        if (environment.status !== "pass" || environment.data.isolated !== true || !environment.data.environmentId) {
-          stopped = environment.status === "skip" ? "environment:missing" : "environment:prepare"
+        if (job.product === "DoctorCRE" && modelRoomAdvisor) {
+          modelRoom = await modelRoomAdvisor({ job: structuredClone(job) });
+          if (modelRoom?.schema !== "doctorcre-build-route.v1" || !modelRoom.selected_route)
+            throw new Error("invalid model room advice");
+          if (modelRoom.build_context && !verifyPinnedBuildContext(modelRoom.build_context))
+            throw new Error("invalid pinned build context");
         }
-
-        const context = !stopped ? await execute("context:collect", { environmentId }) : { status: "skip" }
-        if (!stopped && context.status !== "pass") {
-          stopped = context.status === "skip" ? "context:missing" : "context:collect"
-        }
-        const evidenceRequired = needsEvidence(classifyRisk(job.risk))
-        if (!stopped && evidenceRequired && !criterion) stopped = "evidence:criterion:missing"
-        const before = !stopped ? await execute("evidence:before", { required: evidenceRequired, criterion })
-          : { status: "skip" }
-        if (!stopped && evidenceRequired) {
-          stopped = before.status === "pass" ? await accept("before", before, { revision: job.sourceRevision })
-            : "evidence:before:missing"
-        }
-        if (!stopped && job.product === "DoctorCRE" && modelRoomAdvisor) {
-          try {
-            modelRoom = await modelRoomAdvisor(structuredClone({ job, context: context.data }))
-            modelRoom = structuredClone(modelRoom)
-            if (!modelRoom || modelRoom.schema !== "doctorcre-build-route.v1" || !modelRoom.selected_route)
-              throw new Error("invalid model room advice")
-            if (modelRoom.build_context && !verifyPinnedBuildContext(modelRoom.build_context))
-              throw new Error("invalid pinned build context")
-            events.push({ step: "model-room:advise", status: "pass" })
-          } catch (error) {
-            stopped = "model-room:advise"
-            findings.push({ step: "model-room:advise", reason: "model room advice failed",
-              errorType: error.name, errorDigest: hash(error.message) })
-            events.push({ step: "model-room:advise", status: "fail" })
+        for (let round = 0; round < rounds; round++) {
+          if (!(await execute("build"))) break;
+          if (await execute("check")) {
+            result.outcome = "complete";
+            break;
           }
+          if (round + 1 < rounds && !(await execute("repair"))) break;
         }
-        if (!stopped) await buildCandidate()
-        if (!stopped) await verifyCandidate()
-
-        async function inspectRisk() {
-          const inspected = await execute("risk:inspect")
-          if (inspected.status !== "pass") {
-            stopped = inspected.status === "skip" ? "risk:missing" : "risk:inspect"
-            return
-          }
-          changedPaths = [...new Set([...changedPaths, ...(inspected.data.changedPaths ?? [])])]
-          risk = classifyRisk({
-            changedPaths,
-            signals: [...new Set([...risk.signals, ...(inspected.data.signals ?? [])])]
-          })
-          reviewRoles = reviewsFor(risk)
-          if (needsEvidence(risk) && !evidenceAcceptance.before) {
-            stopped = !criterion ? "evidence:criterion:missing"
-              : before.status !== "pass" ? "evidence:before:missing-after-inspection"
-                : await accept("before", before, { revision: job.sourceRevision })
-          }
-        }
-        if (!stopped) await inspectRisk()
-        if (!stopped) {
-          let previous = null
-          for (let round = 1; round <= budgets.reviewRounds; round += 1) {
-            const results = await Promise.all(reviewRoles.map((role) => execute(`review:${role}`, { role, round, risk })))
-            const missing = results.some((result) => result.status === "skip")
-            if (missing) {
-              stopped = "review:missing"
-              break
-            }
-            const failed = results.flatMap((result, index) => {
-              if (result.status === "pass") return []
-              return result.findings.length ? result.findings : [{ role: reviewRoles[index], reason: "review did not pass" }]
-            })
-            if (!failed.length) break
-            const current = findingKey(failed)
-            if (current === previous) {
-              stopped = "review:stalled"
-              break
-            }
-            previous = current
-            if (round === budgets.reviewRounds) {
-              stopped = "review:budget-exhausted"
-              break
-            }
-            const verifiedCandidate = candidate
-            if (!await repairCandidate("repair:review", { round, findings: failed })) break
-            if (hash(candidate) !== hash(verifiedCandidate) && !await verifyCandidate()) break
-            await inspectRisk()
-            if (stopped) break
-          }
-        }
-
-        if (!stopped) {
-          const required = needsEvidence(risk)
-          const after = await execute("evidence:after", { risk, required, criterion, candidate })
-          if (required) {
-            stopped = after.status === "pass"
-              ? await accept("after", after, candidate, evidenceAcceptance.before.artifacts.map(({ digest }) => digest))
-              : "evidence:after:missing"
-          }
-        }
-
-        let release = { status: "skip", findings: [] }
-        let production = { status: "skip", findings: [] }
-        if (!stopped) {
-          release = await execute("release:observe", { risk })
-          if (release.status === "fail") stopped = "release:observe"
-        }
-        if (!stopped) {
-          production = await execute("production:observe", { risk })
-          if (production.status === "fail") stopped = "production:observe"
-        }
-
-        const measurement = !stopped
-          ? await execute("performance:measure", { risk })
-          : { status: "skip", measurements: {} }
-        performance = evaluatePerformance({
-          baseline: job.performance?.baseline,
-          current: measurement.measurements,
-          budgets: job.performance?.budgets,
-          knownFingerprints: job.performance?.knownFingerprints
-        })
-        if (Object.keys(job.performance?.budgets ?? {}).length && measurement.status !== "pass") {
-          performance = {
-            status: "fail",
-            findings: [{ metric: null, reason: "required performance measurement did not pass" }],
-            duplicates: []
-          }
-        }
-        if (performance.findings.length) {
-          findings.push(...performance.findings.map((item) => ({ step: "performance:evaluate", ...item })))
-          await execute("performance:analyze", { regressions: performance.findings })
-        }
-
-        const incidentSignals = [release, production].flatMap((result) => result.findings)
-          .filter((item) => ["critical", "outage"].includes(item.severity))
-        if (incidentSignals.length) {
-          await execute("incident:investigate", { signals: incidentSignals, authority: "read-only" })
-        }
-
-        if (prepared) await execute("garden:inspect", { risk })
-      } catch (error) {
-        stopped ??= "factory:execution"
-        findings.push({ step: "factory:execution", reason: "unexpected factory execution error",
-          errorType: error.name, errorDigest: hash(error.message) })
       } finally {
-        if (prepared) {
-          const disposed = await execute("environment:dispose", { environmentId })
-          if (disposed.status !== "pass" && !stopped) stopped = "environment:dispose"
-        }
+        if (!(await execute("cleanup"))) result.outcome = "failed";
       }
-      const outcome = stopped || performance.status === "fail" ? "needs-attention" : "complete"
-      await execute("learn:record", { outcome, stopped, risk, findings })
-      const completedAt = now()
-      const result = {
-        contractVersion: 1,
-        jobId,
-        outcome,
-        stopped,
-        environmentId,
-        sourceRevision: job.sourceRevision,
-        candidate,
-        risk,
-        riskRecommendation: ["critical", "high"].includes(risk.level)
-          ? { blocking: false, text: "Obtain explicit product-owner judgment after reviewing the evidence." }
-          : null,
-        reviewRoles,
-        performance,
-        events,
-        evidence,
-        evidenceAcceptance,
-        findings,
-        proposals,
-        modelRoom: modelRoom ? (({ build_context, ...receipt }) => receipt)(modelRoom) : null,
-        startedAt,
-        completedAt
+      if (modelRoom) {
+        const { build_context, ...receipt } = modelRoom;
+        result.modelRoom = receipt;
       }
-      return { ...result, receiptDigest: hash(result) }
-    }
-  }
+      return result;
+    },
+  };
 }
 
-// The PR lifecycle crosses the same execute(step, request) seam as build jobs.
-// Progress is the remote head, not the agent's claimed completion or findings.
 export async function runPrDelivery(job, adapter) {
-  const { rounds = 3, ...request } = job
-  if (!Number.isSafeInteger(rounds) || rounds <= 0) throw new Error("rounds must be a positive integer")
-  const events = []
-  const execute = async step => {
-    const result = await adapter.execute(step, request)
-    events.push({ step, status: result.status, ...result.data })
-    return result
-  }
-  const stopped = result => ({ code: result.data.code ?? 1, message: result.data.message, events })
-  const complete = async message => {
-    const result = await adapter.execute("pr:complete", request)
-    return result.status === "pass" ? { code: 0, message, events } : stopped(result)
-  }
-  for (let round = 0; round < rounds; round++) {
-    const inspect = await execute("pr:inspect")
-    if (inspect.status !== "pass") return stopped(inspect)
-    if (inspect.data.merged) return complete(inspect.data.message)
-    if (inspect.data.ready) return complete("APPROVED")
-    if (inspect.data.approved || inspect.data.blocked) {
-      const repair = await execute(inspect.data.approved ? "ci-fix" : "fix")
-      if (repair.status !== "pass") return stopped(repair)
+  const { rounds = 3, ...request } = job;
+  if (!Number.isInteger(rounds) || rounds < 1 || rounds > 10)
+    throw new Error("rounds must be between one and ten");
+  for (let round = 0; round <= rounds; round++) {
+    const inspect = await adapter.execute("pr:inspect", request);
+    if (inspect.status !== "pass") return { code: inspect.data.code ?? 1, ...inspect.data };
+    if (inspect.data.merged || inspect.data.ready) {
+      const complete = await adapter.execute("pr:complete", request);
+      if (complete.status !== "pass") return { code: complete.data.code ?? 1, ...complete.data };
+      return {
+        code: 0,
+        merged: inspect.data.merged === true,
+        message: inspect.data.message ?? "CHECKS GREEN",
+      };
     }
-    const review = await execute("review")
-    if (review.status !== "pass") return stopped(review)
+    if (!inspect.data.repairable || round === rounds)
+      return { code: 75, message: "WAIT: hosted checks or mergeability need attention" };
+    const repair = await adapter.execute("ci-fix", request);
+    if (repair.status !== "pass") return { code: repair.data.code ?? 1, ...repair.data };
   }
-  const final = await execute("pr:inspect")
-  if (final.status !== "pass") return stopped(final)
-  if (final.data.merged) return complete(final.data.message)
-  if (final.data.ready) return complete("APPROVED")
-  const stop = { cause: "rounds-exhausted", code: 1, message: `UNRESOLVED after ${rounds} rounds`, resetAt: null }
-  const saved = await adapter.execute("pr:suspend", { ...request, head: final.data.head, stop })
-  return saved.status === "pass" ? { ...stop, events } : stopped(saved)
 }

@@ -53,8 +53,8 @@ const next = answerDesignInterview(first.interview, {
 
 Every operation returns a new snapshot and does not mutate the caller's snapshot.
 The caller must save the returned `interview` before displaying its next question.
-Slice 2 supplies serializable state and deterministic replay; the durable factory
-journal and transactional answer persistence arrive in slice 5. Never substitute
+Slice 2 supplies serializable state and deterministic replay; slice 5's
+[factory journal](journal.md) supplies transactional answer persistence. Never substitute
 a Markdown project journal or CARR storage. The projection and pending question
 do not share mutable references with recorded answers.
 

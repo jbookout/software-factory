@@ -1,6 +1,6 @@
 import type { ProjectPlatform } from './design-manager.mjs'
 
-export declare const ACCEPTANCE_ENGINE: 'e2e@0.15.1'
+export declare const ACCEPTANCE_ENGINE: 'e2e@0.16.0'
 
 export interface ArtifactRef { ref: string; digest: string }
 export interface FixtureRef { id: string; revision: number; digest: string }

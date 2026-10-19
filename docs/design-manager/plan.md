@@ -1,5 +1,15 @@
 # Design Manager implementation plan
 
+## Read first: how to finish this (Joe, 2026-10-15)
+
+Joe is keeping the Design Manager to help him with UI. It is unfinished. When work resumes, finish it in a simpler shape than the 12 stages and 9 gates below:
+1. A short design brief.
+2. A few questions tailored to the task.
+3. A journal that stores Joe's design decisions.
+4. A visual check of the finished screen against the brief.
+
+Drop the stage gates, signed acceptance records and single-engine proof rule unless a real design job proves one is needed. Raise this with Joe at the start of the next session on the Design Manager.
+
 Joe-approved direction, 2026-10-01. TASK AE revised the plan after slice 1
 (PR 15) merged; TASK AI applied the stringsaeed stack post before slice 2.
 TASK AW applies Joe's 2026-10-02 design sources after slice 2 (PR 24) merged.
@@ -9,8 +19,12 @@ Slice 3 now has [settings and an offline-tested cloud qualification harness](set
 Its live account/background-runtime qualification remains incomplete. Slice 4 now
 has the criterion evidence gate (`software-factory/design-verify`, tested by AW-4),
 a sample-app VERIFY skill/runner and the [e2e wrapper](../../capabilities/agentic-ui-evaluation/README.md)
-as a non-blocking pilot. Live e2e qualification with Joe's attended ChatGPT login
-remains incomplete. Later slices remain planned; none is qualified by this text or pure replay.
+with qualified deterministic web execution on e2e 0.16.0. It remains non-blocking.
+Model-backed exploration with Joe's attended ChatGPT login remains incomplete.
+Slice 5 supplies the [private SQLite journal, reference records
+and scoped backup/restore commands](journal.md), tested against actual files by
+AW-5. Persistent-host choice/cost and laptop-off qualification remain blocked.
+Later slices remain planned; none is qualified by this text or pure replay.
 
 ## Purpose and ownership
 
@@ -101,7 +115,7 @@ after surface qualification; they never become a runtime prerequisite.
 **Store decision:** a small embedded SQLite database under the factory's private
 state root, partitioned by user/project/version, plus immutable artifact files.
 Proposed root: `~/.local/share/software-factory/design-manager/` on the persistent
-factory host, containing `journal.sqlite` and `artifacts/`; this is private factory
+factory host, containing `journal.sqlite`, its database identity seal and `artifacts/`; this is private factory
 state outside the source checkout. The same layout serves every app project.
 Events, decisions, gates, evidence, worker receipts and provenance are structured
 records, never Markdown journals. Transactions, uniqueness constraints, migrations
@@ -393,7 +407,7 @@ agent-device and argent also offer verification/replay features, and e2e's mobil
 engine itself uses agent-device. Prove judges the criterion's e2e evidence, never
 the driver's identity or its development-session success. Source: the
 [practitioner post](https://x.com/stringsaeed/status/2105734077085303106), checked
-against [e2e mobile](https://github.com/tester-army/e2e/blob/8d38206f460415b70706b45acb820bb0e24832ae/docs/mobile.mdx),
+against [e2e mobile](https://github.com/tester-army/e2e/blob/a0ee3e9061b666fa3dd43e7dcc8e1a5da47362d6/docs/mobile.mdx),
 [agent-device](https://github.com/callstack/agent-device/blob/cc5e356595c75e459ed4968c55cedd3d1dbb715d/README.md)
 and [argent](https://github.com/software-mansion/argent/blob/a824fcba90f7ebc7ecdb00b4abf4c00d3fba9e42/README.md).
 
@@ -480,15 +494,18 @@ need no redesign, but their prior passing records cannot certify the new build.
 
 ## Prove: agentic UI evaluation (slice 4, reused in 9–10)
 
-Plan `capabilities/agentic-ui-evaluation/` as a factory wrapper around
+Use `capabilities/agentic-ui-evaluation/` as a factory wrapper around
 [TesterArmy e2e](https://github.com/tester-army/e2e). Studied source revision:
-`8d38206f460415b70706b45acb820bb0e24832ae`; package pin **`e2e@0.15.1`**, Apache-2.0.
+`a0ee3e9061b666fa3dd43e7dcc8e1a5da47362d6`; package pin **`e2e@0.16.0`**, Apache-2.0.
 Preserve license/provenance; exact companion dependencies are locked during
-qualification. No package is installed or capability built by TASK AE.
+qualification. TASK AE installed no package. The disposable web qualification
+fixture now locks e2e 0.16.0, @e2e-dev/web 0.11.2 and Playwright 1.63.0; its
+[runner and status](../../capabilities/agentic-ui-evaluation/README.md) distinguish
+qualified deterministic execution from pending attended model evaluation.
 Set **`E2E_TELEMETRY_DISABLED=1`** on every invocation, including explore, bug bash,
-MCP and replay. Sources: [package/version](https://github.com/tester-army/e2e/blob/8d38206f460415b70706b45acb820bb0e24832ae/packages/e2e/package.json),
-[license](https://github.com/tester-army/e2e/blob/8d38206f460415b70706b45acb820bb0e24832ae/LICENSE),
-[telemetry switch](https://github.com/tester-army/e2e/blob/8d38206f460415b70706b45acb820bb0e24832ae/README.md).
+MCP and replay. Sources: [package/version](https://github.com/tester-army/e2e/blob/a0ee3e9061b666fa3dd43e7dcc8e1a5da47362d6/packages/e2e/package.json),
+[license](https://github.com/tester-army/e2e/blob/a0ee3e9061b666fa3dd43e7dcc8e1a5da47362d6/LICENSE),
+[telemetry switch](https://github.com/tester-army/e2e/blob/a0ee3e9061b666fa3dd43e7dcc8e1a5da47362d6/README.md).
 
 The product owns e2e as a development dependency, its lockfile, `e2e.config.ts`,
 fixtures, scripts and baseline expectations. The factory consumes supplied reports
@@ -507,7 +524,7 @@ provider** (`e2e/oauth/chatgpt`), on Joe's ChatGPT subscription, never Claude.
 This is the chosen supported login route, not a Claude custom executor. Upstream
 documents ChatGPT Plus/Pro support and explicitly no Claude subscription support.
 The exact model comes from account-discovered available IDs and per-user settings.
-Source: [subscription setup](https://github.com/tester-army/e2e/blob/8d38206f460415b70706b45acb820bb0e24832ae/docs/subscriptions.mdx).
+Source: [subscription setup](https://github.com/tester-army/e2e/blob/a0ee3e9061b666fa3dd43e7dcc8e1a5da47362d6/docs/subscriptions.mdx).
 Upstream support is verified from source; this wrapper's live login and OpenAI
 eligibility for this third-party use remain unverified until slice 4. Do not infer
 universal third-party billing entitlement from [Sign in with ChatGPT's participating-tool announcement](https://openai.com/index/devday-2026-recap/).
@@ -529,7 +546,7 @@ Successful automatic refresh does not make interactive recovery unattended-safe.
 The unattended laptop-off milestone excludes model-backed e2e and unqualified
 Claude/Dot routes; blocked dependencies must be visible and resumable.
 
-The [GitHub PR-comment reporter](https://github.com/tester-army/e2e/blob/8d38206f460415b70706b45acb820bb0e24832ae/packages/github/README.md)
+The [GitHub PR-comment reporter](https://github.com/tester-army/e2e/blob/a0ee3e9061b666fa3dd43e7dcc8e1a5da47362d6/packages/github/README.md)
 stays **off unless explicitly enabled per repository** with authorized publication
 and permissions. Archive sanitized evidence before e2e's output directory is
 replaced by another run. Sample fixtures contain no client/production data;
@@ -537,9 +554,9 @@ screenshots, traces and video need explicit access/retention controls.
 
 ### Explore, bug bash, MCP and acceptance
 
-Use [explore](https://github.com/tester-army/e2e/blob/8d38206f460415b70706b45acb820bb0e24832ae/docs/explore.mdx)
-for focused journeys, [bug bash](https://github.com/tester-army/e2e/blob/8d38206f460415b70706b45acb820bb0e24832ae/docs/bug-bash.mdx)
-for bounded adversarial charters, and [MCP](https://github.com/tester-army/e2e/blob/8d38206f460415b70706b45acb820bb0e24832ae/docs/reference/mcp.mdx)
+Use [explore](https://github.com/tester-army/e2e/blob/a0ee3e9061b666fa3dd43e7dcc8e1a5da47362d6/docs/explore.mdx)
+for focused journeys, [bug bash](https://github.com/tester-army/e2e/blob/a0ee3e9061b666fa3dd43e7dcc8e1a5da47362d6/docs/bug-bash.mdx)
+for bounded adversarial charters, and [MCP](https://github.com/tester-army/e2e/blob/a0ee3e9061b666fa3dd43e7dcc8e1a5da47362d6/docs/reference/mcp.mdx)
 for open/drive/assert/close session steps. A finding counts **only when its repro
 test fails with an assertion on the exact candidate**. A story, screenshot or
 navigation/auth crash is not a confirmed bug. Reject an explained non-bug with
@@ -557,7 +574,7 @@ Compare run receipts to both broken and clean baselines.
 The second run replays the recorded actions with **zero model calls**; count
 provider invocations, not cached-step labels. Use deterministic assertions for
 this replay: model-judged assertions/extraction are not evidence of zero-call
-replay. Exploration is not assumed wholly cached. Sources: [executors/cache rules](https://github.com/tester-army/e2e/blob/8d38206f460415b70706b45acb820bb0e24832ae/docs/executors.mdx).
+replay. Exploration is not assumed wholly cached. Sources: [executors/cache rules](https://github.com/tester-army/e2e/blob/a0ee3e9061b666fa3dd43e7dcc8e1a5da47362d6/docs/executors.mdx).
 Replay the exact bound repro/test, assert the same outcome, archive evidence and
 then clean up. Failure to detect a planted defect, a flagged trap, missing repro,
 lost evidence or a nonzero replay model count disqualifies the wrapper. Keep it
@@ -601,7 +618,7 @@ capability name as installation proof. The iOS-without-capability test checks th
 exact failure message now; skipped/stale proofs and missing methods also cannot
 pass. The trigger and each parked tool are in [parked.md](parked.md). Upstream
 mobile uses agent-device with iOS simulators/Android emulators; iOS requires
-appropriate simulator hosting. Source: [e2e mobile docs](https://github.com/tester-army/e2e/blob/8d38206f460415b70706b45acb820bb0e24832ae/docs/mobile.mdx).
+appropriate simulator hosting. Source: [e2e mobile docs](https://github.com/tester-army/e2e/blob/a0ee3e9061b666fa3dd43e7dcc8e1a5da47362d6/docs/mobile.mdx).
 
 ### iOS platform pack: SwiftUI Pro
 
@@ -839,7 +856,9 @@ and Claude Design. Slices 4, 9 and 10 retain their requested numbers.
 AW-2 is implemented in `test/acceptance/design-layer-diagnosis.test.mjs`. AW-4's gate
 rules are implemented in `test/acceptance/design-verify.test.mjs` with synthetic store
 records; the sample-app run is `test/acceptance/verify-sample-app.test.mjs`. AW-4's live
-e2e qualification and the other rows remain future slice acceptance tests. Use
+e2e qualification remains incomplete. AW-5 runs in
+`test/acceptance/design-journal.test.mjs`; the other rows remain future slice
+acceptance tests. Use
 both unrelated synthetic sample projects and the existing mobile trigger when
 applicable. Each row requires its passing case and deliberately failing case;
 retain the actual artifact/observation, expected outcome and source binding.
@@ -906,9 +925,9 @@ mobile stack is installed or qualified by this amendment.
 | Hand-built Maestro flows were too costly to be practical | Coverage/reliability alone missed implementation effort. The parked comparison now includes timed authoring and maintenance after a controlled feature change; the report motivates that test without predetermining its winner. |
 | MiniSim is recommended | The recommendation's provenance was missing. It is now cited in the parked row. Unattended adoption remains declined: a menu-bar GUI launcher fails the headless background runtime property test; optional human tooling retains its exact trigger. |
 | The workflow looks promising while efficiency remains unsettled | This plan cannot claim an efficient composed stack today. Qualification records latency, startup and authoring/maintenance cost alongside detection, clean-code acceptance and cleanup; promising is not a passing receipt. |
-| Quoted post: open source; deterministic and agentic APIs | Already specified exactly: “package pin **`e2e@0.15.1`**, Apache-2.0” in [agentic UI evaluation](#prove-agentic-ui-evaluation-slice-4-reused-in-910), “Agent steps run through the **Codex worker using e2e's supported ChatGPT OAuth provider**” in [execution](#execution-and-attended-authentication), and “Use deterministic assertions for this replay” in [acceptance](#explore-bug-bash-mcp-and-acceptance). No package or replay is qualified today. |
+| Quoted post: open source; deterministic and agentic APIs | Already specified exactly: “package pin **`e2e@0.16.0`**, Apache-2.0” in [agentic UI evaluation](#prove-agentic-ui-evaluation-slice-4-reused-in-910), “Agent steps run through the **Codex worker using e2e's supported ChatGPT OAuth provider**” in [execution](#execution-and-attended-authentication), and “Use deterministic assertions for this replay” in [acceptance](#explore-bug-bash-mcp-and-acceptance). The deterministic web fixture is qualified on 0.16.0; attended model execution and mobile remain unqualified. |
 | Quoted post: web, mobile and more; any app | Web/mobile engines are documented; generic any-app coverage is unproved. The exact existing mobile requirement is “simulator/emulator execution of the VERIFY skill **and e2e's mobile engine**” in [mobile trigger](#deterministic-mobile-trigger). This amendment makes web acceptance equally explicit. Other platforms need their own supported-engine fixture before any coverage claim. |
-| Quoted post: bring your own agent/infrastructure; local or CI execution | Configurable workers and product-owned fixtures already exist in the plan: “Workers, model/effort, concurrency, availability and allowed routes come from a private **per-user settings file**” and “The product owns e2e as a development dependency, its lockfile, `e2e.config.ts`, fixtures, scripts and baseline expectations.” Upstream [README](https://github.com/tester-army/e2e/blob/8d38206f460415b70706b45acb820bb0e24832ae/README.md) and [mobile CI](https://github.com/tester-army/e2e/blob/8d38206f460415b70706b45acb820bb0e24832ae/docs/mobile-ci.mdx) document the routes. These sentences do not prove local/CI execution: slice 4 must produce the same fixture's local and hosted-CI receipts on the chosen authorized infrastructure, preserving attended-auth and no-paid-fallback constraints. |
+| Quoted post: bring your own agent/infrastructure; local or CI execution | Configurable workers and product-owned fixtures already exist in the plan: “Workers, model/effort, concurrency, availability and allowed routes come from a private **per-user settings file**” and “The product owns e2e as a development dependency, its lockfile, `e2e.config.ts`, fixtures, scripts and baseline expectations.” Upstream [README](https://github.com/tester-army/e2e/blob/a0ee3e9061b666fa3dd43e7dcc8e1a5da47362d6/README.md) and [mobile CI](https://github.com/tester-army/e2e/blob/a0ee3e9061b666fa3dd43e7dcc8e1a5da47362d6/docs/mobile-ci.mdx) document the routes. These sentences do not prove local/CI execution: slice 4 must produce the same fixture's local and hosted-CI receipts on the chosen authorized infrastructure, preserving attended-auth and no-paid-fallback constraints. |
 
 ### Joe's 2026-10-02 design sources: property-by-property application
 

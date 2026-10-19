@@ -3,6 +3,7 @@ import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { askJev } from "./jev-usage.mjs"
 import { hmacSignature, hmacSignatureMatches, isHmacSignature } from "./hmac-signature.mjs"
+import { canonicalDigest } from "./canonical.mjs"
 
 const execFileAsync = promisify(execFile)
 
@@ -114,7 +115,6 @@ export function verifyPinnedBuildContext(context) {
   }
 }
 
-/** Jev may trim optional pinned context, never the required contract. */
 export async function selectOptionalBuildContext({ task, chunks = [], apiKey, sharedAsk }) {
   const taskText = bounded(task, MAX_TASK_CHARS)
   if (!Array.isArray(chunks) || chunks.length > MAX_OPTIONAL_CONTEXT)

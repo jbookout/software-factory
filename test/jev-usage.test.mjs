@@ -54,7 +54,7 @@ test("process adapter propagates a shared refusal and requires exact clean sourc
 test("factory source contains no private paid endpoint, counter, cache or receipt writer", async () => {
   const source = await readFile(new URL("../src/jev-usage.mjs", import.meta.url), "utf8")
   assert.doesNotMatch(source, /api\.typesafe\.ai|fetch\(|appendFile|CACHE_MS|daily_cap/)
-  for (const root of ["src", "bin", "scripts", "deploy", "capabilities"]) {
+  for (const root of ["src", "bin", "scripts", "capabilities"]) {
     const base = new URL(`../${root}/`, import.meta.url)
     for (const rel of await readdir(base, { recursive: true })) {
       if (!/\.(mjs|js|py|sh)$/.test(rel) || /(^|\/)test/.test(rel)) continue

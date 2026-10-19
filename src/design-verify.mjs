@@ -19,7 +19,7 @@ const validateCheck = validator('check')
 const validateReview = validator('review')
 
 /** The only engine whose runs count as e2e acceptance evidence (plan: package pin). */
-export const ACCEPTANCE_ENGINE = 'e2e@0.15.1'
+export const ACCEPTANCE_ENGINE = 'e2e@0.16.0'
 const MAX_FAILED_REPAIR_ROUNDS = 2
 
 const schemaErrors = (validate, label) => (validate.errors ?? [])

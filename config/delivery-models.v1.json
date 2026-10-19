@@ -1,0 +1,14 @@
+{
+  "schema": "factory-delivery-models/v1",
+  "purpose": "Models for bounded source repairs.",
+  "roles": {
+    "fix": {
+      "model": "gpt-6.1-sol",
+      "effort": "high"
+    },
+    "ci-fix": {
+      "model": "gpt-6.1-sol",
+      "effort": "high"
+    }
+  }
+}

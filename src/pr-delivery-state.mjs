@@ -13,13 +13,32 @@ export const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 export const keyFor = (repo, pr) => `${encodeURIComponent(repo)}-${pr}`
 export async function readJson(file, fallback) {
   try { return JSON.parse(await fs.readFile(file, "utf8")) }
-  catch (error) { if (error.code === "ENOENT") return fallback; throw error }
+  catch (error) {
+    if (error.code === "ENOENT") return fallback
+    if (error instanceof SyntaxError) throw new DeliveryError("invalid delivery state JSON", 9)
+    throw error
+  }
 }
-export async function writeJson(file, value) {
+// Journals are durable. Lease claims pass durable: false: owner liveness, not
+// surviving a power loss, recovers them, and they churn on every contention poll.
+export async function writeJson(file, value, { durable = true } = {}) {
   const temp = `${file}.${randomUUID()}.tmp`
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
-  await fs.writeFile(temp, JSON.stringify(value), { mode: 0o600 })
-  await fs.rename(temp, file)
+  let handle
+  try {
+    handle = await fs.open(temp, "wx", 0o600)
+    await handle.writeFile(JSON.stringify(value))
+    if (durable) await handle.sync()
+    await handle.close(); handle = null
+    await fs.rename(temp, file)
+    if (durable) {
+      const directory = await fs.open(path.dirname(file), "r")
+      try { await directory.sync() } finally { await directory.close() }
+    }
+  } finally {
+    if (handle) await handle.close()
+    await fs.rm(temp, { force: true })
+  }
 }
 const alive = pid => { try { process.kill(pid, 0); return true } catch (e) { return e.code !== "ESRCH" } }
 
@@ -61,10 +80,11 @@ export async function acquireLease(root, name, { budget } = {}) {
     }
     return result
   }
+  const claim = value => writeJson(file, value, { durable: false })
   try {
-    await writeJson(file, owner)
+    await claim(owner)
     owner.ticket = Math.max(0, ...(await peers()).map(p => p.ticket)) + 1
-    await writeJson(file, owner)
+    await claim(owner)
     const choosingUntil = monotonicNow() + 1000
     let contenders = await peers()
     while (contenders.some(p => p.ticket === 0)) {
@@ -79,7 +99,7 @@ export async function acquireLease(root, name, { budget } = {}) {
     release.bindJob = (job, signal) => {
       binding = binding.then(async () => {
         if (released || signal?.aborted) throw new Error('job lease released or launch revoked')
-        owner = { ...owner, job }; await writeJson(file, owner)
+        owner = { ...owner, job }; await claim(owner)
         return { file, token }
       })
       return binding
@@ -98,12 +118,15 @@ export async function withLease(root, name, fn, { waitMs = 0, pollMs = 30, budge
   } while (true)
 }
 
-export async function reserveCodex(config, repo, pr, kind, budget = new Deadline(config.queueTimeoutMs ?? config.limits.timeoutMs, { phase: "queue" })) {
+export async function reserveCodex(config, repo, pr, kind, budget = new Deadline(config.queueTimeoutMs ?? config.limits.timeoutMs, { phase: "queue" }), { beforeAdmission = async () => {}, identity } = {}) {
   const root = path.join(config.stateDir, "locks")
+  const attemptId = identity?.attemptId ?? randomUUID()
   try {
     while (true) {
       budget.check()
+      await beforeAdmission()
       const result = await withLease(root, "budget", async () => {
+        await beforeAdmission()
         const file = path.join(config.stateDir, "usage.json")
         const usage = (await readJson(file, [])).filter(r => r.at >= Date.now() - 86400_000)
         if (usage.filter(r => r.repo === repo && r.pr === pr).length >= config.limits.runsPer24h)
@@ -117,7 +140,7 @@ export async function reserveCodex(config, repo, pr, kind, budget = new Deadline
         for (let i = 0; i < config.limits.slots; i++) {
           const release = await acquireLease(root, `codex-slot-${i}`, { budget })
           if (release) {
-            try { budget.check(); await writeJson(file, [...usage, { repo, pr, kind, at: Date.now() }]) }
+            try { budget.check(); await writeJson(file, [...usage, { repo, pr, kind, attemptId, ...(identity ? { head: identity.head, effectId: identity.effectId } : {}), at: Date.now() }]) }
             catch (e) { await release(); throw e }
             return release
           }
@@ -125,7 +148,7 @@ export async function reserveCodex(config, repo, pr, kind, budget = new Deadline
         return null
       }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget })
       if (result) {
-        try { budget.check(); return result }
+        try { budget.check(); result.attemptId = attemptId; return result }
         catch (error) { await result(); throw error }
       }
       await budget.sleep(config.pollMs)
@@ -173,4 +196,29 @@ export async function completeDeliveryWait(config, repo, pr, budget) {
     const prior = await readJson(file, null)
     if (prior) await writeJson(file, { ...prior, status: "complete" })
   }, { waitMs: config.commandTimeoutMs, pollMs: config.pollMs, budget })
+}
+
+// Projection recovery reuses admission to retire dead, unowned claim files.
+// A surviving supervisor/group retains its claim and remains visible as orphaned.
+export async function orphanLeaseCount(root, { recover = false, budget } = {}) {
+  let count = 0
+  for (const name of await fs.readdir(root).catch(error => { if (error.code === "ENOENT") return []; throw error })) {
+    if (!name.endsWith(".claims")) continue
+    for (const file of await fs.readdir(path.join(root, name))) {
+      if (!file.endsWith(".json")) continue
+      const owner = await readJson(path.join(root, name, file), null)
+      if (owner && (!Number.isSafeInteger(owner.pid) || owner.pid <= 0)) throw new DeliveryError("invalid lease owner identity", 9)
+      if (owner && !alive(owner.pid)) {
+        count++
+        const jobAlive = owner.job?.pid && alive(owner.job.pid)
+        const groupAlive = owner.job?.groupPid && ownedGroupAlive(owner.job.groupPid)
+        if (recover && !jobAlive && !groupAlive) {
+          const release = await acquireLease(root, name.slice(0, -7), { budget })
+          if (release) await release()
+          if (!await readJson(path.join(root, name, file), null)) count--
+        }
+      }
+    }
+  }
+  return count
 }

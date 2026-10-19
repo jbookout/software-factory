@@ -42,7 +42,6 @@ test('AW-2: every entry and sample chooses each lowest unsupported layer, persis
   for (const app of apps) for (const entry of manager.DESIGN_ENTRIES) for (const layer of layers) {
     const initial = intake(app, entry)
     const supplied = assessments(layer)
-    // Multiple gaps must not route to the surface ahead of the lower layer.
     if (layer !== 'surface') Object.assign(supplied.at(-1), assessments('surface').at(-1))
     let view = answer(initial, supplied)
     assert.equal(view.question.layer, layer, `${app}/${entry}/${layer}`)
@@ -88,7 +87,7 @@ test('AW-2: dependency order accepts explicit independent decisions without inve
 test('AW-2: partial, assumed, weak and not-started never certify support; unknown/declined retain the question', () => {
   for (const support of ['partial', 'assumed', 'weak', 'not-started']) {
     const supplied = assessments('domain', support)
-    supplied[1].criterionMet = true // Even a claimed met criterion cannot upgrade assumed evidence.
+    supplied[1].criterionMet = true
     let view = answer(intake(apps[0], 'design-system'), supplied)
     const question = view.question
     for (const status of ['unknown', 'declined']) {
