@@ -562,23 +562,27 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
         return finishRepair(repo,pr,record,compute)
       },async job=>{record.builderJob=job;await writeJson(repairFile(repo,pr),record)},config.models[kind])
   }
+  async function readQueue() {
+    const queue = await readJson(queueFile, [])
+    if (!Array.isArray(queue)) throw new DeliveryError("invalid queue journal", 9)
+    for (const entry of queue) {
+      // The journal is shared across lanes; dispatch, rather than reading
+      // another lane's row, requires a configured repository.
+      if (!isDeliveryBinding(entry) || !entry.id) throw new DeliveryError("invalid queue job binding", 9)
+      entry.state ??= entry.outcome ? "acknowledged" : "pending"
+      if (!["pending", "claimed", "effect-requested", "reconciled", "acknowledged"].includes(entry.state))
+        throw new DeliveryError("invalid queue transition", 9)
+      if (["claimed", "effect-requested", "reconciled"].includes(entry.state) &&
+          (typeof entry.attemptId !== "string" || !/^[0-9a-f]{64}$/.test(entry.effectId ?? "")))
+        throw new DeliveryError("unbound queue claim", 9)
+      if (["reconciled", "acknowledged"].includes(entry.state) && !["pass", "fail"].includes(entry.outcome?.status))
+        throw new DeliveryError("missing queue outcome", 9)
+    }
+    return queue
+  }
   async function queueState(fn) {
     return withLease(locks, "queue-state", async () => {
-      const queue = await readJson(queueFile, [])
-      if (!Array.isArray(queue)) throw new DeliveryError("invalid queue journal", 9)
-      for (const entry of queue) {
-        // The journal is shared across lanes; dispatch, rather than reading
-        // another lane's row, requires a configured repository.
-        if (!isDeliveryBinding(entry) || !entry.id) throw new DeliveryError("invalid queue job binding", 9)
-        entry.state ??= entry.outcome ? "acknowledged" : "pending"
-        if (!["pending", "claimed", "effect-requested", "reconciled", "acknowledged"].includes(entry.state))
-          throw new DeliveryError("invalid queue transition", 9)
-        if (["claimed", "effect-requested", "reconciled"].includes(entry.state) &&
-            (typeof entry.attemptId !== "string" || !/^[0-9a-f]{64}$/.test(entry.effectId ?? "")))
-          throw new DeliveryError("unbound queue claim", 9)
-        if (["reconciled", "acknowledged"].includes(entry.state) && !["pass", "fail"].includes(entry.outcome?.status))
-          throw new DeliveryError("missing queue outcome", 9)
-      }
+      const queue = await readQueue()
       const result = await fn(queue)
       await writeJson(queueFile, queue)
       return result
@@ -992,6 +996,37 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
     const open = await provider.pages(repo, "pulls?state=open")
     return { candidates: open.filter(pr => pr.base?.ref === "main" && !pr.draft).map(pr => ({ repo, pr: pr.number })) }
   }
+  async function installationStatus() {
+    const sourceRoot = fileURLToPath(new URL("../", import.meta.url))
+    return { sourceRevision: await git(sourceRoot, "rev-parse", "HEAD"),
+      sourceModified: Boolean((await command(["git", "--no-optional-locks", "status", "--porcelain", "--untracked-files=no"],
+        sourceRoot, { mutation: false })).stdout.trim()),
+      entrypoint: path.join(sourceRoot, "bin/pr-delivery.mjs"), configFile: config.configFile,
+      policySource: path.join(sourceRoot, "docs/pr-delivery-cutover.md"), installation: "unverified",
+      checkPolicy: Object.fromEntries(Object.entries(config.repos).map(([repo, local]) => [repo, local.requiredChecks])),
+      paths: { stateDir: config.stateDir, deliveryLog: path.join(config.stateDir, "delivery.jsonl"), queue: queueFile } }
+  }
+  async function jobStatus(repo, pr) {
+    const navigation = await installationStatus()
+    const waitReceipt = path.join(config.stateDir, "waits", `${keyFor(repo, pr)}.json`)
+    const repairReceipt = repairFile(repo, pr)
+    const read = async (file, schema) => {
+      const record = await readJson(file, null)
+      if (record !== null && (!isDeliveryBinding(record) || record.schema !== schema || record.repo !== repo || record.pr !== pr))
+        throw new DeliveryError("job journal binding mismatch", 9)
+      return record
+    }
+    const wait = await read(waitReceipt, "factory-delivery-wait/v1")
+    const repair = await read(repairReceipt, "factory-repair-delivery/v1")
+    const job = value => value ? { receipt: value.receipt, log: value.log } : null
+    return { ...navigation, repo, pr, observation: "recorded history, not process liveness",
+      queue: (await readQueue()).filter(row => row.repo === repo && row.pr === pr)
+        .map(row => ({ id: row.id, head: row.head, state: row.state, outcome: row.outcome?.status ?? null })),
+      wait: wait ? { head: wait.head, status: wait.status, cause: wait.cause, code: wait.code } : null,
+      repair: repair ? { id: repair.id, head: repair.head, status: repair.status, worktree: repair.worktree,
+        builderJob: job(repair.builderJob), checkJob: job(repair.checkJob) } : null,
+      paths: { ...navigation.paths, waitReceipt, repairReceipt } }
+  }
   return {
     config,
     async recoveryCandidates() {
@@ -1026,6 +1061,8 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
           if (repo) getRepo(repo)
           let data
           switch (step) {
+            case "installation-status": data = await installationStatus(); break
+            case "job-status": data = await jobStatus(repo, pr); break
             case "snapshot": data = await observe(repo, pr, { head }); break
             case "pr:inspect": {
               let current = await view(repo, pr)
@@ -1093,6 +1130,8 @@ export function createPrDeliveryAdapter(config, { env = process.env, onTransitio
           if (step === "merge-queue" && data.status) return normalizeResult(data, "delivery")
           return pass(data)
         } catch (error) {
+          if (["installation-status", "job-status"].includes(step))
+            return fail(new DeliveryError("Delivery navigation unavailable: check configuration and journal bindings", 9))
           await deliveryStatus(config, {repo, pr, step, code:error.code, message:error.message, nextAction:error.nextAction ?? (error.wait ? "wait-for-input-or-reset" : "inspect-and-resume")})
           if (!error.wait) await log({ step, repo, pr, status: "failed", code: error.code ?? 1, message: error.message })
           return fail(error)
