@@ -10,6 +10,8 @@ import { keyFor } from "../src/pr-delivery-state.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const repo = "fixture/navigation";
 const head = "a".repeat(40);
+const binding = { repo, pr: 7, head };
+const guard = fileURLToPath(new URL("./fixtures/navigation-write-guard.cjs", import.meta.url));
 async function fixture(t) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "factory-navigation-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
@@ -20,14 +22,15 @@ async function fixture(t) {
       requiredChecks: [{ name: "test", appId: 15368 }] } },
     stateDir, privateSetting: "CANARY_PRIVATE",
   }));
-  return { config, stateDir, run: (action, ...args) => spawnSync(process.execPath,
+  const env = { ...process.env, GH_TOKEN: "", GITHUB_TOKEN: "", NODE_OPTIONS: `--require=${guard}` };
+  return { config, stateDir, directory, env, run: (action, ...args) => spawnSync(process.execPath,
     [path.join(root, "bin/pr-delivery.mjs"), config, action, ...args], {
-      encoding: "utf8", env: { ...process.env, GH_TOKEN: "", GITHUB_TOKEN: "" },
+      encoding: "utf8", env,
     }) };
 }
 function result(run) {
   assert.equal(run.status, 0, run.stderr);
-  assert.doesNotMatch(run.stdout + run.stderr, /CANARY_PRIVATE/);
+  assert.doesNotMatch(run.stdout + run.stderr, /CANARY_PRIVATE|WRITE_ATTEMPT/);
   return JSON.parse(run.stdout);
 }
 
@@ -35,7 +38,7 @@ test("installation navigation identifies the invoked source and configured polic
   const f = await fixture(t);
   const status = result(f.run("installation-status"));
   assert.equal(status.sourceRevision, execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim());
-  assert.equal(typeof status.sourceModified, "boolean");
+  assert.equal(Object.hasOwn(status, "sourceModified"), false);
   assert.equal(status.entrypoint, path.join(root, "bin/pr-delivery.mjs"));
   assert.equal(status.configFile, f.config);
   assert.equal(status.policySource, path.join(root, "docs/pr-delivery-cutover.md"));
@@ -100,6 +103,32 @@ for (const [name, relative, record] of [
   ["wrong wait binding", `waits/${keyFor(repo, 7)}.json`, JSON.stringify({ schema: "factory-delivery-wait/v1", repo, pr: 8, head, message: "CANARY_PRIVATE" })],
   ["non-record wait", `waits/${keyFor(repo, 7)}.json`, "false"],
   ["wrong repair schema", `repairs/${keyFor(repo, 7)}.json`, JSON.stringify({ schema: "CANARY_PRIVATE", repo, pr: 7, head })],
+  ...[
+    ["non-string queue identity", { id: {}, state: "pending" }],
+    ["blank queue identity", { id: " ", state: "pending" }],
+    ["empty attempt identity", { id: "q", state: "claimed", attemptId: "", effectId: "b".repeat(64) }],
+    ["blank attempt identity", { id: "q", state: "claimed", attemptId: " ", effectId: "b".repeat(64) }],
+    ["non-string effect identity", { id: "q", state: "claimed", attemptId: "attempt", effectId: ["b".repeat(64)] }],
+    ["empty effect identity", { id: "q", state: "claimed", attemptId: "attempt", effectId: "" }],
+    ["contradictory pending outcome", { id: "q", state: "pending", outcome: { status: "pass" } }],
+  ].map(([name, row]) => [name, "queue.json", JSON.stringify([{ ...binding, ...row }])]),
+  ...[
+    ["partial wait", "waits", { schema: "factory-delivery-wait/v1" }],
+    ["invalid wait status", "waits", { schema: "factory-delivery-wait/v1", status: "CANARY_PRIVATE", cause: "slot-wait", code: 75 }],
+    ["blank wait cause", "waits", { schema: "factory-delivery-wait/v1", status: "suspended", cause: " ", code: 75 }],
+    ["invalid wait code", "waits", { schema: "factory-delivery-wait/v1", status: "suspended", cause: "slot-wait", code: "75" }],
+    ["partial repair", "repairs", { schema: "factory-repair-delivery/v1" }],
+    ["blank repair identity", "repairs", { schema: "factory-repair-delivery/v1", id: " ", status: "building", worktree: "/synthetic/worktree" }],
+    ["invalid repair status", "repairs", { schema: "factory-repair-delivery/v1", id: "repair", status: "CANARY_PRIVATE", worktree: "/synthetic/worktree" }],
+    ["relative repair worktree", "repairs", { schema: "factory-repair-delivery/v1", id: "repair", status: "building", worktree: "relative" }],
+    ...[
+      ["non-record worker paths", "builderJob", true],
+      ["partial worker paths", "builderJob", { receipt: "/synthetic/worker.json" }],
+      ["relative check paths", "checkJob", { receipt: "relative", log: "/synthetic/check.log" }],
+      ["invalid check path type", "checkJob", { receipt: "/synthetic/check.json", log: 7 }],
+      ["invalid worker path bytes", "builderJob", { receipt: "/synthetic/worker\0.json", log: "/synthetic/worker.log" }],
+    ].map(([name, field, job]) => [name, "repairs", { schema: "factory-repair-delivery/v1", id: "repair", status: "building", worktree: "/synthetic/worktree", [field]: job }]),
+  ].map(([name, directory, record]) => [name, `${directory}/${keyFor(repo, 7)}.json`, JSON.stringify({ ...binding, ...record })]),
 ]) {
   test(`job navigation refuses ${name} without echoing or writing evidence`, async (t) => {
     const f = await fixture(t), file = path.join(f.stateDir, relative);
@@ -109,9 +138,48 @@ for (const [name, relative, record] of [
     const run = f.run("job-status", repo, "7");
     assert.equal(run.status, 9);
     assert.match(run.stderr, /Delivery navigation unavailable/);
-    assert.doesNotMatch(run.stdout + run.stderr, /CANARY_PRIVATE/);
+    assert.doesNotMatch(run.stdout + run.stderr, /CANARY_PRIVATE|WRITE_ATTEMPT/);
     assert.equal(await fs.readFile(file, "utf8"), record);
     assert.deepEqual(await fs.readdir(f.stateDir, { recursive: true }), before);
+  });
+}
+
+test("navigation accepts current wait and repair states without requiring optional jobs", async t => {
+  const f = await fixture(t), key = keyFor(repo, 7);
+  await fs.mkdir(path.join(f.stateDir, "waits"), { recursive: true });
+  await fs.mkdir(path.join(f.stateDir, "repairs"));
+  for (const status of ["suspended", "resumable", "complete"]) {
+    await fs.writeFile(path.join(f.stateDir, "waits", `${key}.json`), JSON.stringify({ ...binding,
+      schema: "factory-delivery-wait/v1", status, cause: "slot-wait", code: 75 }));
+    assert.equal(result(f.run("job-status", repo, "7")).wait.status, status);
+  }
+  for (const status of ["building", "built", "no_progress", "checking", "check_interrupted", "check_failed",
+    "push_pending", "early_publication", "candidate_unconfirmed", "delivered"]) {
+    await fs.writeFile(path.join(f.stateDir, "repairs", `${key}.json`), JSON.stringify({ ...binding,
+      schema: "factory-repair-delivery/v1", id: "repair", status, worktree: "/synthetic/worktree", checkJob: null }));
+    const record = result(f.run("job-status", repo, "7")).repair;
+    assert.equal(record.status, status);
+    assert.equal(record.builderJob, null);
+    assert.equal(record.checkJob, null);
+  }
+});
+
+test("the write detector catches a filesystem mutation", async t => {
+  const f = await fixture(t), marker = path.join(f.directory, "write-probe");
+  const probe = spawnSync(process.execPath, ["-e", "require('node:fs').writeFileSync(process.argv[1], 'x')", marker],
+    { encoding: "utf8", env: f.env });
+  assert.notEqual(probe.status, 0);
+  assert.match(probe.stderr, /WRITE_ATTEMPT/);
+  await assert.rejects(fs.access(marker), { code: "ENOENT" });
+});
+
+for (const action of ["installation-status", "job-status"]) {
+  test(`${action} does not invoke a writing fsmonitor hook`, async t => {
+    const f = await fixture(t), marker = path.join(f.directory, "fsmonitor-write"), hook = path.join(f.directory, "fsmonitor.sh");
+    await fs.writeFile(hook, '#!/bin/sh\nprintf x >> "$REVIEW_MARKER"\nprintf "token\\0"\n', { mode: 0o700 });
+    Object.assign(f.env, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.fsmonitor", GIT_CONFIG_VALUE_0: hook, REVIEW_MARKER: marker });
+    result(f.run(action, repo, "7"));
+    await assert.rejects(fs.access(marker), { code: "ENOENT" });
   });
 }
 
