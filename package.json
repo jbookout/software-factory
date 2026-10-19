@@ -45,7 +45,9 @@
     "marked": "18.0.14",
     "oxfmt": "0.72.0",
     "tailwindcss": "4.3.3",
-    "typescript": "6.0.3"
+    "typescript": "6.0.3",
+    "maplibre-gl": "6.13.0",
+    "playwright": "1.63.0"
   },
   "engines": {
     "node": ">=20.19"

@@ -1,81 +1,599 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "brand": {
-    "name": "Northstar",
-    "descriptor": "Practice Real Estate",
-    "navy": "#002F6C",
-    "orange": "#F57F29"
+    "name": "Example Practice A",
+    "descriptor": "Healthcare Real Estate",
+    "navy": "#002f6c",
+    "orange": "#f57f29",
+    "logo": null
   },
   "presentation": {
-    "title": "A place to grow with purpose.",
-    "preparedFor": "Northstar Family Health",
+    "title": "Synthetic practice property review",
+    "preparedFor": "Example Practice A",
     "scenarioDate": "October 2026",
+    "summary": "Fictional example only. Replace the complete dataset with verified, source-backed client research before use.",
     "fictional": true
   },
+  "strategy": {
+    "mode": "owner_occupancy"
+  },
   "sections": [
-    { "id": "home", "label": "Overview", "title": "A place to grow with purpose.", "visible": true },
-    { "id": "leases", "label": "Leases", "title": "Keep flexibility in the plan.", "visible": true },
-    { "id": "purchases", "label": "Purchases", "title": "Ownership gives the practice a stake in the future.", "visible": true },
-    { "id": "strategy", "label": "Strategy", "title": "Make the space work harder.", "visible": true },
-    { "id": "demographics", "label": "Demographics", "title": "Demand signals, with room for nuance.", "visible": true },
-    { "id": "sources", "label": "Sources", "title": "A decision gets stronger with better evidence.", "visible": true }
+    {
+      "id": "home",
+      "label": "Home",
+      "title": "A place to grow with purpose.",
+      "visible": true
+    },
+    {
+      "id": "purchases",
+      "label": "Purchases",
+      "title": "Ownership gives the practice a stake in the future.",
+      "visible": true
+    },
+    {
+      "id": "demographics",
+      "label": "Demographics",
+      "title": "Demand signals, with room for nuance.",
+      "visible": true
+    },
+    {
+      "id": "sources",
+      "label": "Sources",
+      "title": "A decision gets stronger with better evidence.",
+      "visible": true
+    },
+    {
+      "id": "feedback",
+      "label": "Tour List",
+      "title": "Keep the property discussion in sync.",
+      "visible": true
+    }
   ],
-  "metrics": [
-    { "value": 4.8, "suffix": "%", "label": "Sample household growth", "note": "5-year illustrative trend", "trend": [1.2, 1.8, 1.7, 3.1, 2.8, 4.8] },
-    { "value": 3.2, "suffix": "%", "label": "Sample employment growth", "note": "5-year illustrative trend", "trend": [1.4, 2.0, 1.8, 2.3, 2.9, 3.2] },
-    { "value": 2.4, "suffix": "%", "label": "Sample insured household growth", "note": "Fictional planning metric", "trend": [0.9, 1.2, 1.4, 1.7, 2.0, 2.4] },
-    { "value": 1.5, "suffix": "%", "label": "Sample population index growth", "note": "Fictional planning metric", "trend": [0.5, 0.6, 0.8, 1.0, 1.2, 1.5] }
-  ],
+  "market": {
+    "title": "Fictional market snapshot",
+    "summary": "These made-up market signals illustrate layout only. They are not local facts or forecasts.",
+    "developmentTitle": "Example projects in context",
+    "purchaseScreening": [
+      {
+        "label": "Practice occupancy",
+        "description": "Synthetic shortlist for the configured practice occupancy scenario. Confirm the clinical layout during due diligence.",
+        "sourceId": "source-property-fixture"
+      },
+      {
+        "label": "Reported space",
+        "description": "Synthetic reported areas are shown in each property card; verify measurements and usable space.",
+        "sourceId": "source-property-fixture"
+      },
+      {
+        "label": "Parking and access",
+        "description": "Parking is unverified in this synthetic shortlist. Review access, condition and availability before deciding.",
+        "sourceId": "source-property-fixture"
+      }
+    ]
+  },
   "locator": {
-    "label": "Fictional Locator Schematic",
-    "image": null,
-    "disclaimer": "Fictional Locator Schematic. This example shows fictional civic development projects, not real roads, places, or distances."
+    "center": {
+      "lat": 35.12,
+      "lon": -90.1
+    },
+    "zoom": 11,
+    "disclaimer": "Fictional coordinates for interface testing only; not for navigation.",
+    "style": {
+      "version": 8,
+      "sources": {
+        "water": {
+          "type": "geojson",
+          "data": {
+            "type": "FeatureCollection",
+            "features": [
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "Polygon",
+                  "coordinates": [
+                    [
+                      [
+                        -90.07119999999999,
+                        35.075
+                      ],
+                      [
+                        -90.05499999999999,
+                        35.075
+                      ],
+                      [
+                        -90.05499999999999,
+                        35.16
+                      ],
+                      [
+                        -90.0658,
+                        35.16
+                      ],
+                      [
+                        -90.07119999999999,
+                        35.075
+                      ]
+                    ]
+                  ]
+                }
+              }
+            ]
+          },
+          "attribution": "Synthetic test geometry; no real geography or navigation data"
+        },
+        "roads": {
+          "type": "geojson",
+          "data": {
+            "type": "FeatureCollection",
+            "features": [
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.13000000000001,
+                      35.075
+                    ],
+                    [
+                      -90.13000000000001,
+                      35.16
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.14500000000001,
+                      35.08916666666667
+                    ],
+                    [
+                      -90.05499999999999,
+                      35.08916666666667
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.11500000000001,
+                      35.075
+                    ],
+                    [
+                      -90.11500000000001,
+                      35.16
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.14500000000001,
+                      35.10333333333333
+                    ],
+                    [
+                      -90.05499999999999,
+                      35.10333333333333
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.1,
+                      35.075
+                    ],
+                    [
+                      -90.1,
+                      35.16
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.14500000000001,
+                      35.1175
+                    ],
+                    [
+                      -90.05499999999999,
+                      35.1175
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.085,
+                      35.075
+                    ],
+                    [
+                      -90.085,
+                      35.16
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.14500000000001,
+                      35.13166666666667
+                    ],
+                    [
+                      -90.05499999999999,
+                      35.13166666666667
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.07,
+                      35.075
+                    ],
+                    [
+                      -90.07,
+                      35.16
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                  "type": "LineString",
+                  "coordinates": [
+                    [
+                      -90.14500000000001,
+                      35.14583333333333
+                    ],
+                    [
+                      -90.05499999999999,
+                      35.14583333333333
+                    ]
+                  ]
+                }
+              }
+            ]
+          },
+          "attribution": "Synthetic test geometry"
+        }
+      },
+      "layers": [
+        {
+          "id": "land",
+          "type": "background",
+          "paint": {
+            "background-color": "#e9f2fa"
+          }
+        },
+        {
+          "id": "water",
+          "type": "fill",
+          "source": "water",
+          "paint": {
+            "fill-color": "#82b5dc",
+            "fill-opacity": 0.88
+          }
+        },
+        {
+          "id": "road-casing",
+          "type": "line",
+          "source": "roads",
+          "paint": {
+            "line-color": "#b7cadd",
+            "line-width": 2.6
+          }
+        },
+        {
+          "id": "roads",
+          "type": "line",
+          "source": "roads",
+          "paint": {
+            "line-color": "#ffffff",
+            "line-width": 1.7
+          }
+        }
+      ]
+    },
+    "label": "Fictional regional locator"
   },
   "developments": [
-    { "id": "civic-north-commons", "name": "North District Commons", "location": "Fictional district", "description": "Illustrative mixed-use community plan with housing, local services, and green space.", "status": "Illustrative community plan", "locator": { "x": 24, "y": 31 }, "artKey": "harbor", "image": null, "sourceId": null },
-    { "id": "civic-health-campus", "name": "Rivermark Health Campus", "location": "Fictional district", "description": "Illustrative hospital and outpatient campus concept for a fictional region.", "status": "Illustrative health campus", "locator": { "x": 69, "y": 40 }, "artKey": "grove", "image": null, "sourceId": null },
-    { "id": "civic-mobility-hub", "name": "North Loop Mobility Hub", "location": "Fictional district", "description": "Illustrative transit and active-mobility project concept for a fictional region.", "status": "Illustrative mobility concept", "locator": { "x": 44, "y": 73 }, "artKey": "summit", "image": null, "sourceId": null }
+    {
+      "id": "example-clinic-district",
+      "name": "Example Clinic District",
+      "location": "Fictional region",
+      "description": "Synthetic development record used to test map, image cards, and detail rendering.",
+      "status": "Fictional example",
+      "locator": {
+        "kind": "approximate",
+        "lat": 35.1,
+        "lon": -90.12,
+        "sourceId": "source-market-fixture"
+      },
+      "image": null,
+      "sourceId": "source-market-fixture",
+      "noPhotoReason": "Synthetic fixture: no image provided."
+    }
   ],
   "properties": [
-    { "id": "harbor-point", "name": "Harbor Point", "type": "purchase", "price": 2460000, "totalSf": 8400, "description": "Balanced office layout with room for a future specialty service.", "planningNote": "Compare the space plan with anticipated provider growth.", "locator": { "x": 35, "y": 29 }, "parkingSpaces": 42, "parkingRatio": "5.0 / 1,000 SF", "artKey": "harbor", "image": null },
-    { "id": "grove-commons", "name": "Grove Commons", "type": "purchase", "price": 1980000, "totalSf": 6900, "description": "An existing clinic suite with an efficient patient arrival sequence.", "planningNote": "Review building systems and any deferred maintenance.", "locator": { "x": 66, "y": 49 }, "parkingSpaces": 35, "parkingRatio": "5.1 / 1,000 SF", "artKey": "grove", "image": null },
-    { "id": "summit-house", "name": "Summit House", "type": "purchase", "price": 2940000, "totalSf": 10200, "description": "A larger sample footprint that leaves room for additional services.", "planningNote": "Test the carrying plan against a phased occupancy ramp.", "locator": { "x": 45, "y": 76 }, "parkingSpaces": 54, "parkingRatio": "5.3 / 1,000 SF", "artKey": "summit", "image": null }
+    {
+      "id": "example-property-1",
+      "name": "Example Purchase 1",
+      "location": "Fictional region",
+      "type": "Purchase \u00b7 fictional",
+      "price": 1250000,
+      "totalSf": 7000,
+      "description": "Synthetic purchase record for testing complete practice occupancy.",
+      "planningNote": "No external tenant strategy is represented in this example.",
+      "locator": {
+        "kind": "approximate",
+        "lat": 35.12,
+        "lon": -90.08,
+        "sourceId": "source-property-fixture"
+      },
+      "parkingSpaces": null,
+      "parkingRatio": null,
+      "image": null,
+      "sourceId": "source-property-fixture",
+      "noPhotoReason": "Synthetic fixture: no image provided."
+    },
+    {
+      "id": "example-property-2",
+      "name": "Example Purchase 2",
+      "location": "Fictional region",
+      "type": "Purchase \u00b7 fictional",
+      "price": 1375000,
+      "totalSf": 7000,
+      "description": "Synthetic purchase record for testing complete practice occupancy.",
+      "planningNote": "No external tenant strategy is represented in this example.",
+      "locator": {
+        "kind": "approximate",
+        "lat": 35.12,
+        "lon": -90.08,
+        "sourceId": "source-property-fixture"
+      },
+      "parkingSpaces": null,
+      "parkingRatio": null,
+      "image": null,
+      "sourceId": "source-property-fixture",
+      "noPhotoReason": "Synthetic fixture: no image provided."
+    },
+    {
+      "id": "example-property-3",
+      "name": "Example Purchase 3",
+      "location": "Fictional region",
+      "type": "Purchase \u00b7 fictional",
+      "price": 1500000,
+      "totalSf": 7000,
+      "description": "Synthetic purchase record for testing complete practice occupancy.",
+      "planningNote": "No external tenant strategy is represented in this example.",
+      "locator": {
+        "kind": "approximate",
+        "lat": 35.125,
+        "lon": -90.085,
+        "sourceId": "source-property-fixture"
+      },
+      "parkingSpaces": null,
+      "parkingRatio": null,
+      "image": null,
+      "sourceId": "source-property-fixture",
+      "noPhotoReason": "Synthetic fixture: no image provided."
+    },
+    {
+      "id": "example-property-4",
+      "name": "Example Purchase 4",
+      "location": "Fictional region",
+      "type": "Purchase \u00b7 fictional",
+      "price": 1625000,
+      "totalSf": 7000,
+      "description": "Synthetic purchase record for testing complete practice occupancy.",
+      "planningNote": "No external tenant strategy is represented in this example.",
+      "locator": {
+        "kind": "approximate",
+        "lat": 35.125,
+        "lon": -90.085,
+        "sourceId": "source-property-fixture"
+      },
+      "parkingSpaces": null,
+      "parkingRatio": null,
+      "image": null,
+      "sourceId": "source-property-fixture",
+      "noPhotoReason": "Synthetic fixture: no image provided."
+    }
   ],
-  "leases": [
-    { "id": "lease-cedar-suite", "name": "Cedar Suite", "subtitle": "Sample outpatient suite", "areaSf": 6800, "annualRentPerSf": 28, "structure": "Modified gross", "planningNote": "Ask about renewal options and annual increases.", "locator": { "x": 30, "y": 46 }, "parkingSpaces": 38, "parkingRatio": "5.6 / 1,000 SF", "image": null },
-    { "id": "lease-parkside-center", "name": "Parkside Center", "subtitle": "Sample medical office", "areaSf": 7600, "annualRentPerSf": 30, "structure": "NNN estimate", "planningNote": "Confirm pass-throughs and operating expenses.", "locator": { "x": 72, "y": 66 }, "parkingSpaces": 41, "parkingRatio": "5.4 / 1,000 SF", "image": null }
-  ],
-  "assumptions": {
-    "occupancyFraction": 0.30,
-    "downPaymentFraction": 0,
-    "annualInterest": 0.0625,
-    "amortizationYears": 25,
-    "holdYears": 10,
-    "annualAppreciation": 0.015,
-    "annualRentPerSf": 28,
-    "collectionLoss": 0.05,
-    "fillMonths": 24,
-    "practiceBuildoutPerSf": 180,
-    "assumptionNotes": [
-      "Financing input represents 100% financing for demonstration only.",
-      "Occupancy is calculated as a share of total square feet and rounds up to the next whole square foot.",
-      "Buildout cost per square foot is a fictional planning input."
-    ]
-  },
+  "leases": [],
   "demographics": {
-    "title": "Fictional sample population index",
-    "baseYear": 2021,
-    "years": [2021, 2022, 2023, 2024, 2025, 2026],
-    "index": [100, 103, 106, 111, 116, 121],
-    "questions": [
-      { "id": "question-population", "title": "Who is moving into the trade area?", "body": "Validate household growth, age mix, and insurance coverage across the actual service area." },
-      { "id": "question-employment", "title": "Where is employment expanding?", "body": "Look for durable job growth, new employers, and commute patterns that support access." },
-      { "id": "question-care", "title": "How much care is already nearby?", "body": "Map comparable services, capacity, and referral patterns before reading growth as unmet demand." }
-    ]
+    "modelVersion": 1,
+    "title": "Synthetic demographic research",
+    "geography": {
+      "id": "example-region",
+      "label": "Example Region (fictional)",
+      "kind": "region"
+    },
+    "asOfDate": "2026-10-01",
+    "validThrough": "2026-12-31",
+    "population": {
+      "unit": "people",
+      "period": "2021\u20132026",
+      "sourceId": "source-demographic-fixture",
+      "values": [
+        {
+          "label": "2021",
+          "value": 10000
+        },
+        {
+          "label": "2024",
+          "value": 10700
+        },
+        {
+          "label": "2026",
+          "value": 11400
+        }
+      ]
+    },
+    "age": {
+      "period": "2026",
+      "unit": "people",
+      "sourceId": "source-demographic-fixture",
+      "cells": [
+        {
+          "label": "Under 18",
+          "lower": 0,
+          "upper": 18,
+          "value": 2280
+        },
+        {
+          "label": "18 to 64",
+          "lower": 18,
+          "upper": 65,
+          "value": 6840
+        },
+        {
+          "label": "65 and over",
+          "lower": 65,
+          "upper": null,
+          "value": 2280
+        }
+      ]
+    },
+    "income": {
+      "period": "2026",
+      "unit": "households",
+      "sourceId": "source-demographic-fixture",
+      "median": {
+        "label": "Median household income",
+        "value": 75000,
+        "unit": "USD/year",
+        "period": "2026",
+        "sourceId": "source-demographic-fixture"
+      },
+      "cells": [
+        {
+          "label": "Under $50,000",
+          "lower": 0,
+          "upper": 50000,
+          "value": 1200
+        },
+        {
+          "label": "$50,000 to $99,999",
+          "lower": 50000,
+          "upper": 100000,
+          "value": 1800
+        },
+        {
+          "label": "$100,000 and over",
+          "lower": 100000,
+          "upper": null,
+          "value": 1000
+        }
+      ],
+      "thresholds": [
+        50000,
+        100000
+      ]
+    },
+    "cards": []
   },
   "sources": [
-    { "id": "source-population", "title": "Local population", "url": null, "date": null, "geography": null, "notes": "Add a current, verifiable source and the exact geography before using demographic claims." },
-    { "id": "source-employment", "title": "Employment and access", "url": null, "date": null, "geography": null, "notes": "Add a current source, methodology, and retrieval date." },
-    { "id": "source-property", "title": "Property and lease terms", "url": null, "date": null, "geography": null, "notes": "Verify availability, asking terms, expenses, and property condition directly." }
-  ]
+    {
+      "id": "source-market-fixture",
+      "title": "Synthetic market fixture",
+      "url": null,
+      "date": "2026-10-01 (synthetic)",
+      "geography": "Example Region (fictional)",
+      "notes": "Test data only. No real market research."
+    },
+    {
+      "id": "source-property-fixture",
+      "title": "Synthetic purchase fixture",
+      "url": null,
+      "date": "2026-10-01 (synthetic)",
+      "geography": "Example Region (fictional)",
+      "notes": "Test data only. No property exists."
+    },
+    {
+      "id": "source-lease-fixture",
+      "title": "Synthetic lease fixture",
+      "url": null,
+      "date": "2026-10-01 (synthetic)",
+      "geography": "Example Region (fictional)",
+      "notes": "Test data only. No lease availability or rent is asserted."
+    },
+    {
+      "id": "source-current-practice-fixture",
+      "title": "Synthetic current-practice fixture",
+      "url": null,
+      "date": "2026-10-01 (synthetic)",
+      "geography": "Example Region (fictional)",
+      "notes": "Test data only. No practice or address exists."
+    },
+    {
+      "id": "source-demographic-fixture",
+      "title": "Synthetic demographic fixture",
+      "url": null,
+      "date": "2026-10-01 (synthetic)",
+      "geography": "Example Region (fictional)",
+      "notes": "Test data only. No local demographic fact is asserted."
+    }
+  ],
+  "feedback": {
+    "mode": "disabled",
+    "endpoint": null
+  },
+  "currentPractice": {
+    "name": "Example Current Practice",
+    "location": "100 Example Way, Example Region (fictional)",
+    "description": "Synthetic current-practice context used to test an optional map marker and detail dialog. No real practice or address is represented.",
+    "locator": {
+      "kind": "approximate",
+      "lat": 35.135,
+      "lon": -90.115,
+      "sourceId": "source-current-practice-fixture"
+    },
+    "sourceId": "source-current-practice-fixture",
+    "noPhotoReason": "Synthetic fixture: no image supplied."
+  }
 }

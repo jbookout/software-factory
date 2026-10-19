@@ -1,6 +1,7 @@
 import { runVerification } from "../src/local-verification.mjs";
 import { reserveCheck } from "../src/check-admission.mjs";
 const classes = {
+  presentation: [process.execPath, "capabilities/client-presentation/scripts/browser-acceptance.mjs"],
   node: [process.execPath, "--test", "--test-concurrency=2"],
   browser: ["python3", "capabilities/jev-browser-select/test_select.py"],
   orchestration: [
