@@ -22,7 +22,7 @@ process.on("SIGTERM", stop)
 process.on("SIGINT", stop)
 process.once("message", ({ argv, cwd, env, input, elapsedDeadline, deadline, job, grace = 100, bindings = [] }) => {
   let receipt = job ? {schema:"factory-process-job/v1", ...job, pid:process.pid, deadline, status:"starting"} : null
-  let startup = Promise.resolve()
+  let startup = Promise.resolve(), launchCode
   const acknowledge = () => {
     startup = startup.then(async () => {
       if (stopping) return
@@ -42,7 +42,10 @@ process.once("message", ({ argv, cwd, env, input, elapsedDeadline, deadline, job
     : spawn(argv[0], argv.slice(1), { cwd, env, shell: false,
       detached: process.platform !== "win32", stdio: ["pipe", "inherit", "inherit"] })
   if (process.connected) process.send({ groupPid: child.pid })
-  if (latched) child.on("message", message => { if (message.type === "started") acknowledge() })
+  if (latched) child.on("message", message => {
+    if (message.type === "started") acknowledge()
+    else if (message.type === "launch-error") launchCode = message.code
+  })
   else child.once("spawn", acknowledge)
   timer = setTimeout(() => { timedOut = true; stop() }, Math.max(0, elapsedDeadline - monotonicNow() - grace))
   child.stdin.on("error", error => { if (error.code !== "EPIPE") stop() })
@@ -69,10 +72,10 @@ process.once("message", ({ argv, cwd, env, input, elapsedDeadline, deadline, job
       await writeJson(job.receipt,receipt)
     }
     clearTimeout(timer); clearTimeout(hardStop)
-    if (process.connected) process.send({ code: timedOut ? 142 : stopping ? 1 : code ?? 1, signal, timedOut, error }, () => process.exit(0))
+    if (process.connected) process.send({ code: timedOut ? 142 : stopping ? 1 : code ?? 1, signal, timedOut, error, ...(launchCode ? { launchCode } : {}) }, () => process.exit(0))
     else process.exit(0)
   }
-  child.on("error", error => finish(1, null, "process child launch failed"))
+  child.on("error", error => { launchCode = error.code; return finish(1, null, "process child launch failed") })
   child.on("close", (code, signal) => finish(code, signal))
   persisted.then(() => {
     if (stopping) return

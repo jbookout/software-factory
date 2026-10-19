@@ -7,7 +7,10 @@ process.once('message', ({ argv, input }) => {
   const child = spawn(argv[0], argv.slice(1), { shell: false, stdio: ['pipe', 'inherit', 'inherit'] })
   child.stdin.on('error', error => { if (error.code !== 'EPIPE') process.exit(1) })
   child.once('spawn', () => { if (process.connected) process.send({type:'started'}) })
-  child.on('error', () => process.exit(1))
+  child.on('error', error => {
+    if (process.connected) process.send({ type: 'launch-error', code: error.code }, () => process.exit(1))
+    else process.exit(1)
+  })
   child.on('close', (code, signal) => {
     // Preserve interruption across the latch so the controller retains readback.
     if (signal) process.kill(process.pid, signal)
