@@ -102,6 +102,8 @@ for (const [name, relative, record] of [
   ["invalid queue transition", "queue.json", JSON.stringify([{ id: "q", repo, pr: 7, head, state: "CANARY_PRIVATE" }])],
   ["wrong wait binding", `waits/${keyFor(repo, 7)}.json`, JSON.stringify({ schema: "factory-delivery-wait/v1", repo, pr: 8, head, message: "CANARY_PRIVATE" })],
   ["non-record wait", `waits/${keyFor(repo, 7)}.json`, "false"],
+  ["literal null wait", `waits/${keyFor(repo, 7)}.json`, "null"],
+  ["literal null repair", `repairs/${keyFor(repo, 7)}.json`, "null"],
   ["wrong repair schema", `repairs/${keyFor(repo, 7)}.json`, JSON.stringify({ schema: "CANARY_PRIVATE", repo, pr: 7, head })],
   ...[
     ["non-string queue identity", { id: {}, state: "pending" }],
@@ -188,7 +190,7 @@ test("unknown repositories and invalid PRs fail without creating state", async (
   for (const args of [["fixture/unknown", "7"], [repo, "0"], [repo, "1.5"]]) {
     const run = f.run("job-status", ...args);
     assert.notEqual(run.status, 0);
-    assert.doesNotMatch(run.stdout + run.stderr, /CANARY_PRIVATE/);
+    assert.doesNotMatch(run.stdout + run.stderr, /CANARY_PRIVATE|WRITE_ATTEMPT/);
     await assert.rejects(fs.access(f.stateDir), { code: "ENOENT" });
   }
 });
@@ -198,6 +200,6 @@ test("malformed navigation configuration fails without echoing its contents", as
   await fs.writeFile(f.config, "CANARY_PRIVATE not JSON");
   const run = f.run("installation-status");
   assert.equal(run.status, 9);
-  assert.doesNotMatch(run.stdout + run.stderr, /CANARY_PRIVATE/);
+  assert.doesNotMatch(run.stdout + run.stderr, /CANARY_PRIVATE|WRITE_ATTEMPT/);
   await assert.rejects(fs.access(f.stateDir), { code: "ENOENT" });
 });
