@@ -42,7 +42,7 @@ export function parseReview(body) { return reviewEnvelope(body).review }
 
 // The latest trusted author's verdict wins, including a blocking verdict.
 // Approval additionally needs the existing independent execution receipt.
-export async function latestTrustedReview(comments, trustedReviewers, authenticate) {
+export async function latestTrustedReview(comments, trustedReviewers = [], authenticate) {
   const ordered = [...comments].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id)
   for (const comment of ordered) {
     if (!trustedReviewers.some(login => login.toLowerCase() === comment.user.login.toLowerCase())) continue

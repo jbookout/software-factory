@@ -24,19 +24,6 @@ function list(value, step, field) {
   return value
 }
 
-export function createFixtureAdapter(steps = {}) {
-  const calls = []
-  return {
-    calls,
-    async execute(step, request) {
-      calls.push({ step, request })
-      const handler = steps[step]
-      const result = typeof handler === "function" ? await handler(request) : handler
-      return normalizeResult(result, step)
-    }
-  }
-}
-
 export function createScriptAdapter({ root, commands, timeoutMs = 120_000, maxOutputBytes = 1_000_000, environment = {} }) {
   const resolvedRoot = path.resolve(root)
   if (!commands || typeof commands !== "object") throw new Error("commands are required")

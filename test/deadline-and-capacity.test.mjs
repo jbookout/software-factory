@@ -88,7 +88,6 @@ test('admission scans stop at their queue deadline and dispose partial claims',a
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'factory-election-deadline-'));t.after(()=>fs.rm(root,{recursive:true,force:true}))
  const config={stateDir:root,resources:{capacity:250,browserConcurrency:1},pollMs:5}
  const clock=fakeClock(),mkdir=fs.mkdir.bind(fs)
- // Storage work consumes the queue clock without depending on host speed.
  t.mock.method(fs,'mkdir',async(...args)=>{clock.advance(1);return mkdir(...args)})
  let release,observed=false
  try {

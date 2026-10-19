@@ -4,7 +4,11 @@ import type { DesignCheckRecord } from './design-verify.mjs';
 
 /** Trusted host-selected authorization scope; callers cannot override it in a command. */
 export interface JournalScope { userId: string; projectId: string; version: number }
-export interface JournalArtifact { ref: string; digest: string } // bare hex sha256; ref is sha256:<hex>
+declare const artifactDigestBrand: unique symbol;
+declare const artifactRefBrand: unique symbol;
+export type ArtifactDigest = string & { readonly [artifactDigestBrand]: true };
+export type ArtifactRef = string & { readonly [artifactRefBrand]: true };
+export interface JournalArtifact { ref: ArtifactRef; digest: ArtifactDigest }
 export type ReferenceLabel = 'still' | 'recording' | 'live' | 'inspected-source' | 'vendor-claim';
 export interface DesignReference {
   schema: 'design-reference.v1'; id: string;
@@ -47,7 +51,7 @@ export interface DesignJournal {
   execute(request: { command: 'read' }): Promise<JournalState>;
   execute(request: { command: 'backup'; destination: string }): Promise<JournalBackup>;
   execute(request: JournalMutation & MutationBinding): Promise<JournalReceipt>;
-  readArtifact(ref: string): Promise<Buffer>;
+  readArtifact(ref: ArtifactRef): Promise<Buffer>;
 }
 /** Private POSIX state, outside Git. Python 3.11+ with SQLite deserialization is required. */
 export function openDesignJournal(options: JournalScope & { root?: string }): Promise<DesignJournal>;

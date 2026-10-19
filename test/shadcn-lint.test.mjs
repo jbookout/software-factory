@@ -41,3 +41,20 @@ test("the design-system fixture rejects drift with actionable diagnostics", asyn
     "expected repair guidance in at least one diagnostic"
   )
 })
+
+test("the sixth configured policy rejects unknown classes with repair guidance", async () => {
+  const [result] = await lint("unknown.tsx")
+  const diagnostic = result.messages.find(({ ruleId }) => ruleId === "shadcn/no-unknown-classes")
+  assert.equal(diagnostic?.severity, 2)
+  assert.match(diagnostic.message, /no CSS is generated/)
+  assert.match(diagnostic.message, /Use an existing component variant/)
+})
+
+for (const [file, text] of Object.entries((await import('../capabilities/tailwind-design-system-lint/cases.mjs')).SEEDS)) {
+  test(`ESLint case ${file}`, async () => {
+    const eslint = new ESLint({ cwd: fixture, overrideConfigFile: path.join(fixture, 'eslint.config.mjs') })
+    const [result] = await eslint.lintText(text, { filePath: path.join(fixture, 'src', file) })
+    assert.equal(result.fatalErrorCount, 0)
+    assert.equal(result.errorCount > 0, file !== 'custom-properties.tsx')
+  })
+}

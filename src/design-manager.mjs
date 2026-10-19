@@ -411,7 +411,6 @@ export function evaluateMobileVerification(project, availableCapabilities, evide
     : { status: 'pass', message: 'reported mobile evidence covers each declared mobile platform' }
 }
 
-// Interview snapshots are values; durable persistence lives in design-journal.
 const entryPlaybooks = {
   'new-product': { inputs: [], artifact: 'product-brief', focus: 'Bound users, jobs, outcomes and the first product version.' },
   feature: { inputs: ['existing-contract'], artifact: 'feature-delta', focus: 'Compare the feature to the existing product contract and protect adjacent workflows.' },
@@ -557,7 +556,6 @@ function checkDependencyRevisions(assessment, assessments) {
   }
 }
 
-// Preserve supplied assessments; derive invalidation from revisions and transitive support.
 function layerDiagnosis(assessments) {
   if (!assessments) return null
   const invalidatedLayers = []
@@ -614,7 +612,6 @@ function questionFor(interview, answers, proposal = null, assessments = null) {
     recommendation: answers.risk === 'bounded' ? answers.tier : 'high-assurance' }
     return null
   }
-  // Scope authorization stays separate; assess the newly bounded work afterward.
   for (const [index, workflow] of answers.includedWorkflows.entries()) {
     const question = answers[`scope-added:${index}`] && workflowQuestion(index, workflow)
     if (question) return question

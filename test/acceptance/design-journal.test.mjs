@@ -98,6 +98,12 @@ test('AW-5 generated still cannot be relabelled live or promoted to behavior pro
   blocked.claim = 'behavior'
   await assert.rejects(mutate({ command: 'append', kind: 'reference', record: blocked }), /reference/)
 })
+test('archive identities retain bare SHA-256 digests and prefixed references', async t => {
+  const { journal, artifact } = await fixture(t)
+  const digest = sha('synthetic reference bytes')
+  assert.deepEqual(artifact, { ref: `sha256:${digest}`, digest })
+  assert.equal((await journal.readArtifact(artifact.ref)).toString(), 'synthetic reference bytes')
+})
 test('AW-5 copied code/assets require exact permission and retained license', async t => {
   const { mutate, artifact } = await fixture(t)
   const record = reference(artifact)
@@ -552,7 +558,7 @@ test('evidence binding and invalid evidence refuse atomically; accepted proof su
   const restored = await roundtrip(f, 'evidence')
   assert.equal((await restored.readArtifact(artifact.ref)).toString(), 'synthetic reference bytes')
 })
-test('journal declarations accept supported commands and reject missing bindings and scope injection', () => {
+test('journal declarations retain artifact identities and reject swaps, missing bindings and scope injection', () => {
   execFileSync(process.execPath, ['node_modules/typescript/bin/tsc', '--strict', '--noEmit', '--module', 'NodeNext',
     '--moduleResolution', 'NodeNext', '--target', 'ES2022', '--types', 'node', 'typecheck/design-journal-consumer.mts'],
   { encoding: 'utf8', stdio: 'pipe' })

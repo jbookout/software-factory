@@ -36,8 +36,6 @@ for (const input of roots) {
         let response;
         try { response = execFileSync('gh',['api',endpoint],{encoding:'utf8',stdio:['ignore','pipe','pipe'],timeout:30000,maxBuffer:4*1024*1024}); }
         catch (error) {
-          // Preserve only the typed missing-file signal required by the adapter.
-          // Provider stderr/body never enters a finding or an exception message.
           throw Object.assign(new Error('provider request failed'), {status: /\(HTTP 404\)/.test(String(error.stderr)) ? 404 : undefined});
         }
         return JSON.parse(response);
