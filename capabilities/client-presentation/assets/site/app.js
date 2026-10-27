@@ -214,7 +214,7 @@
       esc(p.description || "")
     }</p>${
       p.planningNote
-        ? `<div class="review-box"><h4>Planning question</h4><p>${
+        ? `<div class="review-box"><h4>Property considerations</h4><p>${
           esc(p.planningNote)
         }</p></div>`
         : ""
@@ -230,7 +230,7 @@
           p.conflicts.map((x) => `<li>${esc(x)}</li>`).join("")
         }</ul></div>`
         : ""
-    }<p class="note">Verify condition, availability, clinical layout, access and measurements during due diligence.</p><div class="property-links">${links}</div><p class="source-caption">Source: ${
+    }<div class="property-links">${links}</div><p class="source-caption">Source: ${
       esc(sourceLine(p))
     }</p><button class="button add-to-tour" type="button" data-toggle="${
       esc(p.id)
@@ -338,7 +338,7 @@
     maps[id] = map;
     const preview = new maplibregl.Popup({closeButton:false,closeOnClick:false,maxWidth:"240px",offset:20,className:"map-pin-preview"});
     const bindMarkerPreview = (button, point, record) => {
-      const showPreview = () => preview.setLngLat(point).setHTML(`${image(record,title(record))}<strong class="map-preview-title">${esc(title(record))}</strong><span>Approximate area locator · Open for full details</span>`).addTo(map);
+      const showPreview = () => preview.setLngLat(point).setHTML(`${image(record,title(record))}<strong class="map-preview-title">${esc(title(record))}</strong><span>Approximate area locator</span>`).addTo(map);
       button.addEventListener("mouseenter", showPreview);
       button.addEventListener("focus", showPreview);
       for (const event of ["mouseleave", "blur", "click"]) button.addEventListener(event, () => preview.remove());
@@ -534,7 +534,7 @@
     }
     const next = $(".home-actions a");
     next.href = properties.length ? "#purchases" : "#leases";
-    next.textContent = properties.length ? "Review purchase options ↗" : "Review lease options ↗";
+    next.textContent = properties.length ? "Purchase options ↗" : "Lease options ↗";
     txt("development-title", m.developmentTitle || "Projects in context");
 
   }
@@ -594,11 +594,11 @@
       }`;
       list.append(c);
     });
-    txt("sources-title", d.market?.sourcesTitle || "Sources and next steps");
+    txt("sources-title", d.market?.sourcesTitle || "Sources");
     txt("locator-disclaimer", d.locator?.disclaimer || "Map points are approximate and are not navigation destinations.");
     txt(
       "sources-intro",
-      d.market?.sourcesIntro || "Review named sources, geography and dates.",
+      d.market?.sourcesIntro || "Research sources, geography and dates.",
     );
   }
   function renderStrategy() {
@@ -682,7 +682,7 @@
       $("#allocation-spaces").innerHTML = rows.map(({property,result}) => `<button type="button" class="allocation-space-row text-button" data-preview="${esc(property.id)}"><b>${esc(title(property))}</b><div class="allocation-space-bar"><span class="practice" style="width:${result.practiceSf/property.totalSf*100}%"></span><span class="tenants" style="width:${result.tenantSf/property.totalSf*100}%"></span></div><div class="allocation-space-values"><span>Practice ${number(result.practiceSf)} SF</span><span>Outside tenants ${number(result.tenantSf)} SF</span></div></button>`).join("");
       $("#rent-coverage").innerHTML = rows.map(({property,result}) => {const rent=result.stabilizedMonthlyRent, scale=Math.max(1,rent,result.payment);return `<button type="button" class="coverage-row text-button" data-preview="${esc(property.id)}"><b>${esc(title(property))}</b><div class="coverage-measure"><span>Outside rent</span><i class="coverage-income" style="width:${rent/scale*100}%"></i><strong>${money(rent)}/month</strong></div><div class="coverage-measure"><span>Loan P&amp;I</span><i class="coverage-gap" style="width:${result.payment/scale*100}%"></i><strong>${money(result.payment)}/month</strong></div></button>`;}).join("");
       comparison("strategy-table", rows, [["Purchase price",(r,p)=>money(p.price)], ["Building area",(r,p)=>`${number(p.totalSf)} SF`], ["Practice area",r=>`${number(r.practiceSf)} SF`], ["Outside-tenant area",r=>`${number(r.tenantSf)} SF`], ["Down payment",r=>money(r.downPayment)], ["Loan amount",r=>money(r.loan)], ["Monthly principal and interest",r=>money(r.payment)]]);
-      $("#strategy-highlights").innerHTML = rows.map(({property}) => `<button type="button" class="property-jump" data-preview="${esc(property.id)}">${image(property,title(property))}<div><strong>${esc(title(property))}</strong><small>${esc(property.planningNote || property.description)}</small><small>${esc(sourceLine(property))}</small><span class="tile-action">Review the property ↗</span></div></button>`).join("");
+      $("#strategy-highlights").innerHTML = rows.map(({property}) => `<button type="button" class="property-jump" data-preview="${esc(property.id)}">${image(property,title(property))}<div><strong>${esc(title(property))}</strong><small>${esc(property.planningNote || property.description)}</small><small>${esc(sourceLine(property))}</small><span class="tile-action">Property details ↗</span></div></button>`).join("");
       comparison("buildout-table", rows, [["Practice area",r=>`${number(r.practiceSf)} SF`], ["Practice buildout / SF",()=>money(assumptions.practiceBuildoutPerSf)], ["Practice buildout budget",r=>money(r.practiceBuildout)], ["Outside-tenant area",r=>`${number(r.tenantSf)} SF`], ["Tenant TI / SF",()=>money(tiRate())], ["Tenant TI budget",r=>money(r.tenantTi)], ["Combined improvement budget",r=>money(r.combinedBudget)]]);
       comparison("cash-carry-table", rows, [["Down payment",r=>money(r.downPayment)], ["Mortgage payments",r=>money(r.mortgagePayments)], ["Outside rent received",r=>money(r.outsideRent)], ["Mortgage contribution",r=>money(r.carry)], ["Practice rent avoided",r=>money(r.avoidedPracticeRent)], ["Tenant TI budget",r=>money(r.tenantTi)], ["Additional cash compared with leasing",r=>money(r.extraCashRequired)]]);
       comparison("annual-carry-table", rows, Array.from({length:assumptions.holdYears},(_,i)=>[`Year ${i+1} · mortgage contribution`,r=>money(r.years[i+1].carry-r.years[i].carry)]));
