@@ -11,7 +11,7 @@ Use this flow as a starting point, adapting to the client's approved brief.
 | Demographics | Support the market story | Study location/radii/date → population, households, income and growth → charts → report links |
 | Sources | Make facts traceable | Listing platforms, market sources, demographic reports, model assumptions, retrieval dates |
 
-Omit irrelevant sections rather than fill them with generic sales copy. Keep market discussion on Home; ownership should focus on numbers. Group different announcements about one development into one project, distinguishing stages within its details.
+Select sections and tools from the current brief. The shell and prior sites demonstrate available patterns; they do not require every feature on every site. Include a rent comparison only for a relevant client question, ownership modeling only for the configured strategy, and other analytical layers only when they serve this presentation. Reuse interaction guidance when a similar need arises, without inheriting another client's market, numbers or assumptions. Omit irrelevant sections rather than fill them with generic sales copy. Keep market discussion on Home; ownership should focus on numbers. Group different announcements about one development into one project, distinguishing stages within its details.
 
 ## Visual and interaction system
 
@@ -28,7 +28,20 @@ Use the fixed CARR navy/orange palette, Oswald headings and Montserrat body font
 
 ## Copy and evidence
 
-Use educational, consultative copy with concrete labels. Identify observed versus projected data, city versus county versus metro, source vintage, demographic radius, and units. Do not choose impressive figures by silently changing geography or period. Capacity in a sector plan is not completed homes. A future hospital campus is not three independent developments.
+Present facts and observations with concrete labels. Headlines and summaries describe the market, property or finding. Let controls and affordances explain the interface: omit paragraphs such as “Review these locations, then explore the alternatives,” “Select a pin for details,” and “Enter figures to compare.” Keep useful button and field labels, units, source attribution and genuine save/error states. Replace homework-style “Confirm the suite and quote” with the specific fact “Suite and asking rent unverified.” Remove repeated due-diligence boilerplate and internal process commentary; an unavailable image is “Photo unavailable.” A brief's requested next steps can remain when they are the actual deliverable.
+
+Identify observed versus projected data, city versus county versus metro, source vintage, demographic radius, and units. Do not choose impressive figures by silently changing geography or period. Capacity in a sector plan is not completed homes. A future hospital campus is not three independent developments.
+
+Separate partner-supplied properties from additional research candidates with visible group headings and source labels that remain clear in dialogs or comparisons. Public advertising does not establish client suitability or current availability. Explain a client-specific comparison with a concise factual basis from the brief or authorized correspondence, without narrating how to use its controls.
+
+### Optional comparison tools
+
+Apply this guidance when the brief calls for a comparison; it does not add a calculator or comparison section to every site.
+
+- Show a useful initial result. Prefer verified client inputs; otherwise choose an appropriate, visibly labeled illustrative baseline. An example rate is not a default for other clients. Never present an illustrative value as the client's actual rent, loan terms or forecast.
+- Use direct manipulation suited to the question: sliders, presets, step controls or linked selections with immediate numerical and visual feedback. Use aligned bars, reference markers or other readable charts to expose differences; keep exact values accessible and respect reduced motion.
+- Keep entered values, illustrative assumptions and quoted data distinct. Clearing an input or changing a preset leaves the active basis unambiguous. Missing quotes remain missing; advertised ranges remain ranges, without invented exact differences.
+- Preserve units, periods and expense structures. Base rent, modified gross, NNN, CAM and buildout are separate quantities. A rate difference alone is not a verified occupancy-cost saving.
 
 Use the client's approved strategy wording when supplied and reuse rights permit. Loan-program terms are provisional until verified with the current lender. Full owner occupancy and 30/70 allocation are separate, explicit strategy modes. No down-payment, interest-rate, tenant or appreciation assumption carries across clients. Do not carry a previous client's optimistic appreciation opinion into a new presentation.
 
@@ -45,4 +58,4 @@ Connect each talking point to its corresponding modeled number rather than repea
 - Space control and future expansion may matter to the practice, but do not invent operational savings or value them without inputs.
 - Loan-program access and any tax/cost-segregation benefits require current lender/tax verification. Present them separately from the arithmetic; do not treat zero down or bonus depreciation as automatic eligibility or guaranteed savings.
 
-Finish with what the comparison demonstrates under its stated inputs, which option merits further due diligence, and the concrete facts still needed. Do not announce a winning investment solely because it has the largest building, highest equity, or most optimistic rent assumption.
+State what the comparison demonstrates under its stated inputs and identify specific unresolved facts. Do not announce a winning investment solely because it has the largest building, highest equity, or most optimistic rent assumption.

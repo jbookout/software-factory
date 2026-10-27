@@ -11,7 +11,7 @@
     "title": "Synthetic practice property review",
     "preparedFor": "Example Practice A",
     "scenarioDate": "October 2026",
-    "summary": "Fictional example only. Replace the complete dataset with verified, source-backed client research before use.",
+    "summary": "Fictional example only; synthetic properties, market figures and assumptions.",
     "fictional": true
   },
   "strategy": {
@@ -21,31 +21,31 @@
     {
       "id": "home",
       "label": "Home",
-      "title": "A place to grow with purpose.",
+      "title": "Market overview",
       "visible": true
     },
     {
       "id": "purchases",
       "label": "Purchases",
-      "title": "Ownership gives the practice a stake in the future.",
+      "title": "Purchase options",
       "visible": true
     },
     {
       "id": "demographics",
       "label": "Demographics",
-      "title": "Demand signals, with room for nuance.",
+      "title": "Demographics",
       "visible": true
     },
     {
       "id": "sources",
       "label": "Sources",
-      "title": "A decision gets stronger with better evidence.",
+      "title": "Sources",
       "visible": true
     },
     {
       "id": "feedback",
       "label": "Tour List",
-      "title": "Keep the property discussion in sync.",
+      "title": "Tour List",
       "visible": true
     }
   ],
@@ -56,17 +56,17 @@
     "purchaseScreening": [
       {
         "label": "Practice occupancy",
-        "description": "Synthetic shortlist for the configured practice occupancy scenario. Confirm the clinical layout during due diligence.",
+        "description": "Synthetic shortlist for the configured practice occupancy scenario. Clinical layouts are unverified.",
         "sourceId": "source-property-fixture"
       },
       {
         "label": "Reported space",
-        "description": "Synthetic reported areas are shown in each property card; verify measurements and usable space.",
+        "description": "Synthetic reported areas; measurements and usable space are unverified.",
         "sourceId": "source-property-fixture"
       },
       {
         "label": "Parking and access",
-        "description": "Parking is unverified in this synthetic shortlist. Review access, condition and availability before deciding.",
+        "description": "Parking, access, condition and availability are unverified in this synthetic shortlist.",
         "sourceId": "source-property-fixture"
       }
     ]
