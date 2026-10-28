@@ -72,3 +72,5 @@ Done once per new repository, under **Settings**. Each is a GitHub feature; noth
 | `.github/ISSUE_TEMPLATE/request.yml` | The Request form. |
 | `.github/CODEOWNERS` | Who is asked to review. |
 | `capabilities/client-presentation/` | A ready skill that builds an interactive property-review website for a client. |
+
+The owner-question list in `CLAUDE.md` and the "Still unverified" line in the PR template are adapted from [OskarGroth/orchestrating-agents](https://github.com/OskarGroth/orchestrating-agents) (MIT license).

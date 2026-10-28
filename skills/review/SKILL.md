@@ -18,6 +18,8 @@ The review is a **bounded loop**: you post a verdict, the builder's own session 
    - Secrets, client data or environment dumps in code, logs, issues or the PR body.
    - **Machinery**: a new background job, scheduled workflow, watchdog, retry layer, queue or wrapper needs a named failure the platform cannot handle. Prefer fixes that delete or shrink.
    - Earlier `VERDICT: CHANGES` findings: each is fixed, or rejected with evidence.
+
+   Done when every point above has a finding or a note that it is fine.
 4. **Post one comment** with `gh pr comment <pr> --body-file <file>`. Its first three lines are exactly:
    ```
    VERDICT: APPROVE          (or VERDICT: CHANGES)
@@ -25,4 +27,4 @@ The review is a **bounded loop**: you post a verdict, the builder's own session 
    Reviewer: <model name>
    ```
    Then one finding per line: `file:line — problem — fix`. APPROVE when no correctness, security or data-loss defect remains; style notes never block. In round 3, a CHANGES verdict ends with one line recommending a smaller or different design. Done when the comment is posted.
-5. **Report** in under 120 words: round, verdict, SHA, blocking findings.
+5. **Report** in under 120 words: round, verdict, SHA, blocking findings. Done when whoever started the review has the report.

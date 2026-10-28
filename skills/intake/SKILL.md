@@ -16,11 +16,11 @@ Turn a sentence into a **spec**: an issue whose acceptance checks a script or a 
    Done when you have picked one lane and can say why in one sentence.
 3. **Find the gaps.** Check the four fields: Outcome, Acceptance checks, Must not change, Size. Ask about the gaps only: at most five questions, in one message, each with your recommended answer so the requester can reply "yes". When every gap is answered, move a `needs-info` request to `ready-for-agent`. Done when every field has an answer or a stated assumption.
 4. **Write the checks.** Each acceptance check is a command and the output it prints, or a page and what a person sees on it. "Works well" is a wish; rewrite it as something observable. Done when every check could fail.
-5. **Size it.** S = one session, one PR. M = needs `/grill-with-docs` before building. L = more than one session: file this issue as the map, then run `/wayfinder` to split it into sub-issues.
+5. **Size it.** S = one session, one PR. M = needs `/grill-with-docs` before building. L = more than one session: file this issue as the map, then run `/wayfinder` to split it into sub-issues. Done when the size has a one-sentence reason.
 6. **File it.** Write the body under the Request form's headings (`### Outcome`, `### Acceptance checks`, `### Must not change`, `### Size`), then:
    `gh issue create --title "<outcome in under 70 characters>" --label <lane> --label size:<S|M|L> --body-file <file>`
    For an issue that already exists, update its body with `gh issue edit <n> --body-file <file> --remove-label needs-triage --add-label <lane> --add-label size:<S|M|L>` instead.
    Done when `gh` prints the issue URL.
-7. **Report.** Reply with the issue URL, the lane, and the one-sentence outcome.
+7. **Report.** Reply with the issue URL, the lane, and the one-sentence outcome. Done when the requester has all three.
 
 The repository may be public. Name clients, deals and people by role ("the client", "the broker"); the private details stay in the requester's own records.

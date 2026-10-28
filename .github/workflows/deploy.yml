@@ -1,6 +1,9 @@
 # Done means live. Every push to main (only the merge queue pushes there)
 # deploys, then proves the live site serves this exact commit, then closes the
-# issue the PR named on its "Issue: #N" line.
+# issue each merged PR in the push named on its "Issue: #N" line. There is no
+# manual trigger: only main ever deploys. GitHub keeps one pending run per
+# concurrency group, so in a burst of merges a skipped run's issue can stay
+# open; the next green Deploy has shipped it, so close that issue by hand.
 #
 # To turn deploys on in a new project:
 #   1. Make the app serve GET /release as {"git_sha": "<commit>"}, reading the
@@ -14,7 +17,6 @@ name: Deploy
 on:
   push:
     branches: [main]
-  workflow_dispatch:
 permissions:
   contents: read
   issues: write
@@ -27,6 +29,7 @@ jobs:
     name: Deploy and prove live
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    if: github.ref == 'refs/heads/main'
     environment: production
     env:
       SHA: ${{ github.sha }}
@@ -65,22 +68,25 @@ jobs:
           echo "::error::$RELEASE_URL did not report git_sha $SHA within two minutes. The change is merged but not live."
           exit 1
 
-      - name: Close the issue this commit finished
+      - name: Close the issues this push finished
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          pr="$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/pulls" --jq '.[0].number // empty')"
-          if [ -z "$pr" ]; then
-            echo "No pull request for $SHA; no issue to close."
-            exit 0
-          fi
-          issue="$(gh pr view "$pr" -R "$GITHUB_REPOSITORY" --json body --jq .body \
-            | tr -d '\r' | sed -nE 's/^Issue:[[:space:]]*#([0-9]+).*/\1/p' | head -n 1)"
-          if [ -z "$issue" ]; then
-            echo "PR #$pr names no issue; nothing to close."
-            exit 0
-          fi
           where="${RELEASE_URL:-main (this repository has no deploy)}"
-          gh issue close "$issue" -R "$GITHUB_REPOSITORY" \
-            --comment "Live: $SHA at $where. PR #$pr, run $RUN_URL"
+          for commit in $(jq -r '.commits[].id' "$GITHUB_EVENT_PATH"); do
+            pr="$(gh api "repos/$GITHUB_REPOSITORY/commits/$commit/pulls" \
+              --jq '[.[] | select(.merged_at != null and .base.ref == "main")][0].number // empty')"
+            if [ -z "$pr" ]; then
+              echo "No merged pull request for $commit; no issue to close."
+              continue
+            fi
+            issue="$(gh pr view "$pr" -R "$GITHUB_REPOSITORY" --json body --jq .body \
+              | tr -d '\r' | sed -nE 's/^Issue:[[:space:]]*#([0-9]+).*/\1/p' | head -n 1)"
+            if [ -z "$issue" ]; then
+              echo "PR #$pr names no issue; nothing to close."
+              continue
+            fi
+            gh issue close "$issue" -R "$GITHUB_REPOSITORY" \
+              --comment "Live: $SHA at $where. PR #$pr, run $RUN_URL"
+          done
