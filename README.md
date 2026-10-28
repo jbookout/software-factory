@@ -8,9 +8,10 @@ Products built from it run on their own; nothing here has to stay running for th
 
 1. On GitHub, open this repository and click **Use this template**, then **Create a new repository**. Give it a name.
 2. In the new repository, work through the [settings checklist](#settings-checklist) below once.
-3. Edit the first lines of `CLAUDE.md` to say in one sentence what the project is.
-4. When the project has something to put live, follow the three steps at the top of `.github/workflows/deploy.yml` (a `/release` page, a deploy command, the `RELEASE_URL` setting).
-5. Open the first issue with **New issue → Request**.
+3. Open the new repository in Claude Code once and accept its trust prompt; until then Claude Code ignores the allow and deny lists in `.claude/settings.json`.
+4. Edit the first lines of `CLAUDE.md` to say in one sentence what the project is.
+5. When the project has something to put live, follow the three steps at the top of `.github/workflows/deploy.yml` (a `/release` page, a deploy command, the `RELEASE_URL` setting).
+6. Open the first issue with **New issue → Request**.
 
 ## How work flows
 
@@ -56,7 +57,7 @@ Done once per new repository, under **Settings**. Each is a GitHub feature; noth
 - [ ] **Automatically delete head branches** on.
 - [ ] **Ruleset on `main`**: require a pull request and require the status check **CI**.
 - [ ] **One required approving review** in that ruleset, only when a second person or reviewer account can approve; with a single GitHub account the review is the `VERDICT: APPROVE` comment instead.
-- [ ] **Merge queue** in that ruleset: squash, only merge non-failing pull requests, build at most 2 at once.
+- [ ] **Merge queue** in that ruleset: squash, only merge non-failing pull requests, build at most 2 at once. GitHub offers merge queues only on organization-owned repositories; on a personal repository, auto-merge after a green **CI** does the job.
 - [ ] **Labels** created: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `size:S`, `size:M`, `size:L` (`wontfix` exists by default).
 
 ## What is in the box
