@@ -30,4 +30,4 @@ jobs:
           if npm ls playwright --depth=0 >/dev/null 2>&1; then
             npx --no-install playwright install --with-deps chromium
           fi
-      - run: npm test
+      - run: npm run check
