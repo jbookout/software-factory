@@ -1,17 +1,20 @@
+# The one required check. It runs on every pull request and again in the
+# merge queue, on the exact tree that will land on main. Pushes to main are
+# not re-tested: deploy.yml takes over from there.
 name: CI
 on:
   pull_request:
-  push:
-    branches: [main]
+  merge_group:
 permissions:
   contents: read
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
-  test:
+  ci:
+    name: CI
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -21,22 +24,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Install pinned Python check dependencies
+      # Browser tests need Chromium; projects without Playwright skip this.
+      - name: Install Chromium when the project uses Playwright
         run: |
-          python3 -m venv "$RUNNER_TEMP/factory-check"
-          "$RUNNER_TEMP/factory-check/bin/python" -m pip install -r scripts/orch/requirements.txt
-          echo "$RUNNER_TEMP/factory-check/bin" >> "$GITHUB_PATH"
-        timeout-minutes: 5
-      - name: Install pinned Chromium for presentation acceptance
-        run: npx --no-install playwright install --with-deps chromium
-        timeout-minutes: 5
-      - run: npm run check
-
-      - name: Audit installed workflow configuration (non-blocking pilot)
-        continue-on-error: true
-        run: npm run workflow:audit -- .
-      - run: npm ci --prefix capabilities/agentic-ui-evaluation/fixture
-      - run: npm exec --no -- playwright install --with-deps chromium
-        working-directory: capabilities/agentic-ui-evaluation/fixture
+          if npm ls playwright --depth=0 >/dev/null 2>&1; then
+            npx --no-install playwright install --with-deps chromium
+          fi
       - run: npm test
-        working-directory: capabilities/agentic-ui-evaluation/fixture

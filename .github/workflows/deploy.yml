@@ -1,0 +1,86 @@
+# Done means live. Every push to main (only the merge queue pushes there)
+# deploys, then proves the live site serves this exact commit, then closes the
+# issue the PR named on its "Issue: #N" line.
+#
+# To turn deploys on in a new project:
+#   1. Make the app serve GET /release as {"git_sha": "<commit>"}, reading the
+#      commit from the GIT_SHA environment variable the deploy step passes.
+#   2. Add an "npm run deploy" script (or replace the Deploy step with your
+#      vendor's action) and put its secrets in the "production" environment.
+#   3. Set the repository variable RELEASE_URL to the live /release address.
+# Until RELEASE_URL is set, the deploy and proof steps are skipped and the
+# issue closes when the merge lands.
+name: Deploy
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+concurrency:
+  group: production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    name: Deploy and prove live
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      SHA: ${{ github.sha }}
+      RELEASE_URL: ${{ vars.RELEASE_URL }}
+    steps:
+      - if: env.RELEASE_URL != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: env.RELEASE_URL != ''
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Deploy
+        if: env.RELEASE_URL != ''
+        env:
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          npm ci
+          npm run deploy
+
+      - name: Prove the live site serves this commit
+        if: env.RELEASE_URL != ''
+        run: |
+          for attempt in $(seq 1 12); do
+            live="$(curl -fsS --max-time 20 "$RELEASE_URL" | jq -r '.git_sha // empty' || true)"
+            if [ "$live" = "$SHA" ]; then
+              echo "Live: $RELEASE_URL serves $SHA" | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "attempt $attempt: live git_sha is '${live}', want $SHA"
+            sleep 10
+          done
+          echo "::error::$RELEASE_URL did not report git_sha $SHA within two minutes. The change is merged but not live."
+          exit 1
+
+      - name: Close the issue this commit finished
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          pr="$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/pulls" --jq '.[0].number // empty')"
+          if [ -z "$pr" ]; then
+            echo "No pull request for $SHA; no issue to close."
+            exit 0
+          fi
+          issue="$(gh pr view "$pr" -R "$GITHUB_REPOSITORY" --json body --jq .body \
+            | tr -d '\r' | sed -nE 's/^Issue:[[:space:]]*#([0-9]+).*/\1/p' | head -n 1)"
+          if [ -z "$issue" ]; then
+            echo "PR #$pr names no issue; nothing to close."
+            exit 0
+          fi
+          where="${RELEASE_URL:-main (this repository has no deploy)}"
+          gh issue close "$issue" -R "$GITHUB_REPOSITORY" \
+            --comment "Live: $SHA at $where. PR #$pr, run $RUN_URL"
