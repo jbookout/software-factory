@@ -1,0 +1,38 @@
+name: Request
+description: Ask for a change. An agent builds it and proves it against your checks.
+labels: [needs-triage]
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome
+      description: What is true when this is done, in one or two sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance checks
+      description: How anyone can tell it is done. A command and what it prints, or a page and what you see on it.
+      placeholder: |
+        - Open /pricing on a phone: the three plans show side by side.
+        - `npm run check` passes.
+    validations:
+      required: true
+  - type: textarea
+    id: unchanged
+    attributes:
+      label: Must not change
+      description: Anything that has to keep working exactly as it does today.
+  - type: dropdown
+    id: size
+    attributes:
+      label: Size
+      description: S fits one session and one PR. M needs questions answered first. L needs a plan split into smaller issues.
+      options:
+        - S
+        - M
+        - L
+        - Not sure
+    validations:
+      required: true
