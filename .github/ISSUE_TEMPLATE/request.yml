@@ -16,7 +16,7 @@ body:
       description: How anyone can tell it is done. A command and what it prints, or a page and what you see on it.
       placeholder: |
         - Open /pricing on a phone: the three plans show side by side.
-        - `npm test` passes.
+        - `npm run check` passes.
     validations:
       required: true
   - type: textarea

@@ -3,12 +3,14 @@ Issue: #
 
 ## What changed
 
-<!-- One or two sentences a non-engineer can read. Net lines: +added / -removed. -->
+<!-- One or two sentences a non-engineer can read: what is different for the person using it. Net lines: +added / -removed. -->
 
 ## How verified
 
-<!-- The command you ran and the lines it printed. For a screen, the page and what you saw. -->
+<!-- What you observed: the command and the lines it printed, or the page and what you saw on it. -->
+
+**Still unverified:** <!-- anything not checked yet, or "nothing" -->
 
 ## Cost
 
-<!-- Model, turns, approximate tokens. -->
+<!-- Builder model, turns, approximate tokens. Reviewer model. -->

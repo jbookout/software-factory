@@ -18,9 +18,9 @@ Products built from it run on their own; nothing here has to stay running for th
 Idea  →  Issue  →  Agent builds  →  Pull request  →  Review  →  Merge queue  →  Deploy  →  Live check  →  Issue closed
 ```
 
-- **Idea to issue.** Say what you want in a sentence, in chat or on the Request form. The `intake` skill asks at most five questions and writes the issue: the outcome, the checks that prove it is done, what must not change, and a size (S, M or L).
+- **Idea to issue.** Say what you want in a sentence, in chat or on the Request form. The `intake` skill sorts it: ready for an agent, needs a few questions first, or needs a person. It asks at most five questions and writes the issue: the outcome, the checks that prove it is done, what must not change, and a size (S, M or L).
 - **Issue to pull request.** The `dispatch` skill hands the issue to one agent working in its own copy of the code. The agent writes tests first, makes the change, and opens a pull request whose form says what changed, how it was checked, and what it cost.
-- **Review.** A second agent that did not write the change reviews it with the `review` skill and posts one verdict: APPROVE or CHANGES. After three rounds the next step is a smaller or different design, not a fourth round.
+- **Review.** A second agent, on a different AI model from the one that built the change, reviews it with the `review` skill and posts one verdict: APPROVE or CHANGES. The builder fixes and the reviewer looks again, three rounds at most; after that the next step is a smaller or different design, not a fourth round.
 - **Merge.** When the automatic tests (the check named **CI**) pass, GitHub's merge queue tests the change once more against the latest code and merges it. Nobody clicks merge.
 - **Live.** Every merge runs the **Deploy** workflow: it puts the change live, then reads the live site's `/release` page and fails unless it shows the exact version just merged. Only then does it close the issue with a "Live" comment. "Done" means live, not merged.
 - **Screens and look.** Visual work also uses the `design` skill: a five-line brief, a few questions, a `DESIGN.md` journal of your decisions, and a screenshot compared against the brief.
@@ -31,6 +31,20 @@ Idea  →  Issue  →  Agent builds  →  Pull request  →  Review  →  Merge 
 - **Pull requests** show the work in progress with its test results and verdicts.
 - **A failed run** (red X on the Actions tab) sends a GitHub notification. A red Deploy means merged but not live: that is the next job.
 - Optional: a GitHub Project board over the issues gives a one-page view (Idea, Building, In review, Live).
+
+## Improving the factory
+
+The setup is shared and versioned here, so a better rule or skill reaches every project. Improve it in this repository, by pull request, then bring it into a project with a pull request there:
+
+```
+git remote add factory https://github.com/jbookout/software-factory   # once per project
+git fetch factory
+git checkout -b factory-update
+git checkout factory/main -- skills .claude/settings.json .github AGENTS.md
+git diff --staged                                                      # keep the project's own edits
+```
+
+`CLAUDE.md` holds the project's own first line, so compare it by hand (`git diff factory/main -- CLAUDE.md`). Agents change these files only when the owner asks, so the factory never edits itself unattended.
 
 ## Settings checklist
 
@@ -52,7 +66,7 @@ Done once per new repository, under **Settings**. Each is a GitHub feature; noth
 | `CLAUDE.md` | The one guide every agent reads first. `AGENTS.md` points to it. |
 | `skills/` | The four skills: `intake`, `dispatch`, `review`, `design`. `.claude/skills` links here so Claude Code finds them. |
 | `.claude/settings.json` | What agents may run without asking, and what they may never read or push. |
-| `.github/workflows/ci.yml` | The **CI** check: installs and runs `npm test`. |
+| `.github/workflows/ci.yml` | The **CI** check: installs and runs `npm run check`. |
 | `.github/workflows/deploy.yml` | Deploy, prove it live, close the issue. |
 | `.github/PULL_REQUEST_TEMPLATE.md` | Issue, what changed, how verified, cost. |
 | `.github/ISSUE_TEMPLATE/request.yml` | The Request form. |
