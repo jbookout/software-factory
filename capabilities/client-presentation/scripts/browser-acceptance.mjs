@@ -235,7 +235,7 @@ export async function acceptBrowserSite({directory,negativeChecks=true,screensho
       results.push({device,check:'navigation-grid-sticky-dialog-selection-demographics-reduced-motion',passed:true});await context.close();
     }
   }catch(error){throw new Error(`${error.message}\nBrowser diagnostics: ${diagnostics.slice(-10).join(' | ')}`,{cause:error});}finally{await browser?.close();await new Promise(resolve=>server.close(resolve));}
-  return{schema:'presentation-browser-acceptance/v1',engine:'playwright@1.63.0',renderer:'maplibre-gl@6.13.0',runtime:'chromium',syntheticAdapter:true,results};
+  return{schema:'presentation-browser-acceptance/v1',engine:'playwright@1.64.1',renderer:'maplibre-gl@6.13.0',runtime:'chromium',syntheticAdapter:true,results};
 }
 export async function qualifyFixtures({screenshots}={}) {
   const temporary=await fs.mkdtemp(path.join(os.tmpdir(),'presentation-browser-')),runs=[];
