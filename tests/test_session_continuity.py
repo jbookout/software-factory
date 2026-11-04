@@ -25,7 +25,7 @@ def run(event, store, *args):
 
 class ProcessBoundary(unittest.TestCase):
     def test_durable_checkpoint_and_recovery_across_processes(self):
-        with tempfile.TemporaryDirectory(prefix='wr826-private-') as store:
+        with tempfile.TemporaryDirectory(dir='/tmp', prefix='wr826-private-') as store:
             event = fixture()
             saved = run(event, store)
             self.assertEqual(saved['status'], 'saved')
@@ -40,7 +40,7 @@ class ProcessBoundary(unittest.TestCase):
 
 class Counterfixtures(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix='wr826-private-')
+        self.temp = tempfile.TemporaryDirectory(dir='/tmp', prefix='wr826-private-')
         self.addCleanup(self.temp.cleanup)
         self.store = self.temp.name
         self.event = fixture()
@@ -52,7 +52,7 @@ class Counterfixtures(unittest.TestCase):
 
     def test_threshold_edges_and_lifetime_not_occupancy(self):
         for used, status in [(10000, 'continue'), (424999, 'continue'), (425000, 'saved'), (425001, 'saved')]:
-            with self.subTest(used=used), tempfile.TemporaryDirectory() as store:
+            with self.subTest(used=used), tempfile.TemporaryDirectory(dir='/tmp') as store:
                 self.store = store
                 self.assertEqual(self.usage(used)['status'], status)
 
@@ -96,7 +96,7 @@ class Counterfixtures(unittest.TestCase):
             for provider in ['claude', 'codex', 'grok']:
                 event = json.loads((FIXTURES / f'{provider}-hooks.json').read_text())['envelope']
                 event['binding']['role'] = role
-                with self.subTest(role=role, provider=provider), tempfile.TemporaryDirectory() as store:
+                with self.subTest(role=role, provider=provider), tempfile.TemporaryDirectory(dir='/tmp') as store:
                     result = run(event, store)
                     self.assertEqual(result['status'], 'saved')
                     self.assertEqual(result['decision']['protection'], 'unknown')
@@ -189,7 +189,7 @@ class Counterfixtures(unittest.TestCase):
 
     def test_actual_process_crash_boundaries(self):
         for stage in ['before_replace', 'after_replace', 'after_readback', 'after_receipt']:
-            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as store:
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory(dir='/tmp') as store:
                 code = """import json, os, sys
 from lib.session_continuity import process, Store
 event=json.load(sys.stdin)
@@ -271,6 +271,13 @@ process(event, Store(sys.argv[1]), crash)
                                  'info': {'last_token_usage': {'total_tokens': 425000}, 'model_context_window': 475000}}
         self.assertEqual(run(self.event, self.store)['status'], 'degraded')
         self.assertFalse(list(Path(self.store).glob('*/checkpoint.json')))
+
+    def test_compacted_metadata_alone_does_not_establish_epoch(self):
+        event = json.loads((FIXTURES / 'codex-native-metadata.json').read_text())['envelope']
+        self.assertEqual(event['payload']['prior_compacted_events'], 1)
+        event['payload']['info']['last_token_usage']['total_tokens'] = 425000
+        event.pop('epoch_evidence')
+        self.assertEqual(run(event, self.store)['reason'], 'unknown_epoch')
 
 
 if __name__ == '__main__':

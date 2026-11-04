@@ -1,5 +1,5 @@
 {
-  "provenance": "captured numeric metadata from S1 root receipt at 2026-11-04T17:34:15.706Z, Codex CLI 0.166.0. Identity and continuation data replaced with synthetic fixture binding; no transcript. Host envelope is synthetic, not claimed native hook output.",
+  "provenance": "captured numeric metadata from S1 root receipt at 2026-11-04T17:34:15.706Z, Codex CLI 0.166.0. Identity and continuation data replaced with synthetic fixture binding; no transcript. Host envelope is synthetic, not claimed native hook output. S1 observed one prior compacted event; this is boundary evidence, not a verified epoch.",
   "envelope": {
     "schema_version": 1,
     "binding": {
@@ -41,7 +41,8 @@
           "total_tokens": 142021896
         },
         "model_context_window": 475000
-      }
+      },
+      "prior_compacted_events": 1
     },
     "checkpoint": {
       "acceptance": [
