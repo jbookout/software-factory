@@ -1,0 +1,301 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Development session continuity envelope v1",
+  "description": "Private metadata fixture contract. Host supplies verified epoch, cursor, freshness and model/options binding. Saving is not native delivery. No product runtime dependency. Per-session retention is eight digests and one checkpoint; maximum stdin 65536 bytes and checkpoint 32768 bytes. Each session uses a monotonic cursor across epochs and compaction; epoch ordering must come from verified host context identity, never token reset or timestamp alone.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "binding",
+    "epoch",
+    "epoch_evidence",
+    "cursor",
+    "expected_generation",
+    "kind",
+    "model_fingerprint",
+    "usage_model_fingerprint",
+    "observed_at",
+    "now",
+    "payload",
+    "checkpoint"
+  ],
+  "properties": {
+    "epoch": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "cursor": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "expected_generation": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "observed_at": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "now": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "auto_compact_at": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "card",
+        "environment",
+        "harness",
+        "lease_refs",
+        "native_session_id",
+        "parent_destination",
+        "provider",
+        "provider_instance",
+        "repository_revision",
+        "role",
+        "task_id",
+        "thread_id",
+        "worktree"
+      ],
+      "properties": {
+        "repository_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "native_session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "provider_instance": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "provider": {
+          "enum": [
+            "claude",
+            "codex",
+            "grok"
+          ]
+        },
+        "card": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "harness": {
+          "enum": [
+            "hooks",
+            "app-server",
+            "acp"
+          ]
+        },
+        "lease_refs": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        },
+        "parent_destination": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "worktree": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "role": {
+          "enum": [
+            "builder",
+            "coordinator",
+            "native-subagent",
+            "remote-worker",
+            "reviewer",
+            "t3-worker",
+            "user",
+            "verifier"
+          ]
+        },
+        "thread_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "environment": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "epoch_evidence": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "kind": {
+      "enum": [
+        "usage",
+        "before_compact"
+      ]
+    },
+    "model_fingerprint": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "usage_model_fingerprint": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "payload": {
+      "type": "object",
+      "description": "Provider metadata only. Claude latest_usage is supplied by host; Codex app-server last and total remain distinct; native metadata envelope and lifecycle hooks are separate; Grok ACP usage and passive hook lifecycle are separate."
+    },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "acceptance",
+        "active_operations",
+        "cards",
+        "corrections",
+        "decisions",
+        "destinations",
+        "evidence_refs",
+        "exact_jobs",
+        "leases",
+        "links",
+        "next_action",
+        "revisions",
+        "watches"
+      ],
+      "properties": {
+        "cards": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string"
+          }
+        },
+        "corrections": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string"
+          }
+        },
+        "links": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string"
+          }
+        },
+        "evidence_refs": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string"
+          }
+        },
+        "active_operations": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string"
+          }
+        },
+        "acceptance": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string"
+          }
+        },
+        "destinations": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string"
+          }
+        },
+        "leases": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string"
+          }
+        },
+        "revisions": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string"
+          }
+        },
+        "watches": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string"
+          }
+        },
+        "next_action": {
+          "type": "string"
+        },
+        "exact_jobs": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string"
+          }
+        },
+        "decisions": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "x-policy": {
+    "headroom": 50000,
+    "intended_threshold": 500000,
+    "max_sample_age_seconds": 60,
+    "native_delivery": "pending",
+    "encoders": {
+      "claude-hooks": "SessionStart additionalContext artifact only",
+      "codex": "unsupported, data readback only",
+      "grok": "unsupported, passive stdout cannot inject recovery"
+    }
+  }
+}

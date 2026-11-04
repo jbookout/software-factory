@@ -1,0 +1,61 @@
+{
+  "provenance": "documented synthetic lifecycle metadata; no transcript; native installation unproven",
+  "envelope": {
+    "schema_version": 1,
+    "binding": {
+      "provider": "codex",
+      "provider_instance": "fixture",
+      "harness": "hooks",
+      "environment": "private",
+      "native_session_id": "native-fixture",
+      "role": "t3-worker",
+      "thread_id": "t3-fixture",
+      "task_id": "task-fixture",
+      "parent_destination": "parent-fixture",
+      "card": "WR826.S2.J1",
+      "worktree": "/private/fixture",
+      "repository_revision": "1e4c73b93919b7e9034aa35ccf9df6263a41b645",
+      "lease_refs": [
+        "lease-fixture"
+      ]
+    },
+    "epoch": 1,
+    "epoch_evidence": "fixture-native-context-id",
+    "cursor": 1,
+    "expected_generation": 0,
+    "kind": "before_compact",
+    "model_fingerprint": "model-options-fixture",
+    "usage_model_fingerprint": "model-options-fixture",
+    "observed_at": 1000,
+    "now": 1000,
+    "payload": {
+      "hook_event_name": "PreCompact",
+      "session_id": "native-fixture"
+    },
+    "checkpoint": {
+      "acceptance": [
+        "synthetic acceptance"
+      ],
+      "corrections": [],
+      "decisions": [],
+      "next_action": "synthetic next action",
+      "evidence_refs": [],
+      "active_operations": [],
+      "exact_jobs": [
+        "task-fixture"
+      ],
+      "destinations": [
+        "parent-fixture"
+      ],
+      "watches": [],
+      "links": [],
+      "revisions": [],
+      "cards": [
+        "WR826.S2.J1"
+      ],
+      "leases": [
+        "lease-fixture"
+      ]
+    }
+  }
+}
