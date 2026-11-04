@@ -1,0 +1,73 @@
+{
+  "provenance": "captured numeric metadata from S1 root receipt at 2026-11-04T17:34:15.706Z, Codex CLI 0.166.0. Identity and continuation data replaced with synthetic fixture binding; no transcript. Host envelope is synthetic, not claimed native hook output. S1 observed one prior compacted event; this is boundary evidence, not a verified epoch.",
+  "envelope": {
+    "schema_version": 1,
+    "binding": {
+      "provider": "codex",
+      "provider_instance": "fixture",
+      "harness": "hooks",
+      "environment": "private",
+      "native_session_id": "native-fixture",
+      "role": "t3-worker",
+      "thread_id": "t3-fixture",
+      "task_id": "task-fixture",
+      "parent_destination": "parent-fixture",
+      "card": "WR826.S2.J1",
+      "worktree": "/private/fixture",
+      "repository_revision": "1e4c73b93919b7e9034aa35ccf9df6263a41b645",
+      "lease_refs": [
+        "lease-fixture"
+      ]
+    },
+    "epoch": 1,
+    "epoch_evidence": "fixture-native-context-id",
+    "cursor": 1,
+    "expected_generation": 0,
+    "kind": "usage",
+    "model_fingerprint": "model-options-fixture",
+    "usage_model_fingerprint": "model-options-fixture",
+    "observed_at": 1000,
+    "now": 1000,
+    "payload": {
+      "hook_event_name": "token_count",
+      "session_id": "native-fixture",
+      "info": {
+        "last_token_usage": {
+          "input_tokens": 292546,
+          "total_tokens": 292913,
+          "output_tokens": 367
+        },
+        "total_token_usage": {
+          "total_tokens": 142021896
+        },
+        "model_context_window": 475000
+      },
+      "prior_compacted_events": 1
+    },
+    "checkpoint": {
+      "acceptance": [
+        "synthetic acceptance"
+      ],
+      "corrections": [],
+      "decisions": [],
+      "next_action": "synthetic next action",
+      "evidence_refs": [],
+      "active_operations": [],
+      "exact_jobs": [
+        "task-fixture"
+      ],
+      "destinations": [
+        "parent-fixture"
+      ],
+      "watches": [],
+      "links": [],
+      "revisions": [],
+      "cards": [
+        "WR826.S2.J1"
+      ],
+      "leases": [
+        "lease-fixture"
+      ]
+    }
+  }
+}
