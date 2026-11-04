@@ -58,6 +58,7 @@ class Counterfixtures(unittest.TestCase):
 
     def test_larger_window_only_when_safe(self):
         self.assertEqual(self.usage(499999, 600000)['status'], 'continue')
+        self.event['cursor'] = 2
         self.assertEqual(self.usage(500000, 600000)['decision']['threshold'], 500000)
 
     def test_earlier_compaction_and_smaller_window(self):
@@ -215,6 +216,42 @@ process(event, Store(sys.argv[1]), crash)
         record.symlink_to(outside)
         self.assertEqual(run(self.event, self.store)['status'], 'degraded')
         self.assertEqual(outside.read_text(), 'untouched')
+
+    def test_below_threshold_epoch_admission_rejects_delayed_old_epoch(self):
+        saved = run(self.event, self.store)
+        self.event.update(epoch=2, cursor=2, expected_generation=1)
+        self.assertEqual(self.usage(10000)['status'], 'continue')
+        self.event.update(epoch=1, cursor=3)
+        self.assertEqual(self.usage(425000)['reason'], 'old_replay')
+        self.assertEqual(run({'binding': self.event['binding']}, self.store, '--recover')['receipt'], saved['receipt'])
+
+    def test_model_and_window_change_after_checkpoint_reset_usage_baseline(self):
+        for change_model, window in [(False, 258400), (True, 475000)]:
+            with self.subTest(change_model=change_model, window=window), tempfile.TemporaryDirectory(dir='/tmp') as store:
+                self.store = store
+                self.event = fixture()
+                run(self.event, self.store)
+                self.event.update(cursor=2, expected_generation=1)
+                if change_model:
+                    self.event.update(model_fingerprint='smaller', usage_model_fingerprint='smaller', auto_compact_at=60000)
+                self.assertEqual(self.usage(10000 if change_model else 208400, window)['status'], 'saved')
+
+    def test_admission_without_checkpoint_remains_recoverable_as_unknown(self):
+        self.assertEqual(self.usage(10000)['status'], 'continue')
+        self.assertEqual(run(self.event, self.store)['status'], 'continue')
+        self.assertEqual(run({'binding': self.event['binding']}, self.store, '--recover')['reason'], 'no_checkpoint')
+        self.event['cursor'] = 2
+        self.assertEqual(self.usage(9000)['reason'], 'counter_reset_without_new_epoch')
+        self.assertEqual(self.usage(425000)['receipt']['generation'], 1)
+
+    def test_reused_pending_checkpoint_has_private_permissions(self):
+        from lib.session_continuity import Store
+        directory = Store(self.store).directory(self.event['binding'])
+        pending = directory / '.checkpoint-pending'
+        pending.write_text('old')
+        pending.chmod(0o644)
+        self.assertEqual(run(self.event, self.store)['status'], 'saved')
+        self.assertEqual((directory / 'checkpoint.json').stat().st_mode & 0o777, 0o600)
 
     def test_new_model_uses_current_smaller_capacity(self):
         self.event.update(model_fingerprint='smaller', usage_model_fingerprint='smaller')

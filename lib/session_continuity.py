@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import json
 import os
+import stat
 from pathlib import Path
 
 from lib.session_adapters import claude, codex, grok
@@ -130,8 +131,9 @@ class Store:
         if not isinstance(state, dict) or not all(integer(state.get(k)) for k in ('generation', 'epoch', 'cursor')):
             raise ValueError('corrupt_store')
         binding_key(state['binding'])
-        validate_checkpoint(state['checkpoint'])
-        if state['checkpoint_digest'] != digest(state['checkpoint']):
+        if state['checkpoint'] is not None:
+            validate_checkpoint(state['checkpoint'])
+        if state['checkpoint_digest'] != (digest(state['checkpoint']) if state['checkpoint'] is not None else None):
             raise ValueError('corrupt_store')
         return state
 
@@ -166,21 +168,30 @@ class Store:
                     if event_digest != state['event_digest']:
                         return {'status': 'degraded', 'reason': 'changed_replay'}
                     self.sync_directory(directory)
-                    return self.saved(self.read(directory), decision)
-                if envelope['epoch'] == state['epoch'] and event.telemetry == 'fresh' and state['used'] is not None and event.used is not None and event.used < state['used']:
+                    return self.saved(self.read(directory), decision) if decision['status'] == 'persist' else decision
+                if envelope['epoch'] == state['epoch'] and envelope['model_fingerprint'] == state['model_fingerprint'] and event.window == state['window'] and event.telemetry == 'fresh' and state['used'] is not None and event.used is not None and event.used < state['used']:
                     return {'status': 'unknown', 'reason': 'counter_reset_without_new_epoch'}
             generation = state['generation'] if state else 0
             if envelope['expected_generation'] != generation:
                 return {'status': 'degraded', 'reason': 'cas_conflict', 'generation': generation}
             receipts = state['recent_events'] if state else []
+            persist = decision['status'] == 'persist'
+            checkpoint = envelope['checkpoint'] if persist else state['checkpoint'] if state else None
             record = dict(binding=envelope['binding'], epoch=envelope['epoch'], cursor=envelope['cursor'],
-                          generation=generation + 1, checkpoint=envelope['checkpoint'],
-                          checkpoint_digest=digest(envelope['checkpoint']), event_digest=event_digest,
+                          generation=generation + int(persist), checkpoint=checkpoint,
+                          checkpoint_digest=digest(checkpoint) if checkpoint is not None else None,
+                          checkpoint_event_digest=event_digest if persist else state['checkpoint_event_digest'] if state else None,
+                          event_digest=event_digest, model_fingerprint=envelope['model_fingerprint'], window=event.window,
                           used=event.used, recent_events=(receipts + [event_digest])[-RETENTION:])
             temporary = directory / '.checkpoint-pending'
             try:
-                output_fd = os.open(temporary, os.O_CREAT | os.O_TRUNC | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+                output_fd = os.open(temporary, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
                 with os.fdopen(output_fd, 'wb') as output:
+                    metadata = os.fstat(output.fileno())
+                    if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid() or metadata.st_nlink != 1:
+                        raise ValueError('unsafe_store_file')
+                    os.fchmod(output.fileno(), 0o600)
+                    output.truncate(0)
                     output.write(encoded(record))
                     output.flush()
                     os.fsync(output.fileno())
@@ -195,7 +206,7 @@ class Store:
                     raise ValueError('readback_mismatch')
                 if fault:
                     fault('after_readback')
-                result = self.saved(readback, decision)
+                result = self.saved(readback, decision) if persist else decision
                 if fault:
                     fault('after_receipt')
                 return result
@@ -207,12 +218,12 @@ class Store:
     def saved(state, decision):
         return {'status': 'saved', 'decision': decision, 'checkpoint': state['checkpoint'],
                 'receipt': dict(checkpoint_digest=state['checkpoint_digest'], generation=state['generation'],
-                                binding_digest=digest(state['binding']), source_event_ref=state['event_digest'],
+                                binding_digest=digest(state['binding']), source_event_ref=state['checkpoint_event_digest'],
                                 durable_readback=True, native_delivery='pending')}
 
     def recover(self, binding):
         state = self.read(self.directory(binding))
-        if not state:
+        if not state or state['checkpoint'] is None:
             return {'status': 'unknown', 'reason': 'no_checkpoint'}
         if state['binding'] != binding:
             return {'status': 'degraded', 'reason': 'ownership_changed'}
@@ -230,9 +241,10 @@ def process(envelope, store, fault=None):
         raise ValueError('unsupported_schema')
     event = normalize(envelope)
     decision = decide(event, integer(envelope.get('epoch')) and isinstance(envelope.get('epoch_evidence'), str) and 0 < len(envelope['epoch_evidence']) <= 1024)
-    if decision['status'] != 'persist':
+    if decision['status'] not in ('persist', 'continue'):
         return decision
     if not integer(envelope.get('cursor')) or not integer(envelope.get('expected_generation')):
         raise ValueError('invalid_cursor_or_generation')
-    validate_checkpoint(envelope.get('checkpoint'))
+    if decision['status'] == 'persist':
+        validate_checkpoint(envelope.get('checkpoint'))
     return store.save(envelope, event, decision, fault)

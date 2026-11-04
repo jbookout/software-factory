@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Development session continuity envelope v1",
-  "description": "Private metadata fixture contract. Host supplies verified epoch, cursor, freshness and model/options binding. Saving is not native delivery. No product runtime dependency. Per-session retention is eight digests and one checkpoint; maximum stdin 65536 bytes and checkpoint 32768 bytes. Each session uses a monotonic cursor across epochs and compaction; epoch ordering must come from verified host context identity, never token reset or timestamp alone.",
+  "description": "Private metadata fixture contract. Host supplies verified epoch, cursor, freshness and model/options binding. Saving is not native delivery. No product runtime dependency. Per-session retention is eight digests and one checkpoint; maximum stdin 65536 bytes and checkpoint 32768 bytes. Every admitted below-threshold observation durably advances epoch, cursor, model/window and usage metadata without replacing the checkpoint or incrementing checkpoint generation. Counter monotonicity applies only within the same epoch, model and window. Each session uses a monotonic cursor across epochs and compaction; epoch ordering must come from verified host context identity, never token reset or timestamp alone.",
   "type": "object",
   "additionalProperties": false,
   "required": [
