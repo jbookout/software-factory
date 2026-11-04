@@ -279,6 +279,15 @@ process(event, Store(sys.argv[1]), crash)
         event.pop('epoch_evidence')
         self.assertEqual(run(event, self.store)['reason'], 'unknown_epoch')
 
+    def test_standalone_user_needs_no_fabricated_t3_identity(self):
+        event = json.loads((FIXTURES / 'claude-hooks.json').read_text())['envelope']
+        event['binding']['role'] = 'user'
+        for field in ['thread_id', 'task_id', 'parent_destination', 'card', 'worktree', 'repository_revision']:
+            event['binding'][field] = None
+        self.assertEqual(run(event, self.store)['status'], 'saved')
+        event['binding']['role'] = 't3-worker'
+        self.assertEqual(run(event, self.store)['status'], 'degraded')
+
 
 if __name__ == '__main__':
     unittest.main()

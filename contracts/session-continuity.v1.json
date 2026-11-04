@@ -73,12 +73,18 @@
       ],
       "properties": {
         "repository_revision": {
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1,
           "maxLength": 1024
         },
         "task_id": {
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1,
           "maxLength": 1024
         },
@@ -100,7 +106,10 @@
           ]
         },
         "card": {
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1,
           "maxLength": 1024
         },
@@ -120,12 +129,18 @@
           }
         },
         "parent_destination": {
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1,
           "maxLength": 1024
         },
         "worktree": {
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1,
           "maxLength": 1024
         },
@@ -142,7 +157,10 @@
           ]
         },
         "thread_id": {
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1,
           "maxLength": 1024
         },
@@ -151,7 +169,40 @@
           "minLength": 1,
           "maxLength": 1024
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "role": {
+                "const": "t3-worker"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "thread_id": {
+                "type": "string"
+              },
+              "task_id": {
+                "type": "string"
+              },
+              "parent_destination": {
+                "type": "string"
+              },
+              "card": {
+                "type": "string"
+              },
+              "worktree": {
+                "type": "string"
+              },
+              "repository_revision": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
     },
     "epoch_evidence": {
       "type": "string",

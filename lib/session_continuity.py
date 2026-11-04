@@ -15,6 +15,7 @@ ROLES = {'coordinator', 'user', 'builder', 'reviewer', 'verifier', 't3-worker', 
 ADAPTERS = {'claude': claude, 'codex': codex, 'grok': grok}
 HARNESSES = {'claude': {'hooks'}, 'codex': {'hooks', 'app-server'}, 'grok': {'hooks', 'acp'}}
 BINDING_FIELDS = {'provider', 'provider_instance', 'harness', 'environment', 'native_session_id', 'role', 'thread_id', 'task_id', 'parent_destination', 'card', 'worktree', 'repository_revision', 'lease_refs'}
+OPTIONAL_IDENTITIES = {'thread_id', 'task_id', 'parent_destination', 'card', 'worktree', 'repository_revision'}
 CHECKPOINT_FIELDS = {'acceptance', 'corrections', 'decisions', 'next_action', 'evidence_refs', 'active_operations', 'exact_jobs', 'destinations', 'watches', 'links', 'revisions', 'cards', 'leases'}
 
 
@@ -33,7 +34,9 @@ def integer(value):
 def binding_key(binding):
     if not isinstance(binding, dict) or set(binding) != BINDING_FIELDS:
         raise ValueError('invalid_binding')
-    if any(not isinstance(binding[k], str) or not 0 < len(binding[k]) <= 1024 for k in BINDING_FIELDS - {'lease_refs'}):
+    if binding.get('role') == 't3-worker' and any(binding.get(k) is None for k in OPTIONAL_IDENTITIES):
+        raise ValueError('incomplete_worker_binding')
+    if any(not isinstance(binding[k], str) or not 0 < len(binding[k]) <= 1024 for k in BINDING_FIELDS - {'lease_refs'} if not (k in OPTIONAL_IDENTITIES and binding[k] is None)):
         raise ValueError('invalid_binding')
     if not isinstance(binding['lease_refs'], list) or len(binding['lease_refs']) > 32 or any(not isinstance(v, str) or len(v) > 1024 for v in binding['lease_refs']):
         raise ValueError('invalid_binding')
