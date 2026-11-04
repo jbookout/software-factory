@@ -58,7 +58,7 @@ def normalize(envelope):
     if not isinstance(payload, dict):
         raise ValueError('invalid_payload')
     used, window, kind, native_id = ADAPTERS[binding['provider']].normalize(payload, binding['harness'])
-    if native_id != binding['native_session_id'] or kind != envelope.get('kind'):
+    if kind not in ('usage', 'before_compact') or native_id != binding['native_session_id'] or kind != envelope.get('kind'):
         raise ValueError('native_event_binding_mismatch')
     observed, now = envelope.get('observed_at'), envelope.get('now')
     telemetry = 'fresh'

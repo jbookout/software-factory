@@ -264,6 +264,14 @@ process(event, Store(sys.argv[1]), crash)
         self.assertEqual(result['receipt']['checkpoint_digest'], digest(self.event['checkpoint']))
         self.assertEqual(result['receipt']['binding_digest'], digest(self.event['binding']))
 
+    def test_unknown_native_lifecycle_cannot_save(self):
+        self.event['binding']['harness'] = 'hooks'
+        self.event.pop('kind')
+        self.event['payload'] = {'hook_event_name': 'Unrecognized', 'session_id': 'native-fixture',
+                                 'info': {'last_token_usage': {'total_tokens': 425000}, 'model_context_window': 475000}}
+        self.assertEqual(run(self.event, self.store)['status'], 'degraded')
+        self.assertFalse(list(Path(self.store).glob('*/checkpoint.json')))
+
 
 if __name__ == '__main__':
     unittest.main()
