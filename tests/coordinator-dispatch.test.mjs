@@ -21,3 +21,8 @@ test('synthetic dispatch request conforms to deployed mint contract', () => {
   assert.match(response.card_id, /^WR[1-9]\d*\.S[1-9]\d*\.J[1-9]\d*$/);
   assert.equal(typeof response.priority, 'number');
 });
+
+test('request and response pass registered handler semantic validation with negative control', () => {
+  const result = spawnSync(process.execPath, ['--experimental-vm-modules', 'tests/fixtures/dispatch/semantic-check.mjs'], { encoding: 'utf8', timeout: 10000 });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});

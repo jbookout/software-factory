@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "card_id": "WR622.S13.J20",
+  "registered": true,
+  "executor": "codex",
+  "model": "gpt-6.1-sol",
+  "repository": "jbookout/software-factory",
+  "work_request_state": "open"
+}

@@ -1,3 +1,6 @@
+import importlib.util
+from types import SimpleNamespace
+from unittest.mock import patch
 import json
 from pathlib import Path
 import subprocess
@@ -129,7 +132,7 @@ sys.exit(0 if json.loads(response.read_text()).get('ok') else 1)
         import fcntl
         self.assertEqual(self.run_cli().returncode, 0)
         receipt = self.archive / '.requests' / (self.request['card']['idempotency_key'] + '.json')
-        with receipt.open('a+') as lock:
+        with receipt.with_suffix('.lock').open('a+') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             result = self.run_cli()
         self.assertNotEqual(result.returncode, 0)
@@ -154,6 +157,85 @@ sys.exit(0 if json.loads(response.read_text()).get('ok') else 1)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout, '')
         self.assertEqual(len(self.calls()), 1)
+
+    def module(self):
+        spec = importlib.util.spec_from_file_location('dispatch', CLI)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def args(self):
+        return SimpleNamespace(request=self.input, tmp_dir=self.temp,
+                               brief_dir=self.archive, carr_root=self.carr, timeout=30)
+
+    def test_cached_retry_never_rewrites_saved_response(self):
+        self.assertEqual(self.run_cli().returncode, 0)
+        receipt = self.archive / '.requests' / (self.request['card']['idempotency_key'] + '.json')
+        before = receipt.read_bytes()
+        with patch('json.dump', side_effect=OSError('ENOSPC')):
+            self.module().prepare(self.args())
+        self.assertEqual(receipt.read_bytes(), before)
+        self.assertEqual(self.run_cli().returncode, 0)
+        self.assertEqual(len(self.calls()), 1)
+
+    def test_atomic_receipt_failure_preserves_pending_request(self):
+        self.input.write_text(json.dumps(self.request))
+        module = self.module()
+        original = module.json.dump
+        writes = []
+        def fail_response(value, out):
+            writes.append(value.copy())
+            if 'response' in value:
+                raise OSError('ENOSPC')
+            return original(value, out)
+        with patch.object(module.json, 'dump', side_effect=fail_response):
+            with self.assertRaises(OSError):
+                module.prepare(self.args())
+        receipt = self.archive / '.requests' / (self.request['card']['idempotency_key'] + '.json')
+        self.assertIn('fingerprint', json.loads(receipt.read_text()))
+        self.assertNotIn('response', json.loads(receipt.read_text()))
+        self.assertEqual(len(self.calls()), 1)
+
+    def test_empty_existing_receipt_refuses_without_remint(self):
+        self.assertEqual(self.run_cli().returncode, 0)
+        receipt = self.archive / '.requests' / (self.request['card']['idempotency_key'] + '.json')
+        receipt.write_text('')
+        self.assertNotEqual(self.run_cli().returncode, 0)
+        self.assertEqual(len(self.calls()), 1)
+
+    def proof(self, registration=None, extra=()):
+        if registration is not None:
+            (self.root / 'registration.json').write_text(json.dumps(registration))
+        return subprocess.run([sys.executable, str(ROOT / 'bin/prove-coordinator-dispatch.py'),
+            str(self.input), '--card', self.reply['card_id'], '--installed-root', str(ROOT),
+            '--tmp-dir', str(self.temp), '--brief-dir', str(self.archive),
+            '--registration-file', str(self.root / 'registration.json'), *extra],
+            capture_output=True, text=True, timeout=10)
+
+    def test_read_only_proof_pass_and_failure_controls(self):
+        self.assertEqual(self.run_cli().returncode, 0)
+        registration = json.loads((ROOT / 'tests/fixtures/dispatch/registration.json').read_text())
+        result = self.proof(registration)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.calls()), 1)
+        self.assertIn('fixture', result.stdout)
+        for changes in [{'registered': False}, {'card_id': 'WR622.S13.J21'}, {'repository': 'other/repo'}, {'ok': False}]:
+            with self.subTest(changes=changes):
+                self.assertNotEqual(self.proof({**registration, **changes}).returncode, 0)
+        path = self.temp / ('brief-' + self.reply['card_id'] + '.md')
+        path.write_text('changed')
+        self.assertNotEqual(self.proof(registration).returncode, 0)
+        self.assertEqual(len(self.calls()), 1)
+
+    def test_proof_rejects_different_installed_identity(self):
+        import shutil
+        self.assertEqual(self.run_cli().returncode, 0)
+        installed = self.root / 'installed'
+        shutil.copytree(ROOT / 'bin', installed / 'bin')
+        (installed / 'bin/coordinator-dispatch.py').write_text('changed')
+        registration = json.loads((ROOT / 'tests/fixtures/dispatch/registration.json').read_text())
+        result = self.proof(registration, ['--installed-root', str(installed)])
+        self.assertNotEqual(result.returncode, 0)
 
     def test_invalid_json_response_refuses(self):
         (self.carr / 'response.json').write_text('not JSON')
