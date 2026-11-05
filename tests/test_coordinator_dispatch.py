@@ -227,6 +227,18 @@ sys.exit(0 if json.loads(response.read_text()).get('ok') else 1)
         self.assertNotEqual(self.proof(registration).returncode, 0)
         self.assertEqual(len(self.calls()), 1)
 
+    def test_proof_live_reader_calls_only_registration_once(self):
+        self.assertEqual(self.run_cli().returncode, 0)
+        registration = json.loads((ROOT / 'tests/fixtures/dispatch/registration.json').read_text())
+        self.response(registration)
+        result = subprocess.run([sys.executable, str(ROOT / 'bin/prove-coordinator-dispatch.py'),
+            str(self.input), '--card', self.reply['card_id'], '--installed-root', str(ROOT),
+            '--tmp-dir', str(self.temp), '--brief-dir', str(self.archive), '--carr-root', str(self.carr)],
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('live-read-only', result.stdout)
+        self.assertEqual([call[1] for call in self.calls()], ['dispatch-job', 'job-card-registration'])
+
     def test_proof_rejects_different_installed_identity(self):
         import shutil
         self.assertEqual(self.run_cli().returncode, 0)

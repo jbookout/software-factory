@@ -77,26 +77,35 @@ def prepare(args):
     fingerprint = json.dumps([request, template, variables, list(map(str, destinations))], sort_keys=True)
     receipts = destinations[1] / '.requests'
     receipts.mkdir(exist_ok=True)
-    descriptor = os.open(receipts / (key + '.json'), os.O_CREAT | os.O_RDWR, 0o600)
-    with os.fdopen(descriptor, 'r+') as receipt:
+    receipt = receipts / (key + '.json')
+    descriptor = os.open(receipts / (key + '.lock'), os.O_CREAT | os.O_RDWR, 0o600)
+    with os.fdopen(descriptor, 'r+') as lock:
         try:
-            fcntl.flock(receipt, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise ValueError('request is already running; retry the same UUID after it finishes') from None
-        receipt.seek(0)
-        previous = receipt.read()
-        saved = json.loads(previous) if previous else {'fingerprint': fingerprint}
+        previous = receipt.read_text() if receipt.exists() else None
+        saved = json.loads(previous) if previous is not None else {'fingerprint': fingerprint}
         if saved['fingerprint'] != fingerprint:
             raise ValueError('idempotency key already binds a different request or template')
 
         def save():
-            receipt.seek(0)
-            receipt.truncate()
-            json.dump(saved, receipt)
-            receipt.flush()
-            os.fsync(receipt.fileno())
+            with tempfile.NamedTemporaryFile(mode='w', dir=receipts, delete=False) as out:
+                temporary = Path(out.name)
+                try:
+                    json.dump(saved, out)
+                    out.flush()
+                    os.fsync(out.fileno())
+                    os.replace(temporary, receipt)
+                    directory = os.open(receipts, os.O_RDONLY)
+                    try:
+                        os.fsync(directory)
+                    finally:
+                        os.close(directory)
+                finally:
+                    temporary.unlink(missing_ok=True)
 
-        if not previous:
+        if previous is None:
             save()
         response = saved.get('response')
         if response is None:
@@ -111,8 +120,9 @@ def prepare(args):
         match = CARD.fullmatch(identifier) if isinstance(identifier, str) else None
         if not match or (int(match[1]), int(match[2])) != (int(work_request[1]), ordinal):
             raise ValueError('dispatch-job returned an invalid or mismatched card')
-        saved['response'] = response
-        save()
+        if 'response' not in saved:
+            saved['response'] = response
+            save()
         text = render(template, {**variables, 'card_id': identifier})
         paths = [folder / ('brief-' + identifier + '.md') for folder in destinations]
         for path in paths:

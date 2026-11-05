@@ -8,7 +8,7 @@
     "model": "gpt-6.1-sol",
     "effort": "high",
     "card_title": "Build dispatch briefs",
-    "description": "Prepare one registered worker brief.",
+    "description": "Build one registered worker brief.",
     "idempotency_key": "80274f48-4490-4124-ab39-2d6605e0e3ae"
   },
   "template": "build",
