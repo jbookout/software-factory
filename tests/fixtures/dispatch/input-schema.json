@@ -1,0 +1,109 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "idempotency_key": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "work_request": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^WR-?[0-9]{1,6}$",
+      "description": "WR-000675; WR675 and WR-675 normalize to WR-000675."
+    },
+    "slice": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647,
+      "default": 1
+    },
+    "job": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "runner_job_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "repository": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "enum": [
+        "DoctorCRE/carr-system",
+        "jbookout/doctorcre-app",
+        "jbookout/software-factory"
+      ]
+    },
+    "job_type": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "enum": [
+        "feature-backend",
+        "feature-ui",
+        "bug-fix",
+        "removal-refactor",
+        "data-migration",
+        "review",
+        "research-audit"
+      ]
+    },
+    "executor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "description": "Executor identifier, open text (for example codex or claude); no closed catalog."
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "description": "Model identifier selected by the executor, open text; no closed catalog."
+    },
+    "effort": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "card_title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "description": "2-3 plain words, first word one of: Add, Build, Fix, Remove, Rename, Review, Audit, Plan, Revise, Migrate, Move, Record, Require, Gate, Adopt, Rebind, Repin, Close, Install, Retire. Unique within the Work Request."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "description": "one sentence starting with one of: Add, Build, Fix, Remove, Rename, Review, Audit, Plan, Revise, Migrate, Move, Record, Require, Gate, Adopt, Rebind, Repin, Close, Install, Retire; no line breaks"
+    }
+  },
+  "required": [
+    "idempotency_key",
+    "work_request"
+  ],
+  "anyOf": [
+    {
+      "required": [
+        "executor",
+        "model",
+        "effort",
+        "card_title",
+        "description",
+        "job_type"
+      ]
+    },
+    {
+      "required": [
+        "job",
+        "runner_job_id",
+        "repository"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+[
+  "feature-backend",
+  "feature-ui",
+  "bug-fix",
+  "removal-refactor",
+  "data-migration",
+  "review",
+  "research-audit"
+]

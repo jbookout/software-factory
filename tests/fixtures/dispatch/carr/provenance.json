@@ -1,0 +1,10 @@
+{
+  "repository": "DoctorCRE/carr-system",
+  "revision": "8718a35562f8e4de62cf7322881383895f69dd64",
+  "sources": {
+    "work-queue.js": "4d78525b9e01cecafe9f1e2981ccc22ec7715bc63f0bd2a7980542d107381a8e",
+    "job-card-verbs.v1.json": "9b3f7229383bbce5d67492e406f7e364373497c48998442f8bf46b37c7baa650",
+    "job-types.v1.json": "0f307106fe4c5344a5c72aa35b339fe0c0b8c8407cac8314e6f239ddcf3668a8",
+    "progress-address.v1.json": "eea08841782bf400c1f9ecefb5d1cbec5803e75f4bc380f54d792c497d709918"
+  }
+}
