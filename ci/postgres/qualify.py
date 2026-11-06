@@ -12,7 +12,7 @@ import tempfile
 import time
 
 BINARIES = ('initdb', 'pg_ctl', 'postgres', 'psql', 'createdb', 'pg_dump', 'pg_restore')
-DOCUMENT_TOOLS = ('libreoffice', 'pdftotext', 'zsh', 'git', 'make', 'g++')
+DOCUMENT_TOOLS = ('libreoffice', 'pdftotext', 'zsh', 'git', 'make', 'g++', 'ps', 'pgrep', 'kill', 'jq')
 
 
 def check_user(uid):
