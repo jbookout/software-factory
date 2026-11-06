@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "check": "npm test && node capabilities/client-presentation/scripts/browser-acceptance.mjs",
-    "test": "node --test --test-concurrency=2"
+    "test": "node --test --test-concurrency=2",
+    "test:ci-postgres": "python3 -m unittest discover -s ci/postgres -p test_qualify.py"
   },
   "devDependencies": {
     "ajv": "8.20.0",
