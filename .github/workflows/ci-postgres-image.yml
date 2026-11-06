@@ -17,9 +17,6 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-      packages: write
-    outputs:
-      digest: ${{ steps.publish.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -35,6 +32,7 @@ jobs:
           tags: ci-postgres:qualification
       - name: Qualify the real image as the job user
         id: qualify
+        shell: bash
         run: |
           docker run --rm --network none ci-postgres:qualification python /opt/ci/qualify.py | tee qualification.json
       - name: Deliberately broken image must fail qualification
@@ -54,15 +52,35 @@ jobs:
             cat "broken-$fault.log"
             grep -q 'qualification failed:' "broken-$fault.log"
           done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: postgres-image-qualification
+          path: |
+            qualification.json
+            broken-*.log
+  publish:
+    needs: image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@bf8388060db527dff14f48b6a5fdbe70763c1213
       - uses: docker/login-action@d0b8297dd55199249f38268efae35fcb03f75aab
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.qualify.outcome == 'success'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish qualified both profile
         id: publish
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.qualify.outcome == 'success'
         uses: docker/build-push-action@562e51947939164e4fe808a6eab5101977e509e0
         with:
           context: .
@@ -80,23 +98,19 @@ jobs:
           DIGEST: ${{ steps.publish.outputs.digest }}
         run: echo "ghcr.io/jbookout/software-factory/ci-postgres@$DIGEST" | tee image-digest.txt >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: always()
         with:
-          name: postgres-image-qualification
-          path: |
-            qualification.json
-            broken-*.log
-            image-digest.txt
+          name: postgres-image-digest
+          path: image-digest.txt
   job-container:
     permissions:
       contents: read
       packages: read
-    needs: image
+    needs: publish
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     container:
-      image: ghcr.io/jbookout/software-factory/ci-postgres@${{ needs.image.outputs.digest }}
+      image: ghcr.io/jbookout/software-factory/ci-postgres@${{ needs.publish.outputs.digest }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
