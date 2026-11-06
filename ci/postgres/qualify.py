@@ -12,7 +12,7 @@ import tempfile
 import time
 
 BINARIES = ('initdb', 'pg_ctl', 'postgres', 'psql', 'createdb', 'pg_dump', 'pg_restore')
-DOCUMENT_TOOLS = ('libreoffice', 'pdftotext', 'zsh', 'git', 'make', 'g++')
+DOCUMENT_TOOLS = ('libreoffice', 'pdftotext', 'zsh', 'git', 'make', 'g++', 'ps', 'pgrep')
 
 
 def check_user(uid):
@@ -103,6 +103,13 @@ def qualify_rust():
             raise RuntimeError('Rust build probe failed')
 
 
+def qualify_browser():
+    output = run(['/usr/bin/chromium', '--headless', '--no-sandbox', '--disable-dev-shm-usage',
+                  '--dump-dom', 'data:text/html,<title>image-browser-ok</title>'], time.monotonic() + 20)
+    if '<title>image-browser-ok</title>' not in output:
+        raise RuntimeError('browser did not render qualification document')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--majors', nargs='+', type=int, choices=(17, 18), default=[17, 18])
@@ -114,9 +121,15 @@ def main():
     for tool in DOCUMENT_TOOLS:
         if not shutil.which(tool):
             raise RuntimeError(f'missing document/build tool: {tool}')
+    run(['/usr/bin/python3', '-c', 'import json, pathlib, sys'], time.monotonic() + 10)
+    run(['/bin/kill', '-0', '--', str(os.getpid())], time.monotonic() + 10)
+    if run(['jq', '-n', '-r', '[{"check_runs":[{"id":1}]},{"check_runs":[{"id":2}]}] | .[].check_runs[].id'],
+           time.monotonic() + 10) != '1\n2':
+        raise RuntimeError('jq object-page decoding failed')
+    qualify_browser()
     qualify_rust()
     run(['libreoffice', '--version'], time.monotonic() + 20)
-    print(json.dumps({'uid': os.getuid(), 'tools': DOCUMENT_TOOLS,
+    print(json.dumps({'uid': os.getuid(), 'tools': (*DOCUMENT_TOOLS, '/bin/kill', 'jq'),
                       'postgres': [qualify_major(major) for major in args.majors]}))
 
 

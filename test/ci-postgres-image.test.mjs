@@ -77,7 +77,56 @@ for (const [event, ref, mayWrite] of [
 test('publication qualifies Rust and the exact CARR consumer before publishing', () => {
   assert.match(dockerfile, /FROM rust:1\.90\.0-bookworm@sha256:[a-f0-9]{64} AS rust/);
   assert.match(dockerfile, /COPY --from=rust \/usr\/local\/rustup/);
-  assert.match(workflow, /ref: bd5c4984190293c51c2bd3a6e192525468156630/);
+  assert.match(workflow, /ref: 6aeb09e0d766015754ea7ebb160180ef14090f3f/);
   assert.match(workflow, /cargo build --locked --release --manifest-path \/consumer\/vendor\/hxprobe\/Cargo.toml/);
   assert.match(workflow, /missing-rustc missing-cargo/);
+});
+
+
+test('CARR browser, bootstrap Python and signal lifecycle are publication requirements', () => {
+  assert.match(dockerfile, /fonts-liberation chromium procps/);
+  assert.match(dockerfile, /ln -s \/usr\/local\/bin\/python3 \/usr\/bin\/python3/);
+  assert.match(workflow, /python ops\/cloud-hook-paths-selftest.py/);
+  assert.match(workflow, /python ops\/disposable-pg-selftest.py/);
+  assert.match(workflow, /npm --prefix practice-plugin test/);
+  assert.match(workflow, /missing-browser missing-bootstrap-python/);
+  for (const [, command] of workflow.matchAll(/docker run ([^\n]+)/g)) {
+    if (!command.includes('Lifecycle.test_sigterm')) assert.match(command, /--init/);
+  }
+  assert.match(workflow, /grep -q 'ProcessLookupError not raised' no-init.log/);
+  assert.match(workflow, /options: --init/);
+});
+
+test('pinned CARR kill and jq consumers are required before publication', () => {
+  for (const suite of ['config-as-code-launchd', 'github-gh-caller', 'github-rate-limit']) {
+    assert.ok(workflow.includes(`python ops/${suite}-selftest.py`), suite);
+  }
+});
+
+
+test('each real CARR tool consumer failure refuses image qualification', () => {
+  const step = workflow.match(/      - name: Exercise the pinned CARR[^\n]*\n([\s\S]*?)(?=      - )/)[1];
+  const command = step.split('        run: |\n')[1].replace(/^          /gm, '');
+  for (const fault of ['', 'config-as-code-launchd', 'github-gh-caller', 'github-rate-limit']) {
+    const setup = `
+      cp() { :; }; cd() { :; };
+      timeout() { shift; "$@"; };
+      npm() { :; };
+      python() {
+        printf '%s\\n' "$*";
+        if [[ -n "$FAULT" && "$*" == "ops/$FAULT-selftest.py" ]]; then return 42; fi
+      };
+      docker() { for argument; do :; done; bash -ec "$argument"; };
+      export -f cp cd timeout npm python docker;
+    `;
+    const result = spawnSync('bash', ['-e', '-c', setup + command], {
+      encoding: 'utf8', env: { ...process.env, FAULT: fault },
+    });
+    assert.equal(result.status, fault ? 42 : 0, result.stdout + result.stderr);
+    if (!fault) {
+      for (const suite of ['config-as-code-launchd', 'github-gh-caller', 'github-rate-limit']) {
+        assert.ok(result.stdout.includes(`ops/${suite}-selftest.py`), result.stdout);
+      }
+    }
+  }
 });
