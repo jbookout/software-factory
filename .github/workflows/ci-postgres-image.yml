@@ -88,12 +88,18 @@ jobs:
             broken-*.log
             image-digest.txt
   job-container:
+    permissions:
+      contents: read
+      packages: read
     needs: image
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     container:
       image: ghcr.io/jbookout/software-factory/ci-postgres@${{ needs.image.outputs.digest }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     defaults:
       run:
         shell: bash
