@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location('qualify', Path(__file__).with_name('qualify.py'))
 q = importlib.util.module_from_spec(SPEC)
@@ -12,6 +13,27 @@ SPEC.loader.exec_module(q)
 
 
 class QualificationTests(unittest.TestCase):
+    def test_rust_compiler_cargo_and_build_are_required(self):
+        for fault in ('none', 'rustc', 'cargo', 'version', 'build', 'execution'):
+            def run(command, deadline):
+                tool = command[0]
+                if tool == fault:
+                    raise FileNotFoundError(tool)
+                if command[-1] == '--version':
+                    return f'{tool} 1.{89 if fault == "version" else 90}.0 (hash date)'
+                if tool == 'rustc':
+                    if fault == 'build':
+                        raise subprocess.CalledProcessError(1, command)
+                    self.assertIn('--edition=2021', command)
+                    return ''
+                return 'bad' if fault == 'execution' else 'rust-build-ok'
+            with self.subTest(fault=fault), patch.object(q, 'run', side_effect=run):
+                if fault == 'none':
+                    q.qualify_rust()
+                else:
+                    with self.assertRaises((RuntimeError, OSError, subprocess.SubprocessError)):
+                        q.qualify_rust()
+
     def test_root_refused(self):
         with self.assertRaisesRegex(RuntimeError, 'unprivileged'):
             q.check_user(0)

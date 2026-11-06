@@ -87,6 +87,22 @@ def qualify_major(major, root=Path('/usr/lib/postgresql'), timeout=60):
                     raise RuntimeError(f'cluster cleanup failed; see {log}')
 
 
+def qualify_rust():
+    deadline = time.monotonic() + 30
+    for tool in ('rustc', 'cargo'):
+        version = run([tool, '--version'], deadline)
+        if not version.startswith(tool + ' 1.90.0 '):
+            raise RuntimeError(f'wrong Rust tool version: {version}')
+    with tempfile.TemporaryDirectory(prefix='qualify-rust-') as directory:
+        root = Path(directory)
+        source = root / 'probe.rs'
+        source.write_text('fn main() { assert_eq!(2 + 2, 4); println!("rust-build-ok"); }')
+        binary = root / 'probe'
+        run(['rustc', '--edition=2021', str(source), '-o', str(binary)], deadline)
+        if run([str(binary)], deadline) != 'rust-build-ok':
+            raise RuntimeError('Rust build probe failed')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--majors', nargs='+', type=int, choices=(17, 18), default=[17, 18])
@@ -98,6 +114,7 @@ def main():
     for tool in DOCUMENT_TOOLS:
         if not shutil.which(tool):
             raise RuntimeError(f'missing document/build tool: {tool}')
+    qualify_rust()
     run(['libreoffice', '--version'], time.monotonic() + 20)
     print(json.dumps({'uid': os.getuid(), 'tools': DOCUMENT_TOOLS,
                       'postgres': [qualify_major(major) for major in args.majors]}))

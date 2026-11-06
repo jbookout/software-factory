@@ -35,10 +35,22 @@ jobs:
         shell: bash
         run: |
           docker run --rm --network none ci-postgres:qualification python /opt/ci/qualify.py | tee qualification.json
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: DoctorCRE/carr-system
+          ref: bd5c4984190293c51c2bd3a6e192525468156630
+          path: out/carr-consumer
+          persist-credentials: false
+      - name: Build the pinned CARR HxStore consumer with the image toolchain
+        timeout-minutes: 5
+        run: |
+          docker run --rm -v "$PWD/out/carr-consumer:/consumer:ro" ci-postgres:qualification cargo build --locked --release --manifest-path /consumer/vendor/hxprobe/Cargo.toml --target-dir /tmp/hxprobe-target
       - name: Deliberately broken image must fail qualification
         run: |
-          for fault in missing-binary wrong-major missing-vector failed-sql; do
+          for fault in missing-binary wrong-major missing-vector failed-sql missing-rustc missing-cargo; do
             case "$fault" in
+              missing-rustc) mutation='rm /usr/local/cargo/bin/rustc' ;;
+              missing-cargo) mutation='rm /usr/local/cargo/bin/cargo' ;;
               missing-binary) mutation='rm /usr/lib/postgresql/17/bin/initdb' ;;
               wrong-major) mutation='cp /usr/lib/postgresql/18/bin/postgres /usr/lib/postgresql/17/bin/postgres' ;;
               missing-vector) mutation='rm /usr/share/postgresql/17/extension/vector.control' ;;
