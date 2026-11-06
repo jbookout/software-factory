@@ -77,7 +77,22 @@ for (const [event, ref, mayWrite] of [
 test('publication qualifies Rust and the exact CARR consumer before publishing', () => {
   assert.match(dockerfile, /FROM rust:1\.90\.0-bookworm@sha256:[a-f0-9]{64} AS rust/);
   assert.match(dockerfile, /COPY --from=rust \/usr\/local\/rustup/);
-  assert.match(workflow, /ref: bd5c4984190293c51c2bd3a6e192525468156630/);
+  assert.match(workflow, /ref: 6aeb09e0d766015754ea7ebb160180ef14090f3f/);
   assert.match(workflow, /cargo build --locked --release --manifest-path \/consumer\/vendor\/hxprobe\/Cargo.toml/);
   assert.match(workflow, /missing-rustc missing-cargo/);
+});
+
+
+test('CARR browser, bootstrap Python and signal lifecycle are publication requirements', () => {
+  assert.match(dockerfile, /fonts-liberation chromium procps/);
+  assert.match(dockerfile, /ln -s \/usr\/local\/bin\/python3 \/usr\/bin\/python3/);
+  assert.match(workflow, /python ops\/cloud-hook-paths-selftest.py/);
+  assert.match(workflow, /python ops\/disposable-pg-selftest.py/);
+  assert.match(workflow, /npm --prefix practice-plugin test/);
+  assert.match(workflow, /missing-browser missing-bootstrap-python/);
+  for (const [, command] of workflow.matchAll(/docker run ([^\n]+)/g)) {
+    if (!command.includes('Lifecycle.test_sigterm')) assert.match(command, /--init/);
+  }
+  assert.match(workflow, /grep -q 'ProcessLookupError not raised' no-init.log/);
+  assert.match(workflow, /options: --init/);
 });

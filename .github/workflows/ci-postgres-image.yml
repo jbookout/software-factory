@@ -34,21 +34,51 @@ jobs:
         id: qualify
         shell: bash
         run: |
-          docker run --rm --network none ci-postgres:qualification python /opt/ci/qualify.py | tee qualification.json
+          docker run --rm --init --network none ci-postgres:qualification python /opt/ci/qualify.py | tee qualification.json
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: DoctorCRE/carr-system
-          ref: bd5c4984190293c51c2bd3a6e192525468156630
+          ref: 6aeb09e0d766015754ea7ebb160180ef14090f3f
           path: out/carr-consumer
           persist-credentials: false
       - name: Build the pinned CARR HxStore consumer with the image toolchain
         timeout-minutes: 5
         run: |
-          docker run --rm -v "$PWD/out/carr-consumer:/consumer:ro" ci-postgres:qualification cargo build --locked --release --manifest-path /consumer/vendor/hxprobe/Cargo.toml --target-dir /tmp/hxprobe-target
+          docker run --rm --init -v "$PWD/out/carr-consumer:/consumer:ro" ci-postgres:qualification cargo build --locked --release --manifest-path /consumer/vendor/hxprobe/Cargo.toml --target-dir /tmp/hxprobe-target
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+      - name: Prove the CARR signal assertion detects an unreaped namespace
+        timeout-minutes: 3
+        run: |
+          if docker run --rm --network none -v "$PWD/out/carr-consumer:/consumer:ro" ci-postgres:qualification python /consumer/ops/disposable-pg-selftest.py Lifecycle.test_sigterm_stops_postmaster_and_removes_owned_directory > no-init.log 2>&1; then
+            cat no-init.log
+            exit 1
+          fi
+          cat no-init.log
+          grep -q 'ProcessLookupError not raised' no-init.log
+      - name: Exercise the pinned CARR browser, hook and signal consumers
+        timeout-minutes: 10
+        run: |
+          NODE_ROOT="$(dirname "$(dirname "$(command -v node)")")"
+          docker run --rm --init -e GITHUB_ACTIONS=true -v "$NODE_ROOT:/opt/node:ro" -v "$PWD/out/carr-consumer:/consumer:ro" ci-postgres:qualification bash -ec '
+            export PATH="/opt/node/bin:$PATH"
+            cp -a /consumer /tmp/carr-consumer
+            cd /tmp/carr-consumer
+            python -m venv .venv
+            export PATH="$PWD/.venv/bin:$PATH"
+            timeout 240 python -m pip install -r requirements.lock
+            timeout 240 npm --prefix practice-plugin ci --ignore-scripts
+            python ops/cloud-hook-paths-selftest.py
+            python ops/disposable-pg-selftest.py
+            timeout 300 npm --prefix practice-plugin test
+          '
       - name: Deliberately broken image must fail qualification
         run: |
-          for fault in missing-binary wrong-major missing-vector failed-sql missing-rustc missing-cargo; do
+          for fault in missing-binary wrong-major missing-vector failed-sql missing-rustc missing-cargo missing-browser missing-bootstrap-python; do
             case "$fault" in
+              missing-browser) mutation='rm /usr/bin/chromium' ;;
+              missing-bootstrap-python) mutation='rm /usr/bin/python3' ;;
               missing-rustc) mutation='rm /usr/local/cargo/bin/rustc' ;;
               missing-cargo) mutation='rm /usr/local/cargo/bin/cargo' ;;
               missing-binary) mutation='rm /usr/lib/postgresql/17/bin/initdb' ;;
@@ -57,7 +87,7 @@ jobs:
               failed-sql) mutation='cp /bin/false /usr/lib/postgresql/17/bin/psql' ;;
             esac
             printf 'FROM ci-postgres:qualification\nUSER root\nRUN %s\nUSER 1001:1001\n' "$mutation" | docker build -t ci-postgres:broken -
-            if docker run --rm --network none ci-postgres:broken python /opt/ci/qualify.py > "broken-$fault.log" 2>&1; then
+            if docker run --rm --init --network none ci-postgres:broken python /opt/ci/qualify.py > "broken-$fault.log" 2>&1; then
               cat "broken-$fault.log"
               exit 1
             fi
@@ -71,6 +101,7 @@ jobs:
           path: |
             qualification.json
             broken-*.log
+            no-init.log
   publish:
     needs: image
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -122,6 +153,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     container:
+      options: --init
       image: ghcr.io/jbookout/software-factory/ci-postgres@${{ needs.publish.outputs.digest }}
       credentials:
         username: ${{ github.actor }}

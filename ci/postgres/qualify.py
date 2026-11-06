@@ -103,6 +103,13 @@ def qualify_rust():
             raise RuntimeError('Rust build probe failed')
 
 
+def qualify_browser():
+    output = run(['/usr/bin/chromium', '--headless', '--no-sandbox', '--disable-dev-shm-usage',
+                  '--dump-dom', 'data:text/html,<title>image-browser-ok</title>'], time.monotonic() + 20)
+    if '<title>image-browser-ok</title>' not in output:
+        raise RuntimeError('browser did not render qualification document')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--majors', nargs='+', type=int, choices=(17, 18), default=[17, 18])
@@ -114,6 +121,8 @@ def main():
     for tool in DOCUMENT_TOOLS:
         if not shutil.which(tool):
             raise RuntimeError(f'missing document/build tool: {tool}')
+    run(['/usr/bin/python3', '-c', 'import json, pathlib, sys'], time.monotonic() + 10)
+    qualify_browser()
     qualify_rust()
     run(['libreoffice', '--version'], time.monotonic() + 20)
     print(json.dumps({'uid': os.getuid(), 'tools': DOCUMENT_TOOLS,

@@ -3,7 +3,8 @@ FROM python:3.14-slim-bookworm@sha256:3fe1a0b6c2d6b2ebb572906cdabeca75aeb558c0c1
 ENV DEBIAN_FRONTEND=noninteractive
 RUN printf 'Acquire::Retries "2";\nAcquire::http::Timeout "15";\nAcquire::https::Timeout "15";\n' > /etc/apt/apt.conf.d/80-ci-bounds \
     && printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d \
-    && apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git zsh build-essential libreoffice-calc poppler-utils fonts-liberation \
+    && apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git zsh build-essential libreoffice-calc poppler-utils fonts-liberation chromium procps jq \
+    && (test -x /usr/bin/python3 || ln -s /usr/local/bin/python3 /usr/bin/python3) \
     && install -d /usr/share/postgresql-common/pgdg \
     && curl --fail --silent --show-error --max-time 30 https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
     && echo 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main' > /etc/apt/sources.list.d/pgdg.list \

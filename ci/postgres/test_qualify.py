@@ -34,6 +34,18 @@ class QualificationTests(unittest.TestCase):
                     with self.assertRaises((RuntimeError, OSError, subprocess.SubprocessError)):
                         q.qualify_rust()
 
+    def test_browser_must_render_and_be_discoverable(self):
+        with patch.object(q, 'run', return_value='<title>image-browser-ok</title>') as run:
+            q.qualify_browser()
+            self.assertIn('/usr/bin/chromium', run.call_args.args[0])
+            self.assertIn('--dump-dom', run.call_args.args[0])
+        with patch.object(q, 'run', return_value=''):
+            with self.assertRaisesRegex(RuntimeError, 'browser'):
+                q.qualify_browser()
+        with patch.object(q, 'run', side_effect=FileNotFoundError):
+            with self.assertRaises(FileNotFoundError):
+                q.qualify_browser()
+
     def test_root_refused(self):
         with self.assertRaisesRegex(RuntimeError, 'unprivileged'):
             q.check_user(0)
