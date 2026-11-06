@@ -57,7 +57,7 @@ jobs:
           fi
           cat no-init.log
           grep -q 'ProcessLookupError not raised' no-init.log
-      - name: Exercise the pinned CARR browser, hook and signal consumers
+      - name: Exercise the pinned CARR browser, hook, signal, kill and jq consumers
         timeout-minutes: 10
         run: |
           NODE_ROOT="$(dirname "$(dirname "$(command -v node)")")"
@@ -70,13 +70,17 @@ jobs:
             timeout 240 python -m pip install -r requirements.lock
             timeout 240 npm --prefix practice-plugin ci --ignore-scripts
             python ops/cloud-hook-paths-selftest.py
+            timeout 120 python ops/config-as-code-launchd-selftest.py
+            timeout 120 python ops/github-gh-caller-selftest.py
+            timeout 120 python ops/github-rate-limit-selftest.py
             python ops/disposable-pg-selftest.py
             timeout 300 npm --prefix practice-plugin test
           '
       - name: Deliberately broken image must fail qualification
         run: |
-          for fault in missing-binary wrong-major missing-vector failed-sql missing-rustc missing-cargo missing-browser missing-bootstrap-python; do
+          for fault in missing-binary wrong-major missing-vector failed-sql missing-rustc missing-cargo missing-browser missing-bootstrap-python broken-jq; do
             case "$fault" in
+              broken-jq) mutation='printf "#!/bin/sh\\nexit 42\\n" > /usr/bin/jq' ;;
               missing-browser) mutation='rm /usr/bin/chromium' ;;
               missing-bootstrap-python) mutation='rm /usr/bin/python3' ;;
               missing-rustc) mutation='rm /usr/local/cargo/bin/rustc' ;;

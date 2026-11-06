@@ -12,7 +12,7 @@ import tempfile
 import time
 
 BINARIES = ('initdb', 'pg_ctl', 'postgres', 'psql', 'createdb', 'pg_dump', 'pg_restore')
-DOCUMENT_TOOLS = ('libreoffice', 'pdftotext', 'zsh', 'git', 'make', 'g++', 'ps', 'pgrep', 'kill', 'jq')
+DOCUMENT_TOOLS = ('libreoffice', 'pdftotext', 'zsh', 'git', 'make', 'g++', 'ps', 'pgrep')
 
 
 def check_user(uid):
@@ -122,10 +122,14 @@ def main():
         if not shutil.which(tool):
             raise RuntimeError(f'missing document/build tool: {tool}')
     run(['/usr/bin/python3', '-c', 'import json, pathlib, sys'], time.monotonic() + 10)
+    run(['/bin/kill', '-0', '--', str(os.getpid())], time.monotonic() + 10)
+    if run(['jq', '-n', '-r', '[{"check_runs":[{"id":1}]},{"check_runs":[{"id":2}]}] | .[].check_runs[].id'],
+           time.monotonic() + 10) != '1\n2':
+        raise RuntimeError('jq object-page decoding failed')
     qualify_browser()
     qualify_rust()
     run(['libreoffice', '--version'], time.monotonic() + 20)
-    print(json.dumps({'uid': os.getuid(), 'tools': DOCUMENT_TOOLS,
+    print(json.dumps({'uid': os.getuid(), 'tools': (*DOCUMENT_TOOLS, '/bin/kill', 'jq'),
                       'postgres': [qualify_major(major) for major in args.majors]}))
 
 

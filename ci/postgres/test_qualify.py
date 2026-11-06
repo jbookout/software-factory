@@ -1,3 +1,5 @@
+import contextlib
+import io
 import importlib.util
 import os
 from pathlib import Path
@@ -45,6 +47,28 @@ class QualificationTests(unittest.TestCase):
         with patch.object(q, 'run', side_effect=FileNotFoundError):
             with self.assertRaises(FileNotFoundError):
                 q.qualify_browser()
+
+    def test_discoverable_broken_jq_refuses_qualification(self):
+        real_run = q.run
+        for body, error in (('exit 42', subprocess.CalledProcessError),
+                            ('echo wrong-result', RuntimeError)):
+            with self.subTest(body=body), tempfile.TemporaryDirectory() as directory:
+                jq = Path(directory) / 'jq'
+                jq.write_text('#!/bin/sh\n' + body + '\n')
+                jq.chmod(0o755)
+                def run(command, deadline):
+                    return real_run(command, deadline) if command[0] == 'jq' else ''
+                which = q.shutil.which
+                with patch.dict(os.environ, PATH=directory + os.pathsep + os.environ['PATH']), \
+                     patch.object(q.os, 'getuid', return_value=1001), \
+                     patch.object(q.shutil, 'which', side_effect=lambda tool: which(tool) if tool == 'jq' else '/synthetic/' + tool), \
+                     patch.object(q, 'run', side_effect=run), \
+                     patch.object(q, 'qualify_browser'), patch.object(q, 'qualify_rust'), \
+                     patch.object(q, 'qualify_major', return_value={}), \
+                     patch.object(sys, 'argv', ['qualify.py']), contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(which('jq'), str(jq))
+                    with self.assertRaises(error):
+                        q.main()
 
     def test_root_refused(self):
         with self.assertRaisesRegex(RuntimeError, 'unprivileged'):

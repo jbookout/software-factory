@@ -96,3 +96,37 @@ test('CARR browser, bootstrap Python and signal lifecycle are publication requir
   assert.match(workflow, /grep -q 'ProcessLookupError not raised' no-init.log/);
   assert.match(workflow, /options: --init/);
 });
+
+test('pinned CARR kill and jq consumers are required before publication', () => {
+  for (const suite of ['config-as-code-launchd', 'github-gh-caller', 'github-rate-limit']) {
+    assert.ok(workflow.includes(`python ops/${suite}-selftest.py`), suite);
+  }
+});
+
+
+test('each real CARR tool consumer failure refuses image qualification', () => {
+  const step = workflow.match(/      - name: Exercise the pinned CARR[^\n]*\n([\s\S]*?)(?=      - )/)[1];
+  const command = step.split('        run: |\n')[1].replace(/^          /gm, '');
+  for (const fault of ['', 'config-as-code-launchd', 'github-gh-caller', 'github-rate-limit']) {
+    const setup = `
+      cp() { :; }; cd() { :; };
+      timeout() { shift; "$@"; };
+      npm() { :; };
+      python() {
+        printf '%s\\n' "$*";
+        if [[ -n "$FAULT" && "$*" == "ops/$FAULT-selftest.py" ]]; then return 42; fi
+      };
+      docker() { for argument; do :; done; bash -ec "$argument"; };
+      export -f cp cd timeout npm python docker;
+    `;
+    const result = spawnSync('bash', ['-e', '-c', setup + command], {
+      encoding: 'utf8', env: { ...process.env, FAULT: fault },
+    });
+    assert.equal(result.status, fault ? 42 : 0, result.stdout + result.stderr);
+    if (!fault) {
+      for (const suite of ['config-as-code-launchd', 'github-gh-caller', 'github-rate-limit']) {
+        assert.ok(result.stdout.includes(`ops/${suite}-selftest.py`), result.stdout);
+      }
+    }
+  }
+});
