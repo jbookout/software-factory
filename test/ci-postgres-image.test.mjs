@@ -73,3 +73,11 @@ for (const [event, ref, mayWrite] of [
     assert.doesNotMatch(jobs.find(([, name]) => name === 'image')[2], /packages: write/);
   });
 }
+
+test('publication qualifies Rust and the exact CARR consumer before publishing', () => {
+  assert.match(dockerfile, /FROM rust:1\.90\.0-bookworm@sha256:[a-f0-9]{64} AS rust/);
+  assert.match(dockerfile, /COPY --from=rust \/usr\/local\/rustup/);
+  assert.match(workflow, /ref: bd5c4984190293c51c2bd3a6e192525468156630/);
+  assert.match(workflow, /cargo build --locked --release --manifest-path \/consumer\/vendor\/hxprobe\/Cargo.toml/);
+  assert.match(workflow, /missing-rustc missing-cargo/);
+});

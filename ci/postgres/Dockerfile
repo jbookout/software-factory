@@ -1,3 +1,4 @@
+FROM rust:1.90.0-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f AS rust
 FROM python:3.14-slim-bookworm@sha256:3fe1a0b6c2d6b2ebb572906cdabeca75aeb558c0c17db5ffefbcf8094871c32b AS base
 ENV DEBIAN_FRONTEND=noninteractive
 RUN printf 'Acquire::Retries "2";\nAcquire::http::Timeout "15";\nAcquire::https::Timeout "15";\n' > /etc/apt/apt.conf.d/80-ci-bounds \
@@ -8,6 +9,9 @@ RUN printf 'Acquire::Retries "2";\nAcquire::http::Timeout "15";\nAcquire::https:
     && echo 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main' > /etc/apt/sources.list.d/pgdg.list \
     && groupadd --gid 1001 ci && useradd --uid 1001 --gid 1001 --create-home --shell /bin/bash ci \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=rust /usr/local/cargo /usr/local/cargo
+COPY --from=rust /usr/local/rustup /usr/local/rustup
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/home/ci/.cargo PATH=/usr/local/cargo/bin:$PATH
 COPY ci/postgres/qualify.py /opt/ci/qualify.py
 ENV HOME=/home/ci
 WORKDIR /home/ci
