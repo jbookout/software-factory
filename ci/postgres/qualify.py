@@ -12,7 +12,7 @@ import tempfile
 import time
 
 BINARIES = ('initdb', 'pg_ctl', 'postgres', 'psql', 'createdb', 'pg_dump', 'pg_restore')
-DOCUMENT_TOOLS = ('libreoffice', 'pdftotext', 'zsh', 'git', 'make', 'g++', 'ps', 'pgrep')
+DOCUMENT_TOOLS = ('libreoffice', 'pdftotext', 'zsh', 'rsync', 'git', 'make', 'g++', 'ps', 'pgrep')
 
 
 def check_user(uid):
@@ -110,6 +110,23 @@ def qualify_browser():
         raise RuntimeError('browser did not render qualification document')
 
 
+def qualify_skill_sync():
+    with tempfile.TemporaryDirectory(prefix='qualify-skill-sync-') as directory:
+        root = Path(directory)
+        source = root / 'source'
+        source.mkdir()
+        (source / 'skill.md').write_text('skill-sync-ok\n')
+        destination = root / 'destination'
+        uid = str(os.getuid())
+        output = run([shutil.which('zsh'), '-ec',
+                      '[[ "$EUID" == "$1" ]] && rsync -rc "$2/" "$3/" && print -r -- "$EUID"',
+                      'qualify-skill-sync', uid, source, destination], time.monotonic() + 10)
+        copied = destination / 'skill.md'
+        if (output != uid or not copied.is_file() or copied.read_text() != 'skill-sync-ok\n'
+                or copied.stat().st_uid != os.getuid()):
+            raise RuntimeError('zsh/rsync skill copy or job-user ownership failed')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--majors', nargs='+', type=int, choices=(17, 18), default=[17, 18])
@@ -126,6 +143,7 @@ def main():
     if run(['jq', '-n', '-r', '[{"check_runs":[{"id":1}]},{"check_runs":[{"id":2}]}] | .[].check_runs[].id'],
            time.monotonic() + 10) != '1\n2':
         raise RuntimeError('jq object-page decoding failed')
+    qualify_skill_sync()
     qualify_browser()
     qualify_rust()
     run(['libreoffice', '--version'], time.monotonic() + 20)
