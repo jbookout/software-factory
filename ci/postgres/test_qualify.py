@@ -2,6 +2,7 @@ import contextlib
 import io
 import importlib.util
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -69,6 +70,31 @@ class QualificationTests(unittest.TestCase):
                     self.assertEqual(which('jq'), str(jq))
                     with self.assertRaises(error):
                         q.main()
+
+    def test_missing_rsync_refuses_image_entrypoint(self):
+        with patch.object(q.os, 'getuid', return_value=1001), \
+             patch.object(q.shutil, 'which', side_effect=lambda tool: None if tool == 'rsync' else '/synthetic/' + tool), \
+             patch.object(sys, 'argv', ['qualify.py']):
+            with self.assertRaisesRegex(RuntimeError, 'missing.*rsync'):
+                q.main()
+
+    @unittest.skipUnless(shutil.which('zsh') and shutil.which('rsync'), 'requires zsh and rsync')
+    def test_skill_sync_copies_as_current_user(self):
+        q.qualify_skill_sync()
+
+    @unittest.skipUnless(shutil.which('zsh'), 'requires zsh')
+    def test_missing_or_broken_rsync_refuses_qualification(self):
+        zsh = shutil.which('zsh')
+        for body in (None, 'exit 42', 'exit 0'):
+            with self.subTest(body=body), tempfile.TemporaryDirectory() as directory:
+                if body is not None:
+                    tool = Path(directory) / 'rsync'
+                    tool.write_text('#!/bin/sh\n' + body + '\n')
+                    tool.chmod(0o755)
+                with patch.dict(os.environ, PATH=directory), \
+                     patch.object(q.shutil, 'which', return_value=zsh):
+                    with self.assertRaises((RuntimeError, subprocess.CalledProcessError)):
+                        q.qualify_skill_sync()
 
     def test_root_refused(self):
         with self.assertRaisesRegex(RuntimeError, 'unprivileged'):
