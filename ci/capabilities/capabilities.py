@@ -64,6 +64,10 @@ def verify(profile):
     if os.getuid() == 0:
         raise ValueError('qualification requires nonroot user')
     observed = {'tools': check_tools(contract['tools'])}
+    if contract.get('python'):
+        for tool in ('python', 'python3'):
+            version = re.fullmatch(r'Python (\d+\.\d+)\.\d+', observed['tools'][tool])
+            require_version(tool, version.group(1) if version else None, contract['python']['minor'])
     for directory in (Path.home(), Path.cwd(), Path(os.environ.get('RUNNER_TEMP', '/tmp'))):
         with tempfile.TemporaryFile(dir=directory):
             pass

@@ -1,6 +1,6 @@
 {
   "both": {"dockerfile":"ci/postgres/Dockerfile","target":"both","node":null,"playwright":null,"postgres":[17,18],"tools":["python","zsh","jq","git","rsync","cargo","rustc","chromium","libreoffice","pdftotext"]},
   "browser": {"dockerfile":"ci/capabilities/Dockerfile","target":"browser","node":"v22.23.4","playwright":"1.64.1","postgres":[],"tools":["node","npm","python3","git","bash"]},
-  "app": {"dockerfile":"ci/capabilities/Dockerfile","target":"app","node":"v26.12.1","playwright":"1.64.1","postgres":[17,18],"tools":["node","npm","python","python3","zsh","jq","git","rsync","cargo","rustc","chromium","libreoffice","pdftotext"]},
+  "app": {"python":{"minor":"3.14","producer":"DoctorCRE/carr-system@4a2463c7fee7d1ea2827325cb849bef6a44a88b2:.python-version"},"dockerfile":"ci/capabilities/Dockerfile","target":"app","node":"v26.12.1","playwright":"1.64.1","postgres":[17,18],"tools":["node","npm","python","python3","zsh","jq","git","rsync","cargo","rustc","chromium","libreoffice","pdftotext"]},
   "backup": {"dockerfile":"ci/capabilities/Dockerfile","target":"backup","node":null,"playwright":null,"postgres":[],"tools":["python3","bash","zsh","age","age-keygen","curl","git","jq"],"pg_dump":"18"}
 }

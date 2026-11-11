@@ -1,3 +1,4 @@
+FROM python:3.14.10-slim-bookworm@sha256:3fe1a0b6c2d6b2ebb572906cdabeca75aeb558c0c17db5ffefbcf8094871c32b AS python314
 FROM node:22-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d AS node22
 FROM node:26.12.1-bookworm-slim@sha256:88e480776c6149ff1d098cd304f44bf18057fb5d284a3329b78162d29821e28c AS node26
 FROM rust:1.90.0-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f AS rust
@@ -30,6 +31,8 @@ COPY ci/capabilities/ /opt/ci/
 COPY ci/postgres/qualify.py /opt/ci/qualify.py
 COPY ci/capabilities/chromium.py /usr/bin/chromium
 RUN chmod +x /usr/bin/chromium
+COPY --from=python314 /usr/local/ /usr/local/
+RUN ldconfig
 COPY --from=node26 /usr/local/bin/node /usr/local/bin/node
 COPY --from=node26 /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=rust /usr/local/cargo /usr/local/cargo

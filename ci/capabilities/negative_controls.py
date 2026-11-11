@@ -9,6 +9,8 @@ tool = PROFILES[profile]['tools'][0]
 mutations = [f'rm "$(command -v {tool})"']
 if PROFILES[profile]['node']:
     mutations.append("printf '#!/bin/sh\\necho v0.0.0\\n' > /usr/local/bin/node && chmod +x /usr/local/bin/node")
+if PROFILES[profile].get('python'):
+    mutations.append('ln -sf /usr/bin/python3 /usr/local/bin/python3')
 if PROFILES[profile]['playwright']:
     mutations.append('rm -rf /ms-playwright/webkit-*')
 if PROFILES[profile].get('pg_dump'):
