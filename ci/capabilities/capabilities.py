@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -14,9 +15,31 @@ import time
 ROOT = Path(__file__).parent
 PROFILES = json.loads((ROOT / 'profiles.json').read_text())
 
+PROBE_TIMEOUT = 10
+TOOL_PROBES = {
+    'node': ('--version',), 'npm': ('--version',),
+    'python': ('--version',), 'python3': ('--version',),
+    'bash': ('--version',), 'zsh': ('--version',), 'jq': ('--version',),
+    'git': ('--version',), 'rsync': ('--version',),
+    'cargo': ('--version',), 'rustc': ('--version',),
+    'chromium': ('--version',), 'libreoffice': ('--version',),
+    'pdftotext': ('-v',), 'age': ('--version',),
+    'age-keygen': ('--version',), 'curl': ('--version',),
+}
 
-def command(args):
-    return subprocess.run(args, check=True, capture_output=True, text=True, timeout=180).stdout.strip()
+
+def command(args, timeout=180):
+    process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, start_new_session=True)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except BaseException:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.communicate()
+        raise
+    if process.returncode:
+        raise subprocess.CalledProcessError(process.returncode, args, stdout, stderr)
+    return stdout.strip()
 
 
 def require_version(tool, actual, expected):
@@ -25,17 +48,22 @@ def require_version(tool, actual, expected):
 
 
 def check_tools(tools):
+    observed = {}
     for tool in tools:
-        if not shutil.which(tool):
+        if tool not in TOOL_PROBES:
+            raise ValueError(f'missing required probe: {tool}')
+        executable = shutil.which(tool)
+        if not executable:
             raise ValueError(f'missing required tool: {tool}')
+        observed[tool] = command([executable, *TOOL_PROBES[tool]], timeout=PROBE_TIMEOUT)
+    return observed
 
 
 def verify(profile):
     contract = PROFILES[profile]
     if os.getuid() == 0:
         raise ValueError('qualification requires nonroot user')
-    check_tools(contract['tools'])
-    observed = {}
+    observed = {'tools': check_tools(contract['tools'])}
     for directory in (Path.home(), Path.cwd(), Path(os.environ.get('RUNNER_TEMP', '/tmp'))):
         with tempfile.TemporaryFile(dir=directory):
             pass
@@ -69,8 +97,7 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def collect(profile, image, commit, directory):
-    directory.mkdir(parents=True, exist_ok=True)
+def verify_image(profile, image):
     with tempfile.TemporaryDirectory(prefix='ci-qualification-') as temporary:
         cidfile = Path(temporary) / 'container.id'
         try:
@@ -82,6 +109,15 @@ def collect(profile, image, commit, directory):
                 subprocess.run(['docker', 'rm', '-f', cidfile.read_text().strip()],
                                capture_output=True, timeout=30)
     manifest = json.loads(raw)
+    require_version('profile contract', manifest['contract'], PROFILES[profile])
+    if set(manifest.get('observed', {}).get('tools', {})) != set(PROFILES[profile]['tools']):
+        raise ValueError('qualification did not execute every required tool probe')
+    return manifest
+
+
+def collect(profile, image, commit, directory):
+    directory.mkdir(parents=True, exist_ok=True)
+    manifest = verify_image(profile, image)
     manifest['recipe_base_images'] = [line.split()[1] for line in Path(PROFILES[profile]['dockerfile']).read_text().splitlines() if line.startswith('FROM ') and '@sha256:' in line]
     manifest.update(recipe_commit=commit, image_id=command(['docker', 'image', 'inspect', image, '--format', '{{.Id}}']))
     (directory / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
@@ -132,6 +168,7 @@ def main():
             require_version(name, digest(args.directory / name), receipt[key])
         image_id = command(['docker', 'image', 'inspect', args.image, '--format', '{{.Id}}'])
         if args.action == 'preflight':
+            verify_image(args.profile, args.image)
             registry_digest = 'sha256:' + '0'*64
         else:
             registry_digest = command(['docker', 'image', 'inspect', args.image, '--format', '{{index .RepoDigests 0}}']).split('@')[-1]

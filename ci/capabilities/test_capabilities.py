@@ -88,7 +88,9 @@ class CapabilityTests(unittest.TestCase):
                        'sbom_sha256': c.digest(root / 'sbom.spdx.json')}
             (root / 'qualification.json').write_text(json.dumps(receipt))
             docker = root / 'docker'
-            docker.write_text('#!/bin/sh\necho ' + image_id + '\n')
+            manifest = json.dumps({'contract': c.PROFILES['browser'],
+                                   'observed': {'tools': dict.fromkeys(c.PROFILES['browser']['tools'], 'ok')}})
+            docker.write_text('#!/bin/sh\nif [ "$1" = run ]; then cat <<\'JSON\'\n' + manifest + '\nJSON\nelse echo ' + image_id + '; fi\n')
             docker.chmod(0o755)
             args = [sys.executable, str(Path(c.__file__)), 'preflight', 'browser',
                     '--image', 'candidate', '--commit', 'c'*40, '--directory', directory]
@@ -96,6 +98,11 @@ class CapabilityTests(unittest.TestCase):
             good = subprocess.run(args, capture_output=True, text=True, env=environment)
             self.assertEqual(good.returncode, 0, good.stderr)
             self.assertFalse((root / 'pin.json').exists())
+            legacy = json.dumps({'contract': c.PROFILES['browser'], 'observed': {}})
+            docker.write_text('#!/bin/sh\nif [ "$1" = run ]; then cat <<\'JSON\'\n' + legacy + '\nJSON\nelse echo ' + image_id + '; fi\n')
+            refused = subprocess.run(args, capture_output=True, text=True, env=environment)
+            self.assertEqual(refused.returncode, 1, refused.stderr)
+            self.assertIn('every required tool probe', refused.stderr)
             docker.write_text('#!/bin/sh\nif [ "$1" = run ]; then exit 42; fi\necho ' + image_id + '\n')
             refused = subprocess.run(args, capture_output=True, text=True, env=environment)
             self.assertEqual(refused.returncode, 1, refused.stderr)
