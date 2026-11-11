@@ -9,7 +9,7 @@ const locks = {
     "concurrency:\n  group: production\n  cancel-in-progress: false\n"
   ],
   "ci-postgres-image.yml": [
-    "concurrency:\n  group: ci-postgres-image-${{ github.ref }}\n  cancel-in-progress: false\n"
+    "concurrency:\n  group: ci-capability-images\n  cancel-in-progress: false\n"
   ]
 };
 const source = (name) => readFileSync(new URL(`../.github/workflows/${name}`, import.meta.url), 'utf8');
@@ -39,6 +39,6 @@ for (const filename of workflows) {
   });
 }
 
-test('deployment and publication serialization locks are unchanged', () => {
+test('deployment and publication serialization locks protect production and all image maintenance', () => {
   for (const [filename, expected] of Object.entries(locks)) assert.deepEqual(blocks(source(filename)), expected, filename);
 });
