@@ -15,6 +15,32 @@ spec.loader.exec_module(c)
 
 
 class CapabilityTests(unittest.TestCase):
+    def test_every_required_tool_runs_and_rejects_failure_missing_and_timeout(self):
+        for profile, contract in c.PROFILES.items():
+            for tool in contract['tools']:
+                with self.subTest(profile=profile, tool=tool), tempfile.TemporaryDirectory() as directory:
+                    binary = Path(directory) / tool
+                    with patch.dict(os.environ, PATH=directory):
+                        with self.assertRaises((ValueError, FileNotFoundError)):
+                            c.check_tools([tool])
+                        binary.write_text('#!/bin/sh\nexit 42\n')
+                        binary.chmod(0o755)
+                        with self.assertRaises(subprocess.CalledProcessError) as failed:
+                            c.check_tools([tool])
+                        self.assertEqual(failed.exception.returncode, 42)
+                        binary.write_text('#!/bin/sh\nexec /bin/sleep 2\n')
+                        with patch.object(c, 'PROBE_TIMEOUT', 0.05, create=True):
+                            with self.assertRaises(subprocess.TimeoutExpired):
+                                c.check_tools([tool])
+                        binary.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+                        observed = c.check_tools([tool])
+                        self.assertEqual(observed[tool].splitlines(), list(c.TOOL_PROBES[tool]))
+
+    def test_unknown_tool_has_no_discovery_only_fallback(self):
+        with patch.object(c.shutil, 'which', return_value='/bin/true'):
+            with self.assertRaisesRegex(ValueError, 'probe'):
+                c.check_tools(['undeclared-probe'])
+
     def test_versions_are_exact(self):
         for actual in ('v26.12.0', 'v26.12.10', ''):
             with self.assertRaises(ValueError):
@@ -69,6 +95,11 @@ class CapabilityTests(unittest.TestCase):
             environment = dict(os.environ, PATH=directory + os.pathsep + os.environ['PATH'])
             good = subprocess.run(args, capture_output=True, text=True, env=environment)
             self.assertEqual(good.returncode, 0, good.stderr)
+            self.assertFalse((root / 'pin.json').exists())
+            docker.write_text('#!/bin/sh\nif [ "$1" = run ]; then exit 42; fi\necho ' + image_id + '\n')
+            refused = subprocess.run(args, capture_output=True, text=True, env=environment)
+            self.assertEqual(refused.returncode, 1, refused.stderr)
+            self.assertIn('42', refused.stderr)
             self.assertFalse((root / 'pin.json').exists())
             (root / 'manifest.json').write_text('{"tampered":true}')
             bad = subprocess.run(args, capture_output=True, text=True, env=environment)
