@@ -58,3 +58,13 @@ Size S. The app profile declares its required Python minor once, with the exact 
 The existing verification interface and publication statechart remain unchanged. A wrong-Python candidate follows Candidate to Rejected, covered by test_app_requires_declared_producer_python_minor_for_both_commands and the real system-Python 3.12 negative control. The registry owns the producer requirement; Docker owns the exact runtime artifact. There is no runtime download, fallback, queue, additional storage or external call. Existing build deadlines, matrix cap and fail-closed publication remain applicable at current and tenfold load.
 
 Codebase-design kept the rule behind the existing verify interface. Zero-tech-debt reused the pinned Python artifact and profile registry instead of adding an installer or a separate version gate. No existing caller or compatibility path was removed. Production proof remains hosted qualification and publication after review; this worker publishes nothing.
+
+## App Python startup correction (WR622.S13.J338)
+
+Size S. The copied upstream runtime contains no bytecode. Its standard library is root-owned, so nonroot subprocesses compile those imports on every start. The continuity suite launches a fresh interpreter for each event and exceeded its unchanged 30-second Node subprocess deadline. Compile the standard library once during image construction, beside ldconfig. Bytecode belongs to the pinned interpreter and source layer, so rebuilding that layer invalidates the cache. No runtime writes, acquisition, version fallback or new interface is needed. Build failure rejects the candidate. Existing matrix limits and deadlines apply at current and tenfold load.
+
+The data shape remains the image filesystem, with interpreter-matched bytecode beside standard-library source. Database access, queues, external calls and new consistency rules are not applicable. The throughput checkpoint is reproduce, isolate imports with a Python 3.12 control, rebuild, then qualify serially in the two-CPU VM. There are no independent implementation streams or shared consumer writes.
+
+Qualification asserts that the unchanged continuity executable passes three times as uid 1001 with a fresh HOME and no network, followed by the complete npm check. The expensive image regression uses this qualification assertion rather than a host timing test, which cannot observe image bytecode. Keep the 30-second deadline.
+
+Codebase-design keeps startup preparation in the recipe behind the existing image interface. Zero-tech-debt uses Python's compileall instead of a runtime cache wrapper or version fallback. This adds one build operation and removes no compatibility path because none is introduced.

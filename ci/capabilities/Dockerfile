@@ -32,7 +32,7 @@ COPY ci/postgres/qualify.py /opt/ci/qualify.py
 COPY ci/capabilities/chromium.py /usr/bin/chromium
 RUN chmod +x /usr/bin/chromium
 COPY --from=python314 /usr/local/ /usr/local/
-RUN ldconfig
+RUN ldconfig && python3 -m compileall -q /usr/local/lib/python3.14
 COPY --from=node26 /usr/local/bin/node /usr/local/bin/node
 COPY --from=node26 /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=rust /usr/local/cargo /usr/local/cargo
