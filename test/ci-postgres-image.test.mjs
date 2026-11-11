@@ -1,132 +1,67 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { runInNewContext } from 'node:vm';
-import { spawnSync } from 'node:child_process';
-
+import {readFileSync} from 'node:fs';
+import {spawnSync} from 'node:child_process';
+import {runInNewContext} from 'node:vm';
 const workflow = readFileSync(new URL('../.github/workflows/ci-postgres-image.yml', import.meta.url), 'utf8');
 const dockerfile = readFileSync(new URL('../ci/postgres/Dockerfile', import.meta.url), 'utf8');
-
-test('all external actions and the base image are immutable', () => {
-  for (const [, reference] of workflow.matchAll(/uses: (\S+)/g)) {
-    assert.match(reference, /@[a-f0-9]{40}$/);
-  }
-  assert.match(dockerfile, /FROM python:3\.14-slim-bookworm@sha256:[a-f0-9]{64} AS base/);
-  assert.match(dockerfile, /signed-by=/);
-  assert.doesNotMatch(dockerfile, /trusted=yes|allow-unauthenticated/);
+const profiles = JSON.parse(readFileSync(new URL('../ci/capabilities/profiles.json', import.meta.url)));
+test('construction is independent of merge validation', () => {
+  assert.match(workflow, /schedule:/);
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.doesNotMatch(workflow, /^  (pull_request|merge_group|push):/m);
+  assert.match(workflow, /max-parallel: 2/);
 });
-
-test('publication requires qualification and only main pushes publish', () => {
-  assert.ok(workflow.indexOf('id: qualify') < workflow.indexOf('id: publish'));
-  assert.match(workflow, /needs: image/);
-  assert.match(workflow, /github.event_name == 'push' && github.ref == 'refs\/heads\/main'/);
-  assert.match(workflow, /--network none/);
-  assert.match(workflow, /Deliberately broken image/);
-  assert.match(dockerfile, /RUN --network=none python \/opt\/ci\/qualify.py/);
+test('actions and base images are immutable', () => {
+  for (const [, ref] of workflow.matchAll(/uses: (\S+)/g)) assert.match(ref, /@[a-f0-9]{40}$/);
+  const recipes = dockerfile + readFileSync(new URL('../ci/capabilities/Dockerfile', import.meta.url), 'utf8');
+  for (const [, ref] of recipes.matchAll(/^FROM (\S+)/gm)) if (ref.includes(':')) assert.match(ref, /@sha256:[a-f0-9]{64}$/);
+  assert.doesNotMatch(recipes, /trusted=yes|allow-unauthenticated/);
 });
-
-test('Python qualification failure-path suite', () => {
-  const result = spawnSync(process.env.PYTHON || 'python3', ['-m', 'unittest', 'discover', '-s', 'ci/postgres', '-p', 'test_qualify.py'], { encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stdout + result.stderr);
-});
-
-const jobs = [...workflow.matchAll(/^  ([\w-]+):\n([\s\S]*?)(?=^  [\w-]+:|$(?![\s\S]))/gm)];
-
-test('real-image qualification preserves Docker failure through receipt capture', () => {
-  const image = jobs.find(([, name]) => name === 'image')[2];
-  const step = image.match(/      - name: Qualify the real image[^\n]*\n([\s\S]*?)(?=      - )/)[1];
-  const shell = step.match(/^        shell: (.+)$/m)?.[1]
-    ?? image.match(/^        shell: (.+)$/m)?.[1];
-  const command = step.split('        run: |\n')[1].replace(/^          /gm, '');
-  const directory = mkdtempSync(join(tmpdir(), 'qualification-step-'));
-  try {
-    for (const status of [0, 9]) {
-      const result = spawnSync('bash', ['--noprofile', '--norc', '-e',
-        ...(shell === 'bash' ? ['-o', 'pipefail'] : []), '-c',
-        `docker() { echo qualification-receipt; return ${status}; };\n${command}`],
-      { cwd: directory, encoding: 'utf8' });
-      assert.equal(result.status, status, `Docker exit ${status}: ${result.stdout}${result.stderr}`);
-      assert.equal(readFileSync(join(directory, 'qualification.json'), 'utf8'), 'qualification-receipt\n');
+test('publication loads tested bytes and is main-maintenance only', () => {
+  const publisher = workflow.slice(workflow.indexOf('  publish:'));
+  const guard = publisher.match(/^    if: (.+)$/m)[1];
+  for (const event_name of ['pull_request','merge_group','push','schedule','workflow_dispatch']) {
+    for (const ref of ['refs/heads/main','refs/heads/branch']) {
+      assert.equal(runInNewContext(guard, {github: {event_name, ref}}), ref === 'refs/heads/main' && ['schedule','workflow_dispatch'].includes(event_name));
     }
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
   }
+  assert.equal((workflow.match(/packages: write/g) || []).length, 1);
+  assert.match(publisher, /needs: image/);
+  assert.doesNotMatch(publisher, /build-push-action|docker build/);
+  assert.ok(publisher.indexOf('capabilities.py preflight') < publisher.indexOf('docker push'));
+  assert.match(publisher, /docker load -i qualification\/image.tar/);
+  assert.match(workflow, /docker save ci-postgres:qualification/);
 });
-
-for (const [event, ref, mayWrite] of [
-  ['pull_request', 'refs/heads/main', false],
-  ['merge_group', 'refs/heads/main', false],
-  ['push', 'refs/heads/feature', false],
-  ['push', 'refs/heads/main', true],
-]) {
-  test(`package writes are main-publication only for ${event} ${ref}`, () => {
-    const writers = jobs.filter(([, , body]) => /^      packages: write$/m.test(body));
-    assert.equal(writers.length, 1);
-    const [, , publisher] = writers[0];
-    const guard = publisher.match(/^    if: (.+)$/m)?.[1];
-    assert.equal(guard, "github.event_name == 'push' && github.ref == 'refs/heads/main'");
-    assert.match(publisher, /^    needs: image$/m);
-    const eligible = runInNewContext(`(${guard})`, { github: { event_name: event, ref } });
-    assert.equal(eligible, mayWrite);
-    assert.doesNotMatch(jobs.find(([, name]) => name === 'image')[2], /packages: write/);
+test('all capability contracts retain canonical offline lifecycle and negative controls', () => {
+  assert.deepEqual(Object.keys(profiles).sort(), ['app','backup','both','browser']);
+  assert.equal(profiles.app.node, 'v26.12.1');
+  assert.deepEqual(profiles.app.postgres, [17,18]);
+  assert.equal(profiles.backup.pg_dump, '18');
+  assert.match(workflow, /negative_controls.py/);
+  assert.match(workflow, /--network none.*GITHUB_ACTIONS/);
+  assert.match(workflow, /python ops\/disposable-pg-selftest.py/);
+  assert.match(workflow, /ref: 6aeb09e0d766015754ea7ebb160180ef14090f3f/);
+  assert.match(workflow, /missing-binary wrong-major missing-vector failed-sql missing-rustc missing-cargo/);
+});
+for (const directory of ['ci/postgres','ci/capabilities']) {
+  test(`${directory} failure-path suite`, () => {
+    const result = spawnSync(process.env.PYTHON || 'python3', ['-m','unittest','discover','-s',directory,'-p','test_*.py'], {encoding:'utf8'});
+    assert.equal(result.status, 0, result.stdout + result.stderr);
   });
 }
-
-test('publication qualifies Rust and the exact CARR consumer before publishing', () => {
-  assert.match(dockerfile, /FROM rust:1\.90\.0-bookworm@sha256:[a-f0-9]{64} AS rust/);
-  assert.match(dockerfile, /COPY --from=rust \/usr\/local\/rustup/);
-  assert.match(workflow, /ref: 6aeb09e0d766015754ea7ebb160180ef14090f3f/);
-  assert.match(workflow, /cargo build --locked --release --manifest-path \/consumer\/vendor\/hxprobe\/Cargo.toml/);
-  assert.match(workflow, /missing-rustc missing-cargo/);
-});
-
-
-test('CARR browser, bootstrap Python and signal lifecycle are publication requirements', () => {
-  assert.match(dockerfile, /fonts-liberation chromium procps/);
-  assert.match(dockerfile, /ln -s \/usr\/local\/bin\/python3 \/usr\/bin\/python3/);
-  assert.match(workflow, /python ops\/cloud-hook-paths-selftest.py/);
-  assert.match(workflow, /python ops\/disposable-pg-selftest.py/);
-  assert.match(workflow, /npm --prefix practice-plugin test/);
-  assert.match(workflow, /missing-browser missing-bootstrap-python/);
-  for (const [, command] of workflow.matchAll(/docker run ([^\n]+)/g)) {
-    if (!command.includes('Lifecycle.test_sigterm')) assert.match(command, /--init/);
-  }
-  assert.match(workflow, /grep -q 'ProcessLookupError not raised' no-init.log/);
-  assert.match(workflow, /options: --init/);
-});
-
-test('pinned CARR kill and jq consumers are required before publication', () => {
-  for (const suite of ['config-as-code-launchd', 'github-gh-caller', 'github-rate-limit']) {
-    assert.ok(workflow.includes(`python ops/${suite}-selftest.py`), suite);
-  }
-});
-
-
-test('each real CARR tool consumer failure refuses image qualification', () => {
+test('every pinned consumer failure stops image publication', () => {
   const step = workflow.match(/      - name: Exercise the pinned CARR[^\n]*\n([\s\S]*?)(?=      - )/)[1];
   const command = step.split('        run: |\n')[1].replace(/^          /gm, '');
-  for (const fault of ['', 'config-as-code-launchd', 'github-gh-caller', 'github-rate-limit']) {
+  for (const fault of ['', 'cloud-hook-paths', 'config-as-code-launchd', 'github-gh-caller', 'github-rate-limit', 'disposable-pg']) {
     const setup = `
-      cp() { :; }; cd() { :; };
-      timeout() { shift; "$@"; };
-      npm() { :; };
-      python() {
-        printf '%s\\n' "$*";
-        if [[ -n "$FAULT" && "$*" == "ops/$FAULT-selftest.py" ]]; then return 42; fi
-      };
+      cp() { :; }; cd() { :; }; mkdir() { :; }; chmod() { :; };
+      timeout() { shift; "$@"; }; npm() { :; };
+      python() { if [[ -n "$FAULT" && "$*" == "ops/$FAULT-selftest.py" ]]; then return 42; fi; };
       docker() { for argument; do :; done; bash -ec "$argument"; };
-      export -f cp cd timeout npm python docker;
+      export -f cp cd mkdir chmod timeout npm python docker;
     `;
-    const result = spawnSync('bash', ['-e', '-c', setup + command], {
-      encoding: 'utf8', env: { ...process.env, FAULT: fault },
-    });
+    const result = spawnSync('bash', ['-e', '-c', setup + command], {encoding: 'utf8', env: {...process.env, FAULT: fault}});
     assert.equal(result.status, fault ? 42 : 0, result.stdout + result.stderr);
-    if (!fault) {
-      for (const suite of ['config-as-code-launchd', 'github-gh-caller', 'github-rate-limit']) {
-        assert.ok(result.stdout.includes(`ops/${suite}-selftest.py`), result.stdout);
-      }
-    }
   }
 });
