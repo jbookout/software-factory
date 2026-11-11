@@ -41,6 +41,24 @@ class CapabilityTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'probe'):
                 c.check_tools(['undeclared-probe'])
 
+    def test_app_requires_declared_producer_python_minor_for_both_commands(self):
+        contract = c.PROFILES['app']
+        self.assertEqual(contract['python']['producer'],
+                         'DoctorCRE/carr-system@4a2463c7fee7d1ea2827325cb849bef6a44a88b2:.python-version')
+        for tool in ('python', 'python3'):
+            for version in ('Python 3.12.3', 'Python 3.140.1', 'not Python'):
+                observed = dict.fromkeys(contract['tools'], 'ok')
+                observed.update(python='Python 3.14.10', python3='Python 3.14.10')
+                observed[tool] = version
+                with self.subTest(tool=tool, version=version), patch.object(c.os, 'getuid', return_value=1001), patch.object(c, 'check_tools', return_value=observed):
+                    with self.assertRaisesRegex(ValueError, 'wrong.*' + tool):
+                        c.verify('app')
+        observed = dict.fromkeys(contract['tools'], 'ok')
+        observed.update(python='Python 3.14.10', python3='Python 3.14.10')
+        with patch.dict(contract['python'], minor='3.15'), patch.object(c.os, 'getuid', return_value=1001), patch.object(c, 'check_tools', return_value=observed):
+            with self.assertRaisesRegex(ValueError, '3.15'):
+                c.verify('app')
+
     def test_versions_are_exact(self):
         for actual in ('v26.12.0', 'v26.12.10', ''):
             with self.assertRaises(ValueError):
