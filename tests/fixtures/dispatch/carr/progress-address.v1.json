@@ -1,0 +1,13 @@
+{
+  "work_request_pattern": "^WR-0*(\\d+)$",
+  "job_pattern": "^WR\\d+\\.S\\d+\\.J\\d+$",
+  "card_pattern": "^WR\\d+\\.S\\d+\\.J\\d+(?:\\.(?:carr|app|factory)#[1-9]\\d*)?$",
+  "slice_template": "{work_request}.S{slice}",
+  "job_template": "{work_request}.S{slice}.J{job}",
+  "pr_template": "{work_request}.S{slice}.J{job}.{repo}#{pr}",
+  "repositories": {
+    "DoctorCRE/carr-system": "carr",
+    "jbookout/doctorcre-app": "app",
+    "jbookout/software-factory": "factory"
+  }
+}

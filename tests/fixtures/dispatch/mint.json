@@ -1,0 +1,14 @@
+{
+  "provenance": {
+    "kind": "source-contract fixture, synthetic identifiers",
+    "source": "DoctorCRE/carr-system mcp-server/src/work-queue.js dispatch-job handler and command envelope; local-verb.mjs stdout JSON parser",
+    "contract": "command returns {ok: true, ...result}; mint result is {card_id: queueCardId(...), priority}; local-verb prints parsed first content text",
+    "source_revision": "8718a35562f8e4de62cf7322881383895f69dd64",
+    "input_schema": "input-schema.json fetched from deployed list-verbs dispatch-job during WR622.S13.J2"
+  },
+  "response": {
+    "ok": true,
+    "card_id": "WR622.S13.J20",
+    "priority": 33
+  }
+}

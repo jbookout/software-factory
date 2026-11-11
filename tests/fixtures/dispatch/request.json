@@ -1,0 +1,21 @@
+{
+  "card": {
+    "work_request": "WR622",
+    "slice": 13,
+    "repository": "jbookout/software-factory",
+    "job_type": "feature-backend",
+    "executor": "codex",
+    "model": "gpt-6.1-sol",
+    "effort": "high",
+    "card_title": "Build dispatch briefs",
+    "description": "Build one registered worker brief.",
+    "idempotency_key": "80274f48-4490-4124-ab39-2d6605e0e3ae"
+  },
+  "template": "build",
+  "variables": {
+    "goal": "Build a synthetic feature.",
+    "acceptance": "Run the fixture.",
+    "production_proof": "Observe the installed command.",
+    "skills": "No extra skills."
+  }
+}
